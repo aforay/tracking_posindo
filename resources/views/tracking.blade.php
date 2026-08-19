@@ -11,7 +11,7 @@
         .row-color-BIRU { background-color: #e0f2fe !important; }
         .row-color-ORANGE { background-color: #ffedd5 !important; }
         .row-color-KUNING { background-color: #fef9c3 !important; }
-        .row-color-PUTIH { background-color: #ffffff !important; }
+        .row-color-PUTIH { background-color: #fffff1 !important; }
         .row-color-HIJAU { background-color: #dcfce7 !important; }
         .row-color-BIRU_TUA { background-color: #1e3a8a !important; color: #ffffff !important; }
         .row-color-BIRU_TUA td { color: #ffffff !important; }
