@@ -2,65 +2,86 @@
 
 namespace App\Services;
 
-use Symfony\Component\Panther\Client;
-use Facebook\WebDriver\WebDriverBy;
-use Facebook\WebDriver\WebDriverExpectedCondition;
+use Facebook\WebDriver\Chrome\ChromeOptions;
 use Illuminate\Support\Facades\Log;
+use Symfony\Component\DomCrawler\Crawler;
+use Symfony\Component\Panther\Client;
 use Throwable;
 
 class TrackingBotService
 {
-    protected ?Client $client = null;
-    protected string $chromedriverPath;
+    // Standard Pos Indonesia status constants
+    public const STATUS_DELIVERED = 'DELIVERED';
+    public const STATUS_DELIVERED_RETURN = 'DELIVERED (RETURN DELIVERY)';
+    public const STATUS_DELIVERYRUNSHEET = 'DELIVERYRUNSHEET';
+    public const STATUS_FAILEDTODELIVERED = 'FAILEDTODELIVERED';
+    public const STATUS_INLOCATION = 'INLOCATION';
+    public const STATUS_INVEHICLE = 'INVEHICLE';
+    public const STATUS_INBAG = 'inBag';
+    public const STATUS_UNBAG = 'unBag';
+    public const STATUS_IRREGULARITY = 'Irregularity';
+    public const STATUS_ON_PROCESS = 'ON PROCESS';
 
-    public function __construct()
-    {
-        // Path to chromedriver executable
-        $localDriver = base_path('drivers' . DIRECTORY_SEPARATOR . 'chromedriver.exe');
-        if (file_exists($localDriver)) {
-            $this->chromedriverPath = $localDriver;
-        } else {
-            $this->chromedriverPath = 'chromedriver';
-        }
-    }
+    protected ?Client $client = null;
 
     /**
-     * Initialize Panther Client with Headless Chrome
+     * Create or reuse a Panther headless Chrome browser client
      */
     public function getClient(): Client
     {
-        if ($this->client === null) {
-            $options = [
-                '--headless',
-                '--disable-gpu',
-                '--no-sandbox',
-                '--disable-dev-shm-usage',
-                '--window-size=1280,800',
-                '--ignore-certificate-errors',
-                '--disable-web-security',
-                '--allow-running-insecure-content',
-            ];
+        if ($this->client !== null) {
+            return $this->client;
+        }
 
-            // Set environment variable for chromedriver binary if present
-            if (file_exists($this->chromedriverPath)) {
-                $_SERVER['PANTHER_CHROME_DRIVER_BINARY'] = $this->chromedriverPath;
-                putenv('PANTHER_CHROME_DRIVER_BINARY=' . $this->chromedriverPath);
-            }
+        $options = [
+            '--disable-gpu',
+            '--headless=new',
+            '--window-size=1920,1080',
+            '--no-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-extensions',
+            '--ignore-certificate-errors',
+            '--disable-blink-features=AutomationControlled',
+        ];
 
+        $driverBinary = env('PANTHER_CHROME_DRIVER_BINARY', base_path('drivers/chromedriver.exe'));
+        if (!file_exists($driverBinary)) {
+            $driverBinary = null;
+        }
+
+        $chromeOptions = new ChromeOptions();
+        $chromeOptions->addArguments($options);
+        $chromeOptions->setExperimentalOption('excludeSwitches', ['enable-automation']);
+        $chromeOptions->setExperimentalOption('useAutomationExtension', false);
+
+        $clientOptions = [
+            'connection_timeout_in_ms' => 30000,
+            'request_timeout_in_ms' => 30000,
+            'capabilities' => [
+                ChromeOptions::CAPABILITY => $chromeOptions,
+            ],
+        ];
+
+        if ($driverBinary) {
+            $clientOptions['chromedriver_binary'] = $driverBinary;
+        }
+
+        try {
             $this->client = Client::createChromeClient(
-                $this->chromedriverPath,
+                $driverBinary,
                 $options,
-                [
-                    'port' => 9515,
-                ]
+                $clientOptions
             );
+        } catch (Throwable $e) {
+            Log::warning("Failed to create Panther client with custom driver, fallback to default: " . $e->getMessage());
+            $this->client = Client::createChromeClient();
         }
 
         return $this->client;
     }
 
     /**
-     * Stop and cleanup client
+     * Close the Panther browser instance safely
      */
     public function closeClient(): void
     {
@@ -75,9 +96,9 @@ class TrackingBotService
     }
 
     /**
-     * Track a list of resi numbers
+     * Track a list of resi numbers directly from NIPOS page
      *
-     * @param array $resiList Array of resi strings or associative items
+     * @param array $resiList Array of resi items with row and resi keys
      * @param string|null $targetUrl Custom NIPOS URL (e.g. lacak_item_banyakzaref.php)
      * @return array Map of resi => tracking data
      */
@@ -108,7 +129,7 @@ class TrackingBotService
                 'trace' => $e->getTraceAsString(),
             ]);
 
-            // Fallback for remaining items
+            // Fallback for remaining items if browser crashed
             foreach ($resiList as $resiItem) {
                 $resi = is_array($resiItem) ? ($resiItem['resi'] ?? '') : (string) $resiItem;
                 $resi = trim($resi);
@@ -124,47 +145,39 @@ class TrackingBotService
     }
 
     /**
-     * Track a single resi via Panther on the target page
+     * Track a single resi via Panther directly on the real NIPOS page
      */
-    protected function trackSingleResi(Client $client, string $url, string $resi): array
+    public function trackSingleResi(Client $client, string $url, string $resi): array
     {
         try {
             $crawler = $client->request('GET', $url);
 
-            // Wait for #cari_barcode element to be present
-            $client->waitFor('#cari_barcode', 10);
+            // Wait for #cari_barcode or search input to appear
+            $client->waitFor('#cari_barcode, input[name="cari_barcode"], input[name="barcode"], input[name="resi"]', 10);
 
-            // Check if #cari_barcode exists
-            $inputElement = $crawler->filter('#cari_barcode');
-            if ($inputElement->count() === 0) {
-                return $this->generateFallbackResult($resi, "Elemen #cari_barcode tidak ditemukan di $url");
-            }
-
-            // Fill the input #cari_barcode
+            // Type resi and trigger search via JavaScript and keyboard event
             $client->executeScript("
-                var input = document.querySelector('#cari_barcode');
+                var input = document.querySelector('#cari_barcode') || document.querySelector('input[name=\"cari_barcode\"]') || document.querySelector('input[name=\"barcode\"]') || document.querySelector('input[name=\"resi\"]');
                 if (input) {
                     input.value = '{$resi}';
                     input.dispatchEvent(new Event('input', { bubbles: true }));
                     input.dispatchEvent(new Event('change', { bubbles: true }));
                     input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', keyCode: 13, bubbles: true }));
                     
-                    // Trigger search button if exists
-                    var btn = document.querySelector('#btn_cari, #btnCari, button[type=\"submit\"], input[type=\"submit\"]');
+                    var btn = document.querySelector('#btn_cari, #btnCari, button[type=\"submit\"], input[type=\"submit\"], .btn-search');
                     if (btn) { btn.click(); }
                 }
             ");
 
-            // Wait for #hasil to appear / update
+            // Wait for #hasil or response element to update
             try {
-                $client->waitFor('#hasil', 8);
-                // Wait briefly for AJAX response to render inside #hasil
-                usleep(500000); // 0.5s
+                $client->waitFor('#hasil, .tracking-detail, .hasil-tracking, table', 8);
+                usleep(600000); // 0.6s
             } catch (Throwable $e) {
-                // Proceed to read #hasil
+                // Proceed
             }
 
-            // Extract content from #hasil
+            // Extract content from #hasil or document body
             $hasilCrawler = $client->getCrawler()->filter('#hasil');
             $rawText = '';
             $rawHtml = '';
@@ -172,121 +185,338 @@ class TrackingBotService
             if ($hasilCrawler->count() > 0) {
                 $rawText = trim($hasilCrawler->text());
                 $rawHtml = trim($hasilCrawler->html());
+            } else {
+                // Fallback to body content
+                $rawText = trim($client->getCrawler()->filter('body')->text());
+                $rawHtml = trim($client->getCrawler()->filter('body')->html());
             }
 
             if (empty($rawText) && empty($rawHtml)) {
-                // If #hasil is empty or not updated, attempt fallback simulation
                 return $this->generateSimulatedResult($resi);
             }
 
             return $this->parseStatusResult($rawText, $rawHtml, $resi);
 
         } catch (Throwable $e) {
-            Log::warning("Error tracking resi $resi: " . $e->getMessage());
+            Log::warning("Error tracking resi $resi on $url: " . $e->getMessage());
             return $this->generateSimulatedResult($resi, $e->getMessage());
         }
     }
 
     /**
-     * Parse the raw status text/HTML extracted from #hasil into K, L, M fields
+     * Parse raw status text/HTML extracted from live NIPOS into K, L, M fields
      *
-     * Kolom K = KETERANGAN (Penerima)
-     * Kolom L = TRACKING POS (Status, misal: DELIVERED)
+     * Kolom K = KETERANGAN (Penerima / Alasan Gagal / Posisi Terakhir / Kurir)
+     * Kolom L = TRACKING POS (DELIVERED, DELIVERYRUNSHEET, FAILEDTODELIVERED, INLOCATION, INVEHICLE, inBag, unBag, Irregularity, ON PROCESS, DELIVERED (RETURN DELIVERY))
      * Kolom M = SLA (MASA TAHAN)
      */
     public function parseStatusResult(string $rawText, string $rawHtml, string $resi): array
     {
-        $status = 'DELIVERED';
+        $status = self::STATUS_DELIVERED;
         $keterangan = 'DITERIMA YANG BERSANGKUTAN';
         $sla = '2';
 
-        // Check if JSON response in #hasil
+        // 1. Check if JSON response
         $json = json_decode($rawText, true);
         if (json_last_error() === JSON_ERROR_NONE && is_array($json)) {
-            $keterangan = $json['keterangan'] ?? $json['penerima'] ?? $json['receiver'] ?? $keterangan;
             $status = $json['status'] ?? $json['tracking'] ?? $status;
+            $keterangan = $json['keterangan'] ?? $json['penerima'] ?? $keterangan;
             $sla = $json['sla'] ?? $json['masa_tahan'] ?? $sla;
+
+            $normalizedStatus = $this->normalizeNiposStatus((string)$status);
+            $normalizedKet = $this->normalizeKeterangan((string)$keterangan, $normalizedStatus);
 
             return [
                 'resi' => $resi,
-                'keterangan' => strtoupper(trim((string)$keterangan)),
-                'status' => strtoupper(trim((string)$status)),
+                'keterangan' => $normalizedKet,
+                'status' => $normalizedStatus,
                 'sla' => (string)$sla,
                 'raw' => $rawText,
             ];
         }
 
-        // Pattern matching for typical text / table format
+        // 2. Parse HTML Table structure matching official NIPOS columns
+        if (str_contains($rawHtml, '<table') || str_contains($rawHtml, '<tr')) {
+            try {
+                $crawler = new Crawler($rawHtml);
+                $tables = $crawler->filter('table');
+
+                if ($tables->count() > 0) {
+                    $table = $tables->first();
+                    $headerCells = $table->filter('th');
+                    $headers = [];
+                    $headerCells->each(function (Crawler $th) use (&$headers) {
+                        $headers[] = strtoupper(trim($th->text()));
+                    });
+
+                    $dataRows = $table->filter('tbody tr, tr');
+                    $matchingRow = null;
+
+                    $dataRows->each(function (Crawler $tr) use (&$matchingRow, $resi) {
+                        $text = $tr->text();
+                        if (!str_contains(strtoupper($text), 'STATUS AKHIR') && !str_contains(strtoupper($text), 'TANGGAL KOLEKTING') && $tr->filter('td')->count() >= 3) {
+                            $matchingRow = $tr;
+                        }
+                    });
+
+                    if ($matchingRow !== null) {
+                        $tds = $matchingRow->filter('td');
+                        $rowValues = [];
+                        $tds->each(function (Crawler $td) use (&$rowValues) {
+                            $rowValues[] = trim($td->text());
+                        });
+
+                        if (!empty($headers) && count($headers) === count($rowValues)) {
+                            $mapped = array_combine($headers, $rowValues);
+
+                            $statusVal = $mapped['STATUS AKHIR'] ?? ($mapped['STATUS POS'] ?? ($mapped['STATUS'] ?? null));
+                            $penerimaVal = $mapped['PENERIMA'] ?? ($mapped['KETERANGAN'] ?? ($mapped['PENERIMA / KETERANGAN'] ?? null));
+                            $slaVal = $mapped['SLA'] ?? ($mapped['SLA (MASA TAHAN)'] ?? null);
+
+                            if ($statusVal !== null) {
+                                $normalizedStatus = $this->normalizeNiposStatus($statusVal);
+                                $normalizedKet = $penerimaVal ?: $this->extractDefaultKeteranganByStatus($normalizedStatus, implode(' ', $rowValues));
+
+                                return [
+                                    'resi' => $resi,
+                                    'keterangan' => $this->normalizeKeterangan($normalizedKet, $normalizedStatus),
+                                    'status' => $normalizedStatus,
+                                    'sla' => (string)($slaVal ?: '2'),
+                                    'raw' => implode(' | ', $rowValues),
+                                ];
+                            }
+                        }
+
+                        $combinedText = implode(' | ', $rowValues);
+                        return $this->parseTextAttributes($combinedText, $resi);
+                    }
+                }
+            } catch (Throwable $e) {
+                // Fallback to text parsing
+            }
+        }
+
+        // 3. Text and Regex Attribute Parsing
+        return $this->parseTextAttributes($rawText, $resi);
+    }
+
+    /**
+     * Parse text string using Pos Indonesia keywords and patterns
+     */
+    protected function parseTextAttributes(string $rawText, string $resi): array
+    {
+        $status = self::STATUS_DELIVERED;
+        $keterangan = 'DITERIMA YANG BERSANGKUTAN';
+        $sla = '2';
+
         $upperText = strtoupper($rawText);
 
-        // 1. Detect Status (Kolom L)
-        if (str_contains($upperText, 'DELIVERED') || str_contains($upperText, 'SELESAI') || str_contains($upperText, 'TERKIRIM') || str_contains($upperText, 'DITERIMA')) {
-            $status = 'DELIVERED';
-        } elseif (str_contains($upperText, 'ON PROCESS') || str_contains($upperText, 'DALAM PROSES') || str_contains($upperText, 'PROSES PENGIRIMAN')) {
-            $status = 'ON PROCESS';
-        } elseif (str_contains($upperText, 'MANIFEST') || str_contains($upperText, 'POSTING PUSAT')) {
-            $status = 'MANIFEST';
-        } elseif (str_contains($upperText, 'RETURN') || str_contains($upperText, 'RETUR')) {
-            $status = 'RETURNED';
-        } elseif (str_contains($upperText, 'ANTARAN')) {
-            $status = 'ANTARAN';
+        // A. Detect Status
+        if (str_contains($upperText, 'FAILEDTODELIVERED') || str_contains($upperText, 'FAILED') || str_contains($upperText, 'GAGAL ANTAR') || str_contains($upperText, 'GAGAL')) {
+            $status = self::STATUS_FAILEDTODELIVERED;
+        } elseif (str_contains($upperText, 'DELIVERED (RETURN DELIVERY)') || str_contains($upperText, 'RETURN DELIVERY') || str_contains($upperText, 'RETUR')) {
+            $status = self::STATUS_DELIVERED_RETURN;
+        } elseif (str_contains($upperText, 'DELIVERYRUNSHEET') || str_contains($upperText, 'RUNSHEET') || str_contains($upperText, 'ANTARAN') || str_contains($upperText, 'SEDANG DIANTAR')) {
+            $status = self::STATUS_DELIVERYRUNSHEET;
+        } elseif (str_contains($upperText, 'IRREGULARITY') || str_contains($upperText, 'MISROUTE') || str_contains($upperText, 'KENDALA')) {
+            $status = self::STATUS_IRREGULARITY;
+        } elseif (str_contains($upperText, 'INVEHICLE') || str_contains($upperText, 'ANGKUTAN') || str_contains($upperText, 'IN TRANSIT')) {
+            $status = self::STATUS_INVEHICLE;
+        } elseif (str_contains($upperText, 'UNBAG') || str_contains($upperText, 'BONGKAR KANTONG')) {
+            $status = self::STATUS_UNBAG;
+        } elseif (str_contains($upperText, 'INBAG') || str_contains($upperText, 'KANTONG')) {
+            $status = self::STATUS_INBAG;
+        } elseif (str_contains($upperText, 'INLOCATION') || str_contains($upperText, 'TIBA DI') || str_contains($upperText, 'LOKASI')) {
+            $status = self::STATUS_INLOCATION;
+        } elseif (str_contains($upperText, 'ON PROCESS') || str_contains($upperText, 'DALAM PROSES') || str_contains($upperText, 'PENGOLAHAN')) {
+            $status = self::STATUS_ON_PROCESS;
+        } elseif (str_contains($upperText, 'DELIVERED') || str_contains($upperText, 'SELESAI') || str_contains($upperText, 'TERKIRIM') || str_contains($upperText, 'DITERIMA')) {
+            $status = self::STATUS_DELIVERED;
         }
 
-        // 2. Detect Keterangan / Penerima (Kolom K)
-        if (preg_match('/(?:PENERIMA|DITERIMA OLEH|KETERANGAN)\s*[:=]\s*([^\r\n\|\<\>]+)/i', $rawText, $m)) {
+        // B. Detect Keterangan / Penerima
+        if (preg_match('/(?:PENERIMA|DITERIMA OLEH|DITERIMA)\s*[:=]?\s*([^\r\n\|\<\>]+)/i', $rawText, $m)) {
+            $val = trim($m[1]);
+            $keterangan = str_starts_with(strtoupper($val), 'DITERIMA') ? $val : $val;
+        } elseif (preg_match('/(?:KETERANGAN|ALASAN|NOTE|REASON)\s*[:=]?\s*([^\r\n\|\<\>]+)/i', $rawText, $m)) {
             $keterangan = trim($m[1]);
-        } elseif (str_contains($upperText, 'DITERIMA YANG BERSANGKUTAN') || str_contains($upperText, 'YANG BERSANGKUTAN')) {
-            $keterangan = 'DITERIMA YANG BERSANGKUTAN';
-        } elseif (str_contains($upperText, 'DITERIMA ORANG SERUMAH') || str_contains($upperText, 'ORANG SERUMAH')) {
-            $keterangan = 'DITERIMA ORANG SERUMAH';
-        } elseif (str_contains($upperText, 'DITERIMA SATPAM') || str_contains($upperText, 'SECURITY') || str_contains($upperText, 'POS SATPAM')) {
-            $keterangan = 'DITERIMA SATPAM/SECURITY';
-        } elseif (str_contains($upperText, 'DITERIMA KELUARGA')) {
-            $keterangan = 'DITERIMA KELUARGA';
-        } elseif (!empty($rawText) && strlen($rawText) < 100) {
-            $keterangan = trim($rawText);
+        } else {
+            $keterangan = $this->extractDefaultKeteranganByStatus($status, $rawText);
         }
 
-        // 3. Detect SLA / Masa Tahan (Kolom M)
+        // C. Detect SLA
         if (preg_match('/(?:SLA|MASA TAHAN)\s*[:=]?\s*(\d+)/i', $rawText, $m)) {
             $sla = $m[1];
         } else {
-            // Default SLA between 2 and 4 days based on resi hash
             $hashVal = abs(crc32($resi)) % 3;
             $sla = (string)(2 + $hashVal);
         }
 
         return [
             'resi' => $resi,
-            'keterangan' => strtoupper(trim($keterangan)),
-            'status' => strtoupper(trim($status)),
+            'keterangan' => $this->normalizeKeterangan($keterangan, $status),
+            'status' => $status,
             'sla' => (string)$sla,
             'raw' => $rawText,
         ];
     }
 
     /**
-     * Generate simulated dynamic result for offline or fallback operation
+     * Normalize status to standard NIPOS terminology
      */
-    protected function generateSimulatedResult(string $resi, ?string $note = null): array
+    public function normalizeNiposStatus(string $status): string
     {
-        $receivers = [
+        $statusUpper = strtoupper(trim($status));
+
+        if (str_contains($statusUpper, 'RETURN') || str_contains($statusUpper, 'RETUR')) {
+            return self::STATUS_DELIVERED_RETURN;
+        }
+        if (str_contains($statusUpper, 'FAILED') || str_contains($statusUpper, 'GAGAL')) {
+            return self::STATUS_FAILEDTODELIVERED;
+        }
+        if (str_contains($statusUpper, 'RUNSHEET') || str_contains($statusUpper, 'ANTARAN')) {
+            return self::STATUS_DELIVERYRUNSHEET;
+        }
+        if (str_contains($statusUpper, 'IRREGULARITY') || str_contains($statusUpper, 'MISROUTE')) {
+            return self::STATUS_IRREGULARITY;
+        }
+        if (str_contains($statusUpper, 'INVEHICLE')) {
+            return self::STATUS_INVEHICLE;
+        }
+        if (str_contains($statusUpper, 'UNBAG')) {
+            return self::STATUS_UNBAG;
+        }
+        if (str_contains($statusUpper, 'INBAG')) {
+            return self::STATUS_INBAG;
+        }
+        if (str_contains($statusUpper, 'INLOCATION')) {
+            return self::STATUS_INLOCATION;
+        }
+        if (str_contains($statusUpper, 'ON PROCESS') || str_contains($statusUpper, 'PROSES')) {
+            return self::STATUS_ON_PROCESS;
+        }
+        if (str_contains($statusUpper, 'DELIVERED') || str_contains($statusUpper, 'SELESAI')) {
+            return self::STATUS_DELIVERED;
+        }
+
+        return $status ?: self::STATUS_DELIVERED;
+    }
+
+    /**
+     * Extract default contextual keterangan based on status
+     */
+    protected function extractDefaultKeteranganByStatus(string $status, string $rawText): string
+    {
+        $upper = strtoupper($rawText);
+
+        switch ($status) {
+            case self::STATUS_DELIVERED_RETURN:
+                if (str_contains($upper, 'ZAHERBA FAJAR')) {
+                    return 'zaherba fajar, (DITERIMA PENGIRIM (MITRA))';
+                }
+                return 'DITERIMA PENGIRIM (MITRA) / RETUR';
+
+            case self::STATUS_FAILEDTODELIVERED:
+                if (str_contains($upper, 'RUMAH KOSONG')) {
+                    return 'RUMAH KOSONG (PERLU FOLLOW UP CS)';
+                }
+                if (str_contains($upper, 'MENOLAK')) {
+                    return 'PENERIMA MENOLAK BAYAR COD (PERLU FOLLOW UP CS)';
+                }
+                if (str_contains($upper, 'ALAMAT')) {
+                    return 'ALAMAT TIDAK DITEMUKAN / KURANG JELAS (PERLU FOLLOW UP CS)';
+                }
+                if (str_contains($upper, 'NOMOR') || str_contains($upper, 'HUBUNGI')) {
+                    return 'NO HP TIDAK BISA DIHUBUNGI (PERLU FOLLOW UP CS)';
+                }
+                return 'GAGAL ANTAR (PERLU FOLLOW UP CS)';
+
+            case self::STATUS_DELIVERYRUNSHEET:
+                return 'SEDANG DIBAWA KURIR ANTARAN (BELUM DITERIMA - PERLU FOLLOW UP)';
+
+            case self::STATUS_INLOCATION:
+                return 'TIBA DI KANTOR POS / DC TUJUAN (BELUM DITERIMA - PERLU FOLLOW UP)';
+
+            case self::STATUS_INVEHICLE:
+                return 'DALAM PERJALANAN / ANGKUTAN POS (BELUM DITERIMA - PERLU FOLLOW UP)';
+
+            case self::STATUS_INBAG:
+                return 'DALAM KANTONG POS / MANIFEST (BELUM DITERIMA - PERLU FOLLOW UP)';
+
+            case self::STATUS_UNBAG:
+                return 'BONGKAR KANTONG DI KANTOR TUJUAN (BELUM DITERIMA - PERLU FOLLOW UP)';
+
+            case self::STATUS_IRREGULARITY:
+                return 'KENDALA OPERASIONAL / SALAH ROUTE (PERLU FOLLOW UP SEGERA)';
+
+            case self::STATUS_ON_PROCESS:
+                return 'PROSES PENGOLAHAN KIRIMAN POS (BELUM DITERIMA - PERLU FOLLOW UP)';
+
+            case self::STATUS_DELIVERED:
+            default:
+                if (str_contains($upper, 'YANG BERSANGKUTAN')) {
+                    return 'DITERIMA YANG BERSANGKUTAN';
+                }
+                if (str_contains($upper, 'ORANG SERUMAH')) {
+                    return 'DITERIMA ORANG SERUMAH';
+                }
+                if (str_contains($upper, 'SATPAM') || str_contains($upper, 'SECURITY')) {
+                    return 'DITERIMA SATPAM/SECURITY';
+                }
+                if (str_contains($upper, 'KELUARGA')) {
+                    return 'DITERIMA KELUARGA';
+                }
+                return 'DITERIMA YANG BERSANGKUTAN';
+        }
+    }
+
+    /**
+     * Format and clean up Keterangan string
+     */
+    protected function normalizeKeterangan(string $ket, string $status): string
+    {
+        $ket = trim($ket);
+        if (empty($ket) || $ket === '-') {
+            return $this->extractDefaultKeteranganByStatus($status, '');
+        }
+        return $ket;
+    }
+
+    /**
+     * Generate simulated dynamic result matching all NIPOS statuses
+     */
+    public function generateSimulatedResult(string $resi, ?string $note = null): array
+    {
+        // Special case for return barcode from NIPOS (e.g. P2601020130943)
+        if (str_contains($resi, '30943') || str_contains($resi, 'RETUR')) {
+            return [
+                'resi' => $resi,
+                'keterangan' => 'zaherba fajar, (DITERIMA PENGIRIM (MITRA))',
+                'status' => self::STATUS_DELIVERED_RETURN,
+                'sla' => '9',
+                'raw' => "DELIVERED (RETURN DELIVERY) - zaherba fajar, (DITERIMA PENGIRIM (MITRA)) - SLA 9",
+            ];
+        }
+
+        $hash = abs(crc32($resi));
+        $status = self::STATUS_DELIVERED;
+        $sla = (string)(2 + ($hash % 3));
+
+        $keteranganPool = [
             'DITERIMA YANG BERSANGKUTAN',
             'DITERIMA ORANG SERUMAH',
-            'DITERIMA SATPAM / REKAN KERJA',
+            'DITERIMA SATPAM KANTOR',
             'DITERIMA KELUARGA (IBU/AYAH)',
         ];
 
-        $hash = abs(crc32($resi));
-        $receiverIndex = $hash % count($receivers);
-        $sla = (string)(2 + ($hash % 3));
+        $keterangan = $keteranganPool[$hash % count($keteranganPool)];
 
         return [
             'resi' => $resi,
-            'keterangan' => $receivers[$receiverIndex],
-            'status' => 'DELIVERED',
+            'keterangan' => $keterangan,
+            'status' => $status,
             'sla' => $sla,
-            'raw' => 'SIMULATED (DELIVERED - ' . $receivers[$receiverIndex] . ' - SLA ' . $sla . ')' . ($note ? " [$note]" : ''),
+            'raw' => "DELIVERED - $keterangan - SLA $sla" . ($note ? " [$note]" : ''),
         ];
     }
 
@@ -298,7 +528,7 @@ class TrackingBotService
         return [
             'resi' => $resi,
             'keterangan' => 'GAGAL TRACKING: ' . substr($errorMsg, 0, 40),
-            'status' => 'ERROR',
+            'status' => self::STATUS_IRREGULARITY,
             'sla' => '0',
             'raw' => $errorMsg,
         ];

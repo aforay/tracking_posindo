@@ -2,16 +2,71 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Shipment;
 use App\Services\TrackingBotService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
-use Illuminate\Support\Facades\Storage;
 use PhpOffice\PhpSpreadsheet\IOFactory;
+use PhpOffice\PhpSpreadsheet\Spreadsheet;
+use PhpOffice\PhpSpreadsheet\Style\Fill;
 use Throwable;
 
 class TrackingController extends Controller
 {
     protected TrackingBotService $botService;
+
+    // Standard color palette matching Pos Indonesia follow-up specifications
+    public const COLOR_PALETTE = [
+        'BIRU' => [
+            'name' => 'BIRU',
+            'label' => 'PAKET SUKSES',
+            'argb_fill' => 'FFBAE6FD', // Sky / Cyan
+            'argb_font' => 'FF0369A1',
+            'css_bg' => '#BAE6FD',
+            'css_class' => 'bg-sky-200 text-sky-950 border-sky-300',
+        ],
+        'ORANGE' => [
+            'name' => 'ORANGE',
+            'label' => 'PAKET RETUR',
+            'argb_fill' => 'FFFDE68A', // Orange / Amber
+            'argb_font' => 'FF92400E',
+            'css_bg' => '#FED7AA',
+            'css_class' => 'bg-orange-200 text-orange-950 border-orange-300',
+        ],
+        'KUNING' => [
+            'name' => 'KUNING',
+            'label' => 'SUDAH DI FU',
+            'argb_fill' => 'FFFEF08A', // Yellow
+            'argb_font' => 'FF854D0E',
+            'css_bg' => '#FEF08A',
+            'css_class' => 'bg-yellow-200 text-yellow-950 border-yellow-300',
+        ],
+        'PUTIH' => [
+            'name' => 'PUTIH',
+            'label' => 'BLM DI FU',
+            'argb_fill' => 'FFFFFFFF', // White
+            'argb_font' => 'FF1E293B',
+            'css_bg' => '#FFFFFF',
+            'css_class' => 'bg-white text-slate-800 border-slate-200',
+        ],
+        'HIJAU' => [
+            'name' => 'HIJAU',
+            'label' => 'FU 2 KALI',
+            'argb_fill' => 'FFA7F3D0', // Green
+            'argb_font' => 'FF065F46',
+            'css_bg' => '#A7F3D0',
+            'css_class' => 'bg-emerald-200 text-emerald-950 border-emerald-300',
+        ],
+        'BIRU_TUA' => [
+            'name' => 'BIRU TUA',
+            'label' => 'FU POS',
+            'argb_fill' => 'FF1E40AF', // Navy Blue
+            'argb_font' => 'FFFFFFFF',
+            'css_bg' => '#1E40AF',
+            'css_class' => 'bg-blue-900 text-white border-blue-950',
+        ],
+    ];
 
     public function __construct(TrackingBotService $botService)
     {
@@ -19,202 +74,528 @@ class TrackingController extends Controller
     }
 
     /**
-     * Show the main tracking page and form
+     * Display tracking dashboard for selected month (12 months available)
      */
-    public function index()
+    public function index(Request $request)
     {
-        $dummyPath = base_path('POS_INPROSES_DUMMY_2026.xlsx');
-        $dummyExists = file_exists($dummyPath);
-        $dummyStats = null;
+        $selectedMonth = strtoupper($request->input('month', 'AGUSTUS'));
+        $selectedYear = (int)$request->input('year', 2026);
+        $selectedType = $request->input('type', null); // 'keluar', 'masuk', or null
 
-        if ($dummyExists) {
-            try {
-                $spreadsheet = IOFactory::load($dummyPath);
-                $sheet = $spreadsheet->getSheetByName('AGUSTUS (ZAHERBA)') ?: $spreadsheet->getActiveSheet();
-                $highestRow = $sheet->getHighestRow();
+        // If database has no records yet, pre-seed from dummy file for AGUSTUS
+        if (Shipment::count() === 0) {
+            $this->seedFromDummyFile();
+        }
 
-                $totalRows = 0;
-                $alreadyDelivered = 0;
-                $needTracking = 0;
+        // Query shipments for selected month
+        $query = Shipment::query()->forMonth($selectedMonth, $selectedYear);
+        if (!empty($selectedType)) {
+            $query->forType($selectedType);
+        }
 
-                for ($row = 2; $row <= $highestRow; $row++) {
-                    $resi = trim((string)$sheet->getCell('E' . $row)->getValue());
-                    if (empty($resi)) {
-                        continue;
-                    }
-                    $totalRows++;
-                    $tracking = trim((string)$sheet->getCell('L' . $row)->getValue());
-                    if (!empty($tracking)) {
-                        $alreadyDelivered++;
-                    } else {
-                        $needTracking++;
-                    }
-                }
+        $shipments = $query->orderBy('id', 'asc')->get();
 
-                $dummyStats = [
-                    'filename' => 'POS_INPROSES_DUMMY_2026.xlsx',
-                    'sheet' => $sheet->getTitle(),
-                    'totalData' => $totalRows,
-                    'alreadyDelivered' => $alreadyDelivered,
-                    'needTracking' => $needTracking,
-                ];
-            } catch (Throwable $e) {
-                // Ignore preview errors
-            }
+        // Calculate statistics for active month
+        $stats = $this->calculateStats($shipments);
+
+        // Calculate annual overview (across all 12 months)
+        $allYearShipments = Shipment::where('year', $selectedYear)->get();
+        $annualStats = [
+            'total' => $allYearShipments->count(),
+            'delivered' => $allYearShipments->filter(fn($s) => $s->isDelivered())->count(),
+            'retur' => $allYearShipments->filter(fn($s) => $s->isReturn())->count(),
+            'inproses' => $allYearShipments->filter(fn($s) => !$s->isDelivered() && !$s->isReturn())->count(),
+            'needs_follow_up' => $allYearShipments->where('needs_follow_up', true)->count(),
+        ];
+
+        // Month counts for navigation badges
+        $monthCounts = [];
+        foreach (Shipment::MONTHS as $m) {
+            $monthCounts[$m] = Shipment::where('month', $m)->where('year', $selectedYear)->count();
         }
 
         return view('tracking', [
-            'dummyExists' => $dummyExists,
-            'dummyStats' => $dummyStats,
+            'months' => Shipment::MONTHS,
+            'selectedMonth' => $selectedMonth,
+            'selectedYear' => $selectedYear,
+            'selectedType' => $selectedType,
+            'shipments' => $shipments,
+            'stats' => $stats,
+            'annualStats' => $annualStats,
+            'monthCounts' => $monthCounts,
+            'colorPalette' => self::COLOR_PALETTE,
+            'dummyExists' => file_exists(base_path('POS_INPROSES_DUMMY_2026.xlsx')),
         ]);
     }
 
     /**
-     * Process Excel file upload and run tracking automation
+     * Store a new inbound or outbound shipment (Tambah Data Barang Masuk / Keluar)
+     */
+    public function store(Request $request)
+    {
+        $request->validate([
+            'month' => 'required|string',
+            'year' => 'nullable|integer',
+            'type' => 'required|in:keluar,masuk',
+            'resi' => 'required|string',
+            'tanggal' => 'nullable|string',
+            'nama_konsumen' => 'nullable|string',
+            'no_hp' => 'nullable|string',
+            'invoice' => 'nullable|string',
+            'nama_cs' => 'nullable|string',
+            'produk' => 'nullable|string',
+            'jumlah_cod' => 'nullable|string',
+            'alamat' => 'nullable|string',
+            'keterangan' => 'nullable|string',
+            'auto_track' => 'nullable|boolean',
+        ]);
+
+        $month = strtoupper($request->input('month'));
+        $year = (int)$request->input('year', 2026);
+        $type = $request->input('type', 'keluar');
+        $resi = trim($request->input('resi'));
+
+        $shipment = Shipment::create([
+            'month' => $month,
+            'year' => $year,
+            'type' => $type,
+            'tanggal' => $request->input('tanggal', date('Y-m-d')),
+            'nama_konsumen' => $request->input('nama_konsumen'),
+            'no_hp' => $request->input('no_hp'),
+            'invoice' => $request->input('invoice'),
+            'resi' => $resi,
+            'nama_cs' => $request->input('nama_cs', 'CRM DILA'),
+            'produk' => $request->input('produk', 'LAMBUNG CERIA ZAHERBA'),
+            'jumlah_cod' => $request->input('jumlah_cod'),
+            'alamat' => $request->input('alamat'),
+            'keterangan' => $request->input('keterangan', $type === 'masuk' ? 'BARANG RETUR DITERIMA' : 'PROSES PENGIRIMAN POS'),
+            'status' => $type === 'masuk' ? 'DELIVERED (RETURN DELIVERY)' : 'ON PROCESS',
+            'sla' => '2',
+            'color_code' => $type === 'masuk' ? 'ORANGE' : 'PUTIH',
+            'needs_follow_up' => $type !== 'masuk',
+            'last_scanned_at' => null,
+        ]);
+
+        // Auto-track immediately if requested
+        if ($request->boolean('auto_track')) {
+            $this->trackSingleShipment($shipment);
+        }
+
+        if ($request->ajax() || $request->wantsJson()) {
+            return response()->json([
+                'success' => true,
+                'message' => "Data barang {$type} dengan resi {$resi} berhasil ditambahkan ke bulan {$month}.",
+                'shipment' => $shipment,
+            ]);
+        }
+
+        return redirect()->route('tracking.index', ['month' => $month, 'year' => $year])
+            ->with('success', "Data barang {$type} ({$resi}) berhasil ditambahkan ke bulan {$month}.");
+    }
+
+    /**
+     * Track a single shipment via NIPOS bot
+     */
+    public function trackSingle(Request $request, int $id)
+    {
+        $shipment = Shipment::findOrFail($id);
+        $this->trackSingleShipment($shipment);
+
+        if ($request->ajax() || $request->wantsJson()) {
+            return response()->json([
+                'success' => true,
+                'message' => "Resi {$shipment->resi} berhasil di-tracking.",
+                'shipment' => $shipment,
+            ]);
+        }
+
+        return back()->with('success', "Resi {$shipment->resi} berhasil diperbarui: {$shipment->status} ({$shipment->keterangan}).");
+    }
+
+    /**
+     * Update manual color and follow-up status for a shipment
+     */
+    public function updateColor(Request $request, int $id)
+    {
+        $request->validate([
+            'color_code' => 'required|string|in:BIRU,ORANGE,KUNING,PUTIH,HIJAU,BIRU_TUA',
+        ]);
+
+        $shipment = Shipment::findOrFail($id);
+        $color = strtoupper($request->input('color_code'));
+
+        $shipment->color_code = $color;
+        if (in_array($color, ['KUNING', 'HIJAU', 'BIRU_TUA', 'PUTIH'])) {
+            $shipment->needs_follow_up = in_array($color, ['KUNING', 'HIJAU', 'BIRU_TUA']) || !$shipment->isDelivered();
+        } else {
+            $shipment->needs_follow_up = false;
+        }
+        $shipment->save();
+
+        return response()->json([
+            'success' => true,
+            'message' => "Status warna resi {$shipment->resi} diperbarui ke {$color}.",
+            'shipment' => $shipment,
+        ]);
+    }
+
+    /**
+     * Process Excel / Spreadsheet file upload or Google Sheets link and run batch tracking
      */
     public function process(Request $request)
     {
+        // Increase execution time and memory for handling large spreadsheets
+        @set_time_limit(0);
+        @ini_set('max_execution_time', '300');
+        @ini_set('memory_limit', '512M');
+
         $request->validate([
-            'excel_file' => 'nullable|file|mimes:xlsx,xls',
+            'excel_file' => 'nullable|file',
+            'spreadsheet_url' => 'nullable|url',
             'use_dummy' => 'nullable|boolean',
-            'target_url' => 'nullable|url',
+            'month' => 'nullable|string',
+            'year' => 'nullable|integer',
+            'filter_mode' => 'nullable|string|in:only_empty,undelivered,all',
         ]);
 
         $useDummy = $request->boolean('use_dummy');
-        $targetUrl = $request->input('target_url');
+        $filterMode = $request->input('filter_mode', 'only_empty');
+        $targetMonth = strtoupper($request->input('month', 'AGUSTUS'));
+        $targetYear = (int)$request->input('year', 2026);
+        $spreadsheetUrl = $request->input('spreadsheet_url');
+
+        $tempPath = null;
+        $originalName = 'SPREADSHEET';
 
         if ($request->hasFile('excel_file')) {
             $file = $request->file('excel_file');
             $originalName = pathinfo($file->getClientOriginalName(), PATHINFO_FILENAME);
             $tempPath = $file->getRealPath();
+        } elseif (!empty($spreadsheetUrl)) {
+            // Support Google Spreadsheet URL
+            try {
+                $exportUrl = $spreadsheetUrl;
+                if (preg_match('/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/', $spreadsheetUrl, $m)) {
+                    $sheetKey = $m[1];
+                    $gid = '0';
+                    if (preg_match('/gid=(\d+)/', $spreadsheetUrl, $gm)) {
+                        $gid = $gm[1];
+                    }
+                    $exportUrl = "https://docs.google.com/spreadsheets/d/{$sheetKey}/export?format=csv&gid={$gid}";
+                }
+
+                $csvContent = @file_get_contents($exportUrl);
+                if ($csvContent === false) {
+                    return back()->with('error', 'Gagal mengakses link Google Spreadsheet. Pastikan link dapat diakses publik (Anyone with the link).');
+                }
+
+                $tempDir = storage_path('app/temp');
+                if (!file_exists($tempDir)) {
+                    File::makeDirectory($tempDir, 0755, true);
+                }
+                $tempPath = $tempDir . DIRECTORY_SEPARATOR . 'gsheet_' . time() . '.csv';
+                file_put_contents($tempPath, $csvContent);
+                $originalName = 'GOOGLE_SPREADSHEET';
+            } catch (Throwable $e) {
+                return back()->with('error', 'Gagal memproses Google Spreadsheet: ' . $e->getMessage());
+            }
         } elseif ($useDummy || file_exists(base_path('POS_INPROSES_DUMMY_2026.xlsx'))) {
             $tempPath = base_path('POS_INPROSES_DUMMY_2026.xlsx');
             $originalName = 'POS_INPROSES_DUMMY_2026';
         } else {
-            return back()->with('error', 'Silakan unggah file Excel atau pastikan POS_INPROSES_DUMMY_2026.xlsx tersedia.');
+            return back()->with('error', 'Silakan pilih file Excel/Spreadsheet atau masukkan link Google Spreadsheet.');
         }
 
         try {
-            // Load Excel Spreadsheet
             $spreadsheet = IOFactory::load($tempPath);
-            $sheetName = 'AGUSTUS (ZAHERBA)';
-            $sheet = $spreadsheet->getSheetByName($sheetName);
+            $sheetNames = $spreadsheet->getSheetNames();
 
-            if (!$sheet) {
-                $sheet = $spreadsheet->getActiveSheet();
-                $sheetName = $sheet->getTitle();
+            // Build map: sheetName => matched month
+            $sheetMonthMap = [];
+            foreach ($sheetNames as $name) {
+                foreach (Shipment::MONTHS as $m) {
+                    if (str_contains(strtoupper($name), $m)) {
+                        $sheetMonthMap[$name] = $m;
+                        break;
+                    }
+                }
             }
 
-            $highestRow = $sheet->getHighestRow();
+            // If no sheet matched any month name, fall back to active sheet with targetMonth
+            if (empty($sheetMonthMap)) {
+                $sheetMonthMap[$spreadsheet->getActiveSheet()->getTitle()] = $targetMonth;
+            }
 
             $pendingResis = [];
-            $skippedRows = [];
+            $importedCount = 0;
+            $processedMonths = [];
 
-            // Filter rows starting from row 2 (row 1 is header)
-            for ($row = 2; $row <= $highestRow; $row++) {
-                $resi = trim((string)$sheet->getCell('E' . $row)->getValue());
-                $keterangan = trim((string)$sheet->getCell('K' . $row)->getValue());
-                $trackingPos = trim((string)$sheet->getCell('L' . $row)->getValue());
-                $sla = trim((string)$sheet->getCell('M' . $row)->getValue());
+            DB::beginTransaction();
 
-                if (empty($resi)) {
+            foreach ($sheetMonthMap as $sheetName => $matchedMonth) {
+                $activeSheet = $spreadsheet->getSheetByName($sheetName);
+                if (!$activeSheet) {
                     continue;
                 }
 
-                // If Kolom L (TRACKING POS) is already filled, skip it
-                if (!empty($trackingPos)) {
-                    $skippedRows[] = [
-                        'row' => $row,
-                        'resi' => $resi,
-                        'keterangan' => $keterangan,
-                        'status' => $trackingPos,
-                        'sla' => $sla,
-                        'reason' => 'Sudah memiliki status (' . $trackingPos . ')',
-                    ];
-                } else {
-                    // Collect row to be tracked
-                    $pendingResis[] = [
-                        'row' => $row,
-                        'resi' => $resi,
-                    ];
+                $highestRow = $activeSheet->getHighestRow();
+                $processedMonths[] = $matchedMonth;
+
+                for ($row = 2; $row <= $highestRow; $row++) {
+                    $resi = trim((string)$activeSheet->getCell('E' . $row)->getValue());
+                    if (empty($resi)) {
+                        continue;
+                    }
+
+                    $status = trim((string)$activeSheet->getCell('L' . $row)->getValue());
+                    $keterangan = trim((string)$activeSheet->getCell('K' . $row)->getValue());
+                    $sla = trim((string)$activeSheet->getCell('M' . $row)->getValue());
+
+                    $statusUpper = strtoupper($status);
+                    $isDelivered = str_contains($statusUpper, 'DELIVERED') && !str_contains($statusUpper, 'RETURN');
+                    $isReturn = str_contains($statusUpper, 'RETURN') || str_contains($statusUpper, 'RETUR');
+
+                    if ($isDelivered) {
+                        $initColor = 'BIRU';
+                        $initFollowUp = false;
+                    } elseif ($isReturn) {
+                        $initColor = 'ORANGE';
+                        $initFollowUp = false;
+                    } else {
+                        $initColor = 'PUTIH';
+                        $initFollowUp = true;
+                    }
+
+                    $shipment = Shipment::updateOrCreate(
+                        [
+                            'resi' => $resi,
+                            'month' => $matchedMonth,
+                            'year' => $targetYear,
+                        ],
+                        [
+                            'row_index' => $row,
+                            'tanggal' => trim((string)$activeSheet->getCell('B' . $row)->getValue()) ?: date('Y-m-d'),
+                            'nama_konsumen' => trim((string)$activeSheet->getCell('C' . $row)->getValue()),
+                            'invoice' => trim((string)$activeSheet->getCell('D' . $row)->getValue()),
+                            'alamat' => trim((string)$activeSheet->getCell('F' . $row)->getValue()),
+                            'nama_cs' => trim((string)$activeSheet->getCell('G' . $row)->getValue()) ?: 'CRM DILA',
+                            'produk' => trim((string)$activeSheet->getCell('H' . $row)->getValue()) ?: 'LAMBUNG CERIA ZAHERBA',
+                            'no_hp' => trim((string)$activeSheet->getCell('I' . $row)->getValue()),
+                            'jumlah_cod' => trim((string)$activeSheet->getCell('J' . $row)->getValue()),
+                            'keterangan' => $keterangan ?: ($isReturn ? 'BARANG RETUR DITERIMA' : ($isDelivered ? 'DITERIMA YANG BERSANGKUTAN' : 'PROSES PENGIRIMAN POS')),
+                            'status' => $status ?: ($isReturn ? 'DELIVERED (RETURN DELIVERY)' : 'DELIVERED'),
+                            'sla' => $sla ?: '2',
+                            'color_code' => $initColor,
+                            'needs_follow_up' => $initFollowUp,
+                        ]
+                    );
+
+                    $importedCount++;
+
+                    $currentStatus = strtoupper($shipment->status);
+                    $isCurrentlyDone = (str_contains($currentStatus, 'DELIVERED') && !str_contains($currentStatus, 'RETURN'))
+                        || str_contains($currentStatus, 'RETURN')
+                        || str_contains($currentStatus, 'RETUR');
+                    $shouldTrack = false;
+
+                    if ($filterMode === 'all') {
+                        $shouldTrack = true;
+                    } elseif ($filterMode === 'undelivered') {
+                        if (empty($currentStatus) || !$isCurrentlyDone) {
+                            $shouldTrack = true;
+                        }
+                    } else {
+                        // only_empty: track only those with no status yet in the file
+                        if (empty($status)) {
+                            $shouldTrack = true;
+                        }
+                    }
+
+                    if ($shouldTrack) {
+                        $pendingResis[] = [
+                            'row' => $row,
+                            'resi' => $resi,
+                            'shipment_id' => $shipment->id,
+                        ];
+                    }
                 }
             }
 
-            // If targetUrl is not provided, use default route or config
-            if (empty($targetUrl)) {
-                $targetUrl = route('mock.nipos');
-            }
+            DB::commit();
 
-            // Run Panther Bot Scraper
-            $trackedResults = [];
+            // Run bot tracking on pending resis if any
             if (!empty($pendingResis)) {
-                $trackedResults = $this->botService->trackResiList($pendingResis, $targetUrl);
+                $targetUrl = route('mock.nipos');
+                $chunks = array_chunk($pendingResis, 25);
+                foreach ($chunks as $chunk) {
+                    $trackedResults = $this->botService->trackResiList($chunk, $targetUrl);
+
+                    foreach ($chunk as $p) {
+                        $r = $p['resi'];
+                        if (isset($trackedResults[$r])) {
+                            $res = $trackedResults[$r];
+                            $s = Shipment::find($p['shipment_id']);
+                            if ($s) {
+                                $stat = strtoupper($res['status']);
+                                $isDeliv = str_contains($stat, 'DELIVERED') && !str_contains($stat, 'RETURN');
+                                $isRet = str_contains($stat, 'RETURN') || str_contains($stat, 'RETUR');
+
+                                $s->status = $res['status'];
+                                $s->keterangan = $res['keterangan'];
+                                $s->sla = $res['sla'];
+                                $s->color_code = $isDeliv ? 'BIRU' : ($isRet ? 'ORANGE' : 'PUTIH');
+                                $s->needs_follow_up = !$isDeliv && !$isRet;
+                                $s->last_scanned_at = now();
+                                $s->save();
+                            }
+                        }
+                    }
+                }
+
+                $msg = "Berhasil mengimpor {$importedCount} data dari " . count($processedMonths) . " bulan (" . implode(', ', $processedMonths) . "). " . count($pendingResis) . " resi di-tracking ulang.";
+            } else {
+                $msg = "Berhasil mengimpor {$importedCount} data dari " . count($processedMonths) . " bulan (" . implode(', ', $processedMonths) . "). Seluruh data sudah berstatus DELIVERED / RETUR, tidak ada yang perlu di-update.";
             }
 
-            $processedRows = [];
-
-            // Write back tracking results into the Excel sheet
-            foreach ($pendingResis as $item) {
-                $row = $item['row'];
-                $resi = $item['resi'];
-
-                $data = $trackedResults[$resi] ?? [
-                    'resi' => $resi,
-                    'keterangan' => 'DITERIMA YANG BERSANGKUTAN',
-                    'status' => 'DELIVERED',
-                    'sla' => '3',
-                ];
-
-                // Set Kolom K (KETERANGAN), L (TRACKING POS), M (SLA)
-                $sheet->setCellValue('K' . $row, $data['keterangan']);
-                $sheet->setCellValue('L' . $row, $data['status']);
-                $sheet->setCellValue('M' . $row, $data['sla']);
-
-                $processedRows[] = [
-                    'row' => $row,
-                    'resi' => $resi,
-                    'keterangan' => $data['keterangan'],
-                    'status' => $data['status'],
-                    'sla' => $data['sla'],
-                    'raw' => $data['raw'] ?? '',
-                ];
-            }
-
-            // Ensure destination directory exists
-            $storageDir = storage_path('app/public/tracked');
-            if (!File::exists($storageDir)) {
-                File::makeDirectory($storageDir, 0755, true);
-            }
-
-            // Save updated Excel file
-            $outputFilename = $originalName . '_UPDATED_' . date('Ymd_His') . '.xlsx';
-            $outputPath = $storageDir . DIRECTORY_SEPARATOR . $outputFilename;
-
-            $writer = IOFactory::createWriter($spreadsheet, 'Xlsx');
-            $writer->save($outputPath);
-
-            return view('tracking', [
-                'success' => 'Tracking berhasil diselesaikan! Terdapat ' . count($processedRows) . ' resi yang berhasil diperbarui dan ' . count($skippedRows) . ' baris dilewati.',
-                'sheetName' => $sheetName,
-                'processedRows' => $processedRows,
-                'skippedRows' => $skippedRows,
-                'downloadFilename' => $outputFilename,
-                'downloadUrl' => route('tracking.download', ['filename' => $outputFilename]),
-                'dummyExists' => file_exists(base_path('POS_INPROSES_DUMMY_2026.xlsx')),
-                'targetUrl' => $targetUrl,
-            ]);
+            // Redirect ke bulan pertama yang diproses, atau bulan yg dipilih user
+            $redirectMonth = $processedMonths[0] ?? $targetMonth;
+            return redirect()->route('tracking.index', ['month' => $redirectMonth, 'year' => $targetYear])
+                ->with('success', $msg);
 
         } catch (Throwable $e) {
+            DB::rollBack();
             return back()->with('error', 'Terjadi kesalahan saat memproses file: ' . $e->getMessage());
         }
     }
 
     /**
-     * Download the updated Excel file
+     * Export colored Excel for active month or all 12 months
+     */
+    public function exportColoredExcel(Request $request)
+    {
+        $month = strtoupper($request->input('month', 'AGUSTUS'));
+        $year = (int)$request->input('year', 2026);
+        $exportAllMonths = $month === 'ALL';
+
+        try {
+            $spreadsheet = new Spreadsheet();
+            $spreadsheet->removeSheetByIndex(0); // Remove default sheet
+
+            $targetMonths = $exportAllMonths ? Shipment::MONTHS : [$month];
+
+            foreach ($targetMonths as $m) {
+                $shipments = Shipment::where('month', $m)->where('year', $year)->orderBy('id', 'asc')->get();
+                if ($shipments->isEmpty() && $exportAllMonths) {
+                    continue;
+                }
+
+                $sheet = $spreadsheet->createSheet();
+                $sheet->setTitle($m . ' (ZAHERBA)');
+
+                // Set headers (Columns A to M)
+                $headers = [
+                    'A1' => 'NO',
+                    'B1' => 'TANGGAL',
+                    'C1' => 'NAMA KONSUMEN',
+                    'D1' => 'INVOICE',
+                    'E1' => 'RESI',
+                    'F1' => 'ALAMAT',
+                    'G1' => 'NAMA CS',
+                    'H1' => 'PRODUK',
+                    'I1' => 'NO HP',
+                    'J1' => 'JUMLAH COD',
+                    'K1' => 'KETERANGAN',
+                    'L1' => 'TRACKING POS',
+                    'M1' => 'SLA (MASA TAHAN)',
+                ];
+
+                foreach ($headers as $cell => $val) {
+                    $sheet->setCellValue($cell, $val);
+                }
+
+                // Style Header
+                $sheet->getStyle('A1:M1')->getFont()->setBold(true);
+                $sheet->getStyle('A1:M1')->getFill()->setFillType(Fill::FILL_SOLID)->getStartColor()->setARGB('FFF97316'); // Orange Header
+                $sheet->getStyle('A1:M1')->getFont()->getColor()->setARGB('FFFFFFFF');
+
+                $rowNum = 2;
+                foreach ($shipments as $idx => $s) {
+                    $sheet->setCellValue('A' . $rowNum, $idx + 1);
+                    $sheet->setCellValue('B' . $rowNum, $s->tanggal);
+                    $sheet->setCellValue('C' . $rowNum, $s->nama_konsumen);
+                    $sheet->setCellValue('D' . $rowNum, $s->invoice);
+                    $sheet->setCellValue('E' . $rowNum, $s->resi);
+                    $sheet->setCellValue('F' . $rowNum, $s->alamat);
+                    $sheet->setCellValue('G' . $rowNum, $s->nama_cs);
+                    $sheet->setCellValue('H' . $rowNum, $s->produk);
+                    $sheet->setCellValue('I' . $rowNum, $s->no_hp);
+                    $sheet->setCellValue('J' . $rowNum, $s->jumlah_cod);
+                    $sheet->setCellValue('K' . $rowNum, $s->keterangan);
+                    $sheet->setCellValue('L' . $rowNum, $s->status);
+                    $sheet->setCellValue('M' . $rowNum, $s->sla);
+
+                    // Apply fill color according to color_code
+                    $colorDef = self::COLOR_PALETTE[$s->color_code] ?? self::COLOR_PALETTE['PUTIH'];
+                    $range = "A{$rowNum}:M{$rowNum}";
+                    $sheet->getStyle($range)->getFill()
+                        ->setFillType(Fill::FILL_SOLID)
+                        ->getStartColor()->setARGB($colorDef['argb_fill']);
+
+                    if (!empty($colorDef['argb_font']) && $colorDef['argb_font'] === 'FFFFFFFF') {
+                        $sheet->getStyle($range)->getFont()->getColor()->setARGB('FFFFFFFF');
+                    }
+
+                    $rowNum++;
+                }
+
+                // Auto-fit column widths
+                foreach (range('A', 'M') as $col) {
+                    $sheet->getColumnDimension($col)->setAutoSize(true);
+                }
+            }
+
+            if ($spreadsheet->getSheetCount() === 0) {
+                $sheet = $spreadsheet->createSheet();
+                $sheet->setTitle('EMPTY');
+                $sheet->setCellValue('A1', 'Tidak ada data pengiriman.');
+            }
+
+            $storageDir = storage_path('app/public/tracked');
+            if (!File::exists($storageDir)) {
+                File::makeDirectory($storageDir, 0755, true);
+            }
+
+            $filename = "REKAP_TRACKING_POS_{$month}_{$year}_" . date('Ymd_His') . ".xlsx";
+            $exportPath = $storageDir . DIRECTORY_SEPARATOR . $filename;
+
+            $writer = IOFactory::createWriter($spreadsheet, 'Xlsx');
+            $writer->save($exportPath);
+
+            if ($request->ajax() || $request->wantsJson()) {
+                return response()->json([
+                    'success' => true,
+                    'download_url' => route('tracking.download', ['filename' => $filename]),
+                    'filename' => $filename,
+                ]);
+            }
+
+            return response()->download($exportPath, $filename, [
+                'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            ]);
+
+        } catch (Throwable $e) {
+            if ($request->ajax() || $request->wantsJson()) {
+                return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+            }
+            return back()->with('error', 'Gagal membuat file Excel: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Download tracked Excel file
      */
     public function download(string $filename)
     {
-        // Sanitize filename to prevent directory traversal
         $cleanFilename = basename($filename);
         $filePath = storage_path('app/public/tracked/' . $cleanFilename);
 
@@ -228,35 +609,89 @@ class TrackingController extends Controller
     }
 
     /**
-     * Mock NIPOS@MID endpoint for testing and simulation
-     * (lacak_item_banyakzaref.php)
+     * Mock NIPOS@MID endpoint for testing
      */
     public function mockNipos(Request $request)
     {
         $barcode = $request->input('barcode', $request->input('cari_barcode', ''));
+        $presetStatus = $request->input('preset_status', '');
         $ajax = $request->ajax() || $request->wantsJson() || $request->has('ajax');
-
-        $receivers = [
-            'DITERIMA YANG BERSANGKUTAN',
-            'DITERIMA ORANG SERUMAH',
-            'DITERIMA SATPAM KANTOR',
-            'DITERIMA KELUARGA',
-        ];
 
         $htmlResult = '';
         if (!empty($barcode)) {
-            $hash = abs(crc32($barcode));
-            $penerima = $receivers[$hash % count($receivers)];
-            $sla = (string)(2 + ($hash % 3));
-            $status = 'DELIVERED';
+            $trackingData = $this->botService->generateSimulatedResult($barcode);
+            if (!empty($presetStatus)) {
+                $trackingData['status'] = $this->botService->normalizeNiposStatus($presetStatus);
+                if ($trackingData['status'] === 'FAILEDTODELIVERED') {
+                    $trackingData['keterangan'] = 'RUMAH KOSONG (PERLU FOLLOW UP CS)';
+                } elseif ($trackingData['status'] === 'INLOCATION') {
+                    $trackingData['keterangan'] = 'TIBA DI KANTOR POS / DC TUJUAN (BELUM DITERIMA - PERLU FOLLOW UP)';
+                } elseif ($trackingData['status'] === 'DELIVERYRUNSHEET') {
+                    $trackingData['keterangan'] = 'SEDANG DIBAWA KURIR ANTARAN';
+                }
+            }
+
+            $isRetur = str_contains($trackingData['status'], 'RETURN');
+            $irregularity = $isRetur ? 'Retur Barang' : '-';
+            $statusCod = $isRetur ? 'COD Retur' : 'COD Terbayar';
+            $petugasLoket = 'Pt Zaherba Indonesia Bahagia (595062740)';
+            $kantorKirim = 'KC CILACAP 53200';
+            $tglKolekting = '2026-01-02 20:39:34';
+            $tglUpdate = '2026-01-12 22:06:23';
+            $petugasUpdate = 'Diki Cahyo Putranto';
+            $isiKiriman = 'HERBAL HI_251229000117';
+            $va = '2411083595062740';
 
             $htmlResult = "
-                <div class='tracking-detail p-4 bg-emerald-50 border border-emerald-300 rounded'>
-                    <h4 class='font-bold text-emerald-800 text-lg'>Status Tracking Resi: {$barcode}</h4>
-                    <p><strong>STATUS:</strong> <span class='badge-status'>{$status}</span></p>
-                    <p><strong>PENERIMA / KETERANGAN:</strong> {$penerima}</p>
-                    <p><strong>SLA (MASA TAHAN):</strong> {$sla} Hari</p>
-                    <p class='text-xs text-gray-500 mt-2'>Diperbarui: " . date('Y-m-d H:i:s') . "</p>
+                <div class='table-responsive p-1 overflow-x-auto'>
+                    <table class='table-auto w-full text-[11px] border border-sky-300 rounded overflow-hidden'>
+                        <thead class='bg-sky-500 text-white font-bold uppercase'>
+                            <tr>
+                                <th class='p-2 text-center border-r border-sky-400'>No</th>
+                                <th class='p-2 text-left border-r border-sky-400'>Barcode</th>
+                                <th class='p-2 text-left border-r border-sky-400'>ExtID</th>
+                                <th class='p-2 text-left border-r border-sky-400'>No.Bag Akhir</th>
+                                <th class='p-2 text-left border-r border-sky-400'>Tanggal Kolekting</th>
+                                <th class='p-2 text-left border-r border-sky-400'>Kantor Kirim</th>
+                                <th class='p-2 text-left border-r border-sky-400'>Petugas Loket</th>
+                                <th class='p-2 text-left border-r border-sky-400'>Status Akhir</th>
+                                <th class='p-2 text-left border-r border-sky-400'>Irregularity</th>
+                                <th class='p-2 text-left border-r border-sky-400'>Posisi Akhir</th>
+                                <th class='p-2 text-left border-r border-sky-400'>Tanggal Update</th>
+                                <th class='p-2 text-left border-r border-sky-400'>Petugas Update</th>
+                                <th class='p-2 text-left border-r border-sky-400'>Penerima</th>
+                                <th class='p-2 text-left border-r border-sky-400'>Tlp Penerima</th>
+                                <th class='p-2 text-center border-r border-sky-400'>SLA</th>
+                                <th class='p-2 text-left border-r border-sky-400'>SWP</th>
+                                <th class='p-2 text-left border-r border-sky-400'>Isi Kiriman</th>
+                                <th class='p-2 text-left border-r border-sky-400'>Status COD</th>
+                                <th class='p-2 text-left'>Virtual Account</th>
+                            </tr>
+                        </thead>
+                        <tbody class='divide-y divide-slate-200 bg-white'>
+                            <tr class='hover:bg-slate-50'>
+                                <td class='p-2 text-center border-r'>1</td>
+                                <td class='p-2 font-mono font-bold text-amber-600 border-r'>{$barcode}</td>
+                                <td class='p-2 font-mono border-r'>{$barcode}</td>
+                                <td class='p-2 border-r'></td>
+                                <td class='p-2 font-mono border-r'>{$tglKolekting}</td>
+                                <td class='p-2 border-r'>{$kantorKirim}</td>
+                                <td class='p-2 border-r'>{$petugasLoket}</td>
+                                <td class='p-2 font-bold text-slate-800 border-r'>{$trackingData['status']}</td>
+                                <td class='p-2 border-r'>{$irregularity}</td>
+                                <td class='p-2 border-r'>{$kantorKirim}</td>
+                                <td class='p-2 font-mono border-r'>{$tglUpdate}</td>
+                                <td class='p-2 border-r'>{$petugasUpdate}</td>
+                                <td class='p-2 font-semibold text-slate-800 border-r'>{$trackingData['keterangan']}</td>
+                                <td class='p-2 border-r'>0</td>
+                                <td class='p-2 font-bold text-center border-r'>{$trackingData['sla']}</td>
+                                <td class='p-2 border-r'></td>
+                                <td class='p-2 border-r'>{$isiKiriman}</td>
+                                <td class='p-2 font-semibold border-r'>{$statusCod}</td>
+                                <td class='p-2 font-mono text-[10px]'>{$va}</td>
+                            </tr>
+                        </tbody>
+                    </table>
                 </div>
             ";
 
@@ -269,5 +704,120 @@ class TrackingController extends Controller
             'barcode' => $barcode,
             'htmlResult' => $htmlResult,
         ]);
+    }
+
+    /**
+     * Helper to track a single shipment instance
+     */
+    protected function trackSingleShipment(Shipment $shipment): void
+    {
+        $targetUrl = route('mock.nipos');
+        $client = $this->botService->getClient();
+
+        try {
+            $result = $this->botService->trackSingleResi($client, $targetUrl, $shipment->resi);
+
+            $stat = strtoupper($result['status']);
+            $isDelivered = str_contains($stat, 'DELIVERED') && !str_contains($stat, 'RETURN');
+            $isReturn = str_contains($stat, 'RETURN') || str_contains($stat, 'RETUR') || $shipment->type === 'masuk';
+
+            $shipment->status = $result['status'];
+            $shipment->keterangan = $result['keterangan'];
+            $shipment->sla = $result['sla'];
+            $shipment->color_code = $isDelivered ? 'BIRU' : ($isReturn ? 'ORANGE' : 'PUTIH');
+            $shipment->needs_follow_up = !$isDelivered && !$isReturn;
+            $shipment->last_scanned_at = now();
+            $shipment->save();
+        } finally {
+            $this->botService->closeClient();
+        }
+    }
+
+    /**
+     * Calculate summary statistics for a collection of shipments
+     */
+    protected function calculateStats($shipments): array
+    {
+        $total = $shipments->count();
+        $delivered = $shipments->filter(fn($s) => $s->isDelivered())->count();
+        $retur = $shipments->filter(fn($s) => $s->isReturn())->count();
+        $inproses = $shipments->filter(fn($s) => !$s->isDelivered() && !$s->isReturn())->count();
+        $needsFollowUp = $shipments->where('needs_follow_up', true)->count();
+
+        $colorCounts = [
+            'BIRU' => $shipments->where('color_code', 'BIRU')->count(),
+            'ORANGE' => $shipments->where('color_code', 'ORANGE')->count(),
+            'KUNING' => $shipments->where('color_code', 'KUNING')->count(),
+            'PUTIH' => $shipments->where('color_code', 'PUTIH')->count(),
+            'HIJAU' => $shipments->where('color_code', 'HIJAU')->count(),
+            'BIRU_TUA' => $shipments->where('color_code', 'BIRU_TUA')->count(),
+        ];
+
+        return [
+            'total' => $total,
+            'delivered' => $delivered,
+            'retur' => $retur,
+            'inproses' => $inproses,
+            'needs_follow_up' => $needsFollowUp,
+            'pct_delivered' => $total > 0 ? round(($delivered / $total) * 100, 2) : 0,
+            'pct_retur' => $total > 0 ? round(($retur / $total) * 100, 2) : 0,
+            'pct_inproses' => $total > 0 ? round(($inproses / $total) * 100, 2) : 0,
+            'color_counts' => $colorCounts,
+        ];
+    }
+
+    /**
+     * Pre-seed database with records from dummy file
+     */
+    protected function seedFromDummyFile(): void
+    {
+        $dummyPath = base_path('POS_INPROSES_DUMMY_2026.xlsx');
+        if (!file_exists($dummyPath)) {
+            return;
+        }
+
+        try {
+            $spreadsheet = IOFactory::load($dummyPath);
+            $sheet = $spreadsheet->getSheetByName('AGUSTUS (ZAHERBA)') ?: $spreadsheet->getActiveSheet();
+            $highestRow = $sheet->getHighestRow();
+
+            for ($row = 2; $row <= $highestRow; $row++) {
+                $resi = trim((string)$sheet->getCell('E' . $row)->getValue());
+                if (empty($resi)) {
+                    continue;
+                }
+
+                $status = trim((string)$sheet->getCell('L' . $row)->getValue()) ?: 'DELIVERED';
+                $keterangan = trim((string)$sheet->getCell('K' . $row)->getValue()) ?: 'DITERIMA YANG BERSANGKUTAN';
+                $sla = trim((string)$sheet->getCell('M' . $row)->getValue()) ?: '2';
+
+                $statusUpper = strtoupper($status);
+                $isDelivered = str_contains($statusUpper, 'DELIVERED') && !str_contains($statusUpper, 'RETURN');
+                $isReturn = str_contains($statusUpper, 'RETURN') || str_contains($statusUpper, 'RETUR');
+
+                Shipment::create([
+                    'month' => 'AGUSTUS',
+                    'year' => 2026,
+                    'type' => $isReturn ? 'masuk' : 'keluar',
+                    'row_index' => $row,
+                    'tanggal' => trim((string)$sheet->getCell('B' . $row)->getValue()) ?: '2026-08-01',
+                    'nama_konsumen' => trim((string)$sheet->getCell('C' . $row)->getValue()),
+                    'invoice' => trim((string)$sheet->getCell('D' . $row)->getValue()),
+                    'resi' => $resi,
+                    'alamat' => trim((string)$sheet->getCell('F' . $row)->getValue()),
+                    'nama_cs' => trim((string)$sheet->getCell('G' . $row)->getValue()) ?: 'CRM DILA',
+                    'produk' => trim((string)$sheet->getCell('H' . $row)->getValue()) ?: 'LAMBUNG CERIA ZAHERBA',
+                    'no_hp' => trim((string)$sheet->getCell('I' . $row)->getValue()),
+                    'jumlah_cod' => trim((string)$sheet->getCell('J' . $row)->getValue()),
+                    'keterangan' => $keterangan,
+                    'status' => $status,
+                    'sla' => $sla,
+                    'color_code' => $isDelivered ? 'BIRU' : ($isReturn ? 'ORANGE' : 'PUTIH'),
+                    'needs_follow_up' => !$isDelivered && !$isReturn,
+                ]);
+            }
+        } catch (Throwable $e) {
+            // Ignore pre-seed failure
+        }
     }
 }
