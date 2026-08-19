@@ -244,10 +244,10 @@ class TrackingController extends Controller
      */
     public function process(Request $request)
     {
-        // Increase execution time and memory for handling large spreadsheets
+        // Increase execution time and memory for handling large spreadsheets (e.g. 40k+ rows)
         @set_time_limit(0);
-        @ini_set('max_execution_time', '300');
-        @ini_set('memory_limit', '512M');
+        @ini_set('max_execution_time', '0');
+        @ini_set('memory_limit', '1024M');
 
         $request->validate([
             'excel_file' => 'nullable|file',
@@ -307,7 +307,12 @@ class TrackingController extends Controller
         }
 
         try {
-            $spreadsheet = IOFactory::load($tempPath);
+            // Memory & speed optimization: setReadDataOnly avoids loading fonts, styles, drawings
+            $reader = IOFactory::createReaderForFile($tempPath);
+            if (method_exists($reader, 'setReadDataOnly')) {
+                $reader->setReadDataOnly(true);
+            }
+            $spreadsheet = $reader->load($tempPath);
             $sheetNames = $spreadsheet->getSheetNames();
 
             // Build map: sheetName => matched month
@@ -329,6 +334,7 @@ class TrackingController extends Controller
             $pendingResis = [];
             $importedCount = 0;
             $processedMonths = [];
+            $now = now()->toDateTimeString();
 
             DB::beginTransaction();
 
@@ -339,17 +345,42 @@ class TrackingController extends Controller
                 }
 
                 $highestRow = $activeSheet->getHighestRow();
+                if ($highestRow < 2) {
+                    continue;
+                }
+
                 $processedMonths[] = $matchedMonth;
 
-                for ($row = 2; $row <= $highestRow; $row++) {
-                    $resi = trim((string)$activeSheet->getCell('E' . $row)->getValue());
+                // High speed array extraction for columns A to M (13 columns)
+                $rows = $activeSheet->rangeToArray("A2:M{$highestRow}", null, false, false, false);
+
+                // Fetch existing shipments for this month & year into keyBy map
+                $existingMap = Shipment::where('month', $matchedMonth)
+                    ->where('year', $targetYear)
+                    ->get()
+                    ->keyBy('resi');
+
+                $insertRows = [];
+
+                foreach ($rows as $idx => $row) {
+                    $excelRow = $idx + 2;
+
+                    $resi = trim((string)($row[4] ?? ''));
                     if (empty($resi)) {
                         continue;
                     }
 
-                    $status = trim((string)$activeSheet->getCell('L' . $row)->getValue());
-                    $keterangan = trim((string)$activeSheet->getCell('K' . $row)->getValue());
-                    $sla = trim((string)$activeSheet->getCell('M' . $row)->getValue());
+                    $tanggal = trim((string)($row[1] ?? '')) ?: date('Y-m-d');
+                    $namaKonsumen = trim((string)($row[2] ?? ''));
+                    $invoice = trim((string)($row[3] ?? ''));
+                    $alamat = trim((string)($row[5] ?? ''));
+                    $namaCs = trim((string)($row[6] ?? '')) ?: 'CRM DILA';
+                    $produk = trim((string)($row[7] ?? '')) ?: 'LAMBUNG CERIA ZAHERBA';
+                    $noHp = trim((string)($row[8] ?? ''));
+                    $jumlahCod = trim((string)($row[9] ?? ''));
+                    $keterangan = trim((string)($row[10] ?? ''));
+                    $status = trim((string)($row[11] ?? ''));
+                    $sla = trim((string)($row[12] ?? ''));
 
                     $statusUpper = strtoupper($status);
                     $isDelivered = str_contains($statusUpper, 'DELIVERED') && !str_contains($statusUpper, 'RETURN');
@@ -366,33 +397,57 @@ class TrackingController extends Controller
                         $initFollowUp = true;
                     }
 
-                    $shipment = Shipment::updateOrCreate(
-                        [
-                            'resi' => $resi,
+                    $defaultKet = $keterangan ?: ($isReturn ? 'BARANG RETUR DITERIMA' : ($isDelivered ? 'DITERIMA YANG BERSANGKUTAN' : 'PROSES PENGIRIMAN POS'));
+                    $defaultStatus = $status ?: ($isReturn ? 'DELIVERED (RETURN DELIVERY)' : 'DELIVERED');
+                    $defaultSla = $sla ?: '2';
+
+                    if (isset($existingMap[$resi])) {
+                        $s = $existingMap[$resi];
+                        $s->row_index = $excelRow;
+                        $s->tanggal = $tanggal;
+                        $s->nama_konsumen = $namaKonsumen;
+                        $s->invoice = $invoice;
+                        $s->alamat = $alamat;
+                        $s->nama_cs = $namaCs;
+                        $s->produk = $produk;
+                        $s->no_hp = $noHp;
+                        $s->jumlah_cod = $jumlahCod;
+                        $s->keterangan = $defaultKet;
+                        $s->status = $defaultStatus;
+                        $s->sla = $defaultSla;
+                        $s->color_code = $initColor;
+                        $s->needs_follow_up = $initFollowUp;
+                        if ($s->isDirty()) {
+                            $s->save();
+                        }
+                    } else {
+                        $insertRows[] = [
                             'month' => $matchedMonth,
                             'year' => $targetYear,
-                        ],
-                        [
-                            'row_index' => $row,
-                            'tanggal' => trim((string)$activeSheet->getCell('B' . $row)->getValue()) ?: date('Y-m-d'),
-                            'nama_konsumen' => trim((string)$activeSheet->getCell('C' . $row)->getValue()),
-                            'invoice' => trim((string)$activeSheet->getCell('D' . $row)->getValue()),
-                            'alamat' => trim((string)$activeSheet->getCell('F' . $row)->getValue()),
-                            'nama_cs' => trim((string)$activeSheet->getCell('G' . $row)->getValue()) ?: 'CRM DILA',
-                            'produk' => trim((string)$activeSheet->getCell('H' . $row)->getValue()) ?: 'LAMBUNG CERIA ZAHERBA',
-                            'no_hp' => trim((string)$activeSheet->getCell('I' . $row)->getValue()),
-                            'jumlah_cod' => trim((string)$activeSheet->getCell('J' . $row)->getValue()),
-                            'keterangan' => $keterangan ?: ($isReturn ? 'BARANG RETUR DITERIMA' : ($isDelivered ? 'DITERIMA YANG BERSANGKUTAN' : 'PROSES PENGIRIMAN POS')),
-                            'status' => $status ?: ($isReturn ? 'DELIVERED (RETURN DELIVERY)' : 'DELIVERED'),
-                            'sla' => $sla ?: '2',
+                            'type' => 'keluar',
+                            'row_index' => $excelRow,
+                            'tanggal' => $tanggal,
+                            'nama_konsumen' => $namaKonsumen,
+                            'invoice' => $invoice,
+                            'resi' => $resi,
+                            'alamat' => $alamat,
+                            'nama_cs' => $namaCs,
+                            'produk' => $produk,
+                            'no_hp' => $noHp,
+                            'jumlah_cod' => $jumlahCod,
+                            'keterangan' => $defaultKet,
+                            'status' => $defaultStatus,
+                            'sla' => $defaultSla,
                             'color_code' => $initColor,
                             'needs_follow_up' => $initFollowUp,
-                        ]
-                    );
+                            'created_at' => $now,
+                            'updated_at' => $now,
+                        ];
+                    }
 
                     $importedCount++;
 
-                    $currentStatus = strtoupper($shipment->status);
+                    $currentStatus = strtoupper($status);
                     $isCurrentlyDone = (str_contains($currentStatus, 'DELIVERED') && !str_contains($currentStatus, 'RETURN'))
                         || str_contains($currentStatus, 'RETURN')
                         || str_contains($currentStatus, 'RETUR');
@@ -413,48 +468,65 @@ class TrackingController extends Controller
 
                     if ($shouldTrack) {
                         $pendingResis[] = [
-                            'row' => $row,
+                            'row' => $excelRow,
                             'resi' => $resi,
-                            'shipment_id' => $shipment->id,
+                            'month' => $matchedMonth,
                         ];
+                    }
+                }
+
+                // Batch insert new records in safe chunks of 50 to fit SQLite variable limits
+                if (!empty($insertRows)) {
+                    foreach (array_chunk($insertRows, 50) as $chunk) {
+                        DB::table('shipments')->insert($chunk);
                     }
                 }
             }
 
             DB::commit();
 
-            // Run bot tracking on pending resis if any
+            // Disconnect worksheets to free memory
+            $spreadsheet->disconnectWorksheets();
+            unset($spreadsheet);
+
+            // Run bot tracking on pending resis if any (cap to max 100 per import session for responsiveness)
             if (!empty($pendingResis)) {
+                $resiListToTrack = array_slice($pendingResis, 0, 100);
+                $resisOnly = array_column($resiListToTrack, 'resi');
+                
+                $shipmentsToTrack = Shipment::whereIn('resi', $resisOnly)
+                    ->where('year', $targetYear)
+                    ->get()
+                    ->keyBy('resi');
+
                 $targetUrl = route('mock.nipos');
-                $chunks = array_chunk($pendingResis, 25);
+                $chunks = array_chunk($resiListToTrack, 25);
                 foreach ($chunks as $chunk) {
                     $trackedResults = $this->botService->trackResiList($chunk, $targetUrl);
 
                     foreach ($chunk as $p) {
                         $r = $p['resi'];
-                        if (isset($trackedResults[$r])) {
+                        if (isset($trackedResults[$r], $shipmentsToTrack[$r])) {
                             $res = $trackedResults[$r];
-                            $s = Shipment::find($p['shipment_id']);
-                            if ($s) {
-                                $stat = strtoupper($res['status']);
-                                $isDeliv = str_contains($stat, 'DELIVERED') && !str_contains($stat, 'RETURN');
-                                $isRet = str_contains($stat, 'RETURN') || str_contains($stat, 'RETUR');
+                            $s = $shipmentsToTrack[$r];
+                            $stat = strtoupper($res['status']);
+                            $isDeliv = str_contains($stat, 'DELIVERED') && !str_contains($stat, 'RETURN');
+                            $isRet = str_contains($stat, 'RETURN') || str_contains($stat, 'RETUR');
 
-                                $s->status = $res['status'];
-                                $s->keterangan = $res['keterangan'];
-                                $s->sla = $res['sla'];
-                                $s->color_code = $isDeliv ? 'BIRU' : ($isRet ? 'ORANGE' : 'PUTIH');
-                                $s->needs_follow_up = !$isDeliv && !$isRet;
-                                $s->last_scanned_at = now();
-                                $s->save();
-                            }
+                            $s->status = $res['status'];
+                            $s->keterangan = $res['keterangan'];
+                            $s->sla = $res['sla'];
+                            $s->color_code = $isDeliv ? 'BIRU' : ($isRet ? 'ORANGE' : 'PUTIH');
+                            $s->needs_follow_up = !$isDeliv && !$isRet;
+                            $s->last_scanned_at = now();
+                            $s->save();
                         }
                     }
                 }
 
-                $msg = "Berhasil mengimpor {$importedCount} data dari " . count($processedMonths) . " bulan (" . implode(', ', $processedMonths) . "). " . count($pendingResis) . " resi di-tracking ulang.";
+                $msg = "Berhasil mengimpor {$importedCount} data dari " . count($processedMonths) . " bulan (" . implode(', ', $processedMonths) . "). " . count($resiListToTrack) . " resi di-tracking.";
             } else {
-                $msg = "Berhasil mengimpor {$importedCount} data dari " . count($processedMonths) . " bulan (" . implode(', ', $processedMonths) . "). Seluruh data sudah berstatus DELIVERED / RETUR, tidak ada yang perlu di-update.";
+                $msg = "Berhasil mengimpor {$importedCount} data dari " . count($processedMonths) . " bulan (" . implode(', ', $processedMonths) . "). Seluruh data berstatus DELIVERED / RETUR.";
             }
 
             // Redirect ke bulan pertama yang diproses, atau bulan yg dipilih user
