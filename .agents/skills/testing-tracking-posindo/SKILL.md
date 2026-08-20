@@ -9,6 +9,7 @@ description: How to run and end-to-end test the Laravel tracking_posindo dashboa
 - No auth: the dashboard is at `http://127.0.0.1:8000/` with no login.
 - Start web: `php artisan serve --host=127.0.0.1 --port=8000`
 - Start worker (required for the queued/background import): `php artisan queue:work --queue=tracking,default --tries=3 --timeout=1800`
+- Restart the worker after **any** code change; it keeps the old code in memory.
 - Queue/DB: SQLite (`database/database.sqlite`), `QUEUE_CONNECTION=database`. `sqlite3` CLI is usually NOT installed —
   query the DB with a bootstrap script instead:
   `php -r 'require "vendor/autoload.php"; $a=require "bootstrap/app.php"; $a->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap(); ... DB::table("shipments")...'`
@@ -33,10 +34,11 @@ Generate with a small `php -r` + `fputcsv` script; ~1200 rows imports in <1s per
 - The copied source file lands in `storage/app/imports` and is deleted in the batch `finally()`; leftovers there mean a batch never finished.
 
 ## Known gotchas
-- `SpreadsheetRowMapper::map` stores a **blank** file status as `DELIVERED`, so `Shipment::needsTracking()` excludes those rows:
-  rows with empty status may never be tracked even with the "Update Semua yang Belum DELIVERED" filter. Verify explicitly.
-- The "Download Excel Bulan ..." button may alert `SyntaxError: Unexpected token 'P', "PK..." is not valid JSON` — the frontend
-  parses the xlsx response as JSON. This exists on `main` too; the backend export itself works (covered by `php artisan test`).
+- A **blank** file status is persisted as `ON PROCESS` (`PUTIH`, follow-up), so those rows stay trackable; anything containing
+  DELIVERED / RETURN / RETUR / SUKSES is skipped by `Shipment::needsTracking()`.
+- "Download Excel Bulan ..." streams the xlsx as a blob; the file lands in `~/Downloads/Tracking_<MONTH>_<YEAR>.xlsx`.
+- `php artisan test` leaves copies in `storage/app/imports` (the faked batch never runs `finally()`); only leftovers from real
+  runtime imports indicate a batch that never finished.
 - Typing a URL with `&` via keyboard automation into Chrome's omnibox can lose the `&`; prefer clicking the month nav links.
 
 ## Devin Secrets Needed
