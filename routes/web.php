@@ -6,6 +6,7 @@ use Illuminate\Support\Facades\Route;
 Route::get('/', [TrackingController::class, 'index'])->name('tracking.index');
 Route::post('/process', [TrackingController::class, 'process'])->name('tracking.process');
 Route::get('/download/{filename}', [TrackingController::class, 'download'])->name('tracking.download');
+Route::get('/import-status/{batchId}', [TrackingController::class, 'importStatus'])->name('tracking.import_status');
 Route::post('/export-colored-excel', [TrackingController::class, 'exportColoredExcel'])->name('tracking.export_colored');
 
 // Inbound & Outbound Shipment Entry & Single Tracking Routes

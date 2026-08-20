@@ -2,9 +2,11 @@
 
 namespace App\Http\Controllers;
 
+use App\Jobs\ImportSpreadsheetChunkJob;
 use App\Models\Shipment;
 use App\Services\TrackingBotService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use PhpOffice\PhpSpreadsheet\IOFactory;
@@ -256,6 +258,7 @@ class TrackingController extends Controller
             'month' => 'nullable|string',
             'year' => 'nullable|integer',
             'filter_mode' => 'nullable|string|in:only_empty,undelivered,all',
+            'background' => 'nullable|boolean',
         ]);
 
         $useDummy = $request->boolean('use_dummy');
@@ -304,6 +307,11 @@ class TrackingController extends Controller
             $originalName = 'POS_INPROSES_DUMMY_2026';
         } else {
             return back()->with('error', 'Silakan pilih file Excel/Spreadsheet atau masukkan link Google Spreadsheet.');
+        }
+
+        // Background mode: pecah file menjadi batch job antrean agar memori stabil
+        if ($request->boolean('background')) {
+            return $this->dispatchImportBatch($request, $tempPath, $originalName, $targetMonth, $targetYear, $filterMode);
         }
 
         try {
@@ -398,7 +406,7 @@ class TrackingController extends Controller
                     }
 
                     $defaultKet = $keterangan ?: ($isReturn ? 'BARANG RETUR DITERIMA' : ($isDelivered ? 'DITERIMA YANG BERSANGKUTAN' : 'PROSES PENGIRIMAN POS'));
-                    $defaultStatus = $status ?: ($isReturn ? 'DELIVERED (RETURN DELIVERY)' : 'DELIVERED');
+                    $defaultStatus = $status ?: 'ON PROCESS';
                     $defaultSla = $sla ?: '2';
 
                     if (isset($existingMap[$resi])) {
@@ -491,35 +499,30 @@ class TrackingController extends Controller
 
             // Run bot tracking on pending resis if any (cap to max 100 per import session for responsiveness)
             if (!empty($pendingResis)) {
-                $resiListToTrack = array_slice($pendingResis, 0, 100);
+                $resiListToTrack = array_slice($pendingResis, 0, (int)config('tracking.sync_track_limit'));
                 $resisOnly = array_column($resiListToTrack, 'resi');
-                
+
+                // Smart filtering: resi yang sudah SUKSES / RETUR tidak dilacak ulang
                 $shipmentsToTrack = Shipment::whereIn('resi', $resisOnly)
                     ->where('year', $targetYear)
+                    ->needsTracking()
                     ->get()
                     ->keyBy('resi');
 
                 $targetUrl = route('mock.nipos');
                 $chunks = array_chunk($resiListToTrack, 25);
                 foreach ($chunks as $chunk) {
+                    $chunk = array_values(array_filter($chunk, fn($p) => isset($shipmentsToTrack[$p['resi']])));
+                    if (empty($chunk)) {
+                        continue;
+                    }
+
                     $trackedResults = $this->botService->trackResiList($chunk, $targetUrl);
 
                     foreach ($chunk as $p) {
                         $r = $p['resi'];
                         if (isset($trackedResults[$r], $shipmentsToTrack[$r])) {
-                            $res = $trackedResults[$r];
-                            $s = $shipmentsToTrack[$r];
-                            $stat = strtoupper($res['status']);
-                            $isDeliv = str_contains($stat, 'DELIVERED') && !str_contains($stat, 'RETURN');
-                            $isRet = str_contains($stat, 'RETURN') || str_contains($stat, 'RETUR');
-
-                            $s->status = $res['status'];
-                            $s->keterangan = $res['keterangan'];
-                            $s->sla = $res['sla'];
-                            $s->color_code = $isDeliv ? 'BIRU' : ($isRet ? 'ORANGE' : 'PUTIH');
-                            $s->needs_follow_up = !$isDeliv && !$isRet;
-                            $s->last_scanned_at = now();
-                            $s->save();
+                            $shipmentsToTrack[$r]->applyTrackingResult($trackedResults[$r]);
                         }
                     }
                 }
@@ -538,6 +541,122 @@ class TrackingController extends Controller
             DB::rollBack();
             return back()->with('error', 'Terjadi kesalahan saat memproses file: ' . $e->getMessage());
         }
+    }
+
+    /**
+     * Split the spreadsheet into queued chunk jobs (batch processing)
+     */
+    protected function dispatchImportBatch(Request $request, string $sourcePath, string $originalName, string $targetMonth, int $targetYear, string $filterMode)
+    {
+        try {
+            // Simpan salinan file agar tetap tersedia saat worker memproses antrean
+            $importDir = storage_path('app/imports');
+            if (!file_exists($importDir)) {
+                File::makeDirectory($importDir, 0755, true);
+            }
+            $storedPath = $importDir . DIRECTORY_SEPARATOR . uniqid('import_') . '_' . basename($sourcePath);
+            File::copy($sourcePath, $storedPath);
+
+            // listWorksheetInfo hanya membaca metadata sheet, bukan seluruh isi file
+            $reader = IOFactory::createReaderForFile($storedPath);
+            $sheetInfos = $reader->listWorksheetInfo($storedPath);
+
+            $chunkSize = max(1, (int)config('tracking.import_chunk_size'));
+            $targetUrl = route('mock.nipos');
+            $jobs = [];
+            $totalRows = 0;
+            $processedMonths = [];
+
+            foreach ($sheetInfos as $info) {
+                $sheetName = $info['worksheetName'];
+                $highestRow = (int)($info['totalRows'] ?? 0);
+                if ($highestRow < 2) {
+                    continue;
+                }
+
+                $matchedMonth = $targetMonth;
+                foreach (Shipment::MONTHS as $m) {
+                    if (str_contains(strtoupper($sheetName), $m)) {
+                        $matchedMonth = $m;
+                        break;
+                    }
+                }
+
+                $processedMonths[$matchedMonth] = $matchedMonth;
+                $totalRows += $highestRow - 1;
+
+                for ($start = 2; $start <= $highestRow; $start += $chunkSize) {
+                    $end = min($start + $chunkSize - 1, $highestRow);
+                    $jobs[] = new ImportSpreadsheetChunkJob(
+                        $storedPath,
+                        $sheetName,
+                        $matchedMonth,
+                        $targetYear,
+                        $start,
+                        $end,
+                        $filterMode,
+                        $targetUrl,
+                    );
+                }
+            }
+
+            if (empty($jobs)) {
+                @unlink($storedPath);
+                return back()->with('error', 'File tidak berisi baris data yang dapat diproses.');
+            }
+
+            $batch = Bus::batch($jobs)
+                ->name('Import ' . $originalName . ' ' . $targetYear)
+                ->allowFailures()
+                ->finally(function () use ($storedPath) {
+                    @unlink($storedPath);
+                })
+                ->onQueue(config('tracking.queue'))
+                ->dispatch();
+
+            $msg = "Import {$totalRows} baris dijadwalkan ke antrean dalam " . count($jobs) . " batch (" . $chunkSize . " baris/batch). Proses berjalan di latar belakang, Anda tidak perlu menunggu di layar ini.";
+
+            if ($request->ajax() || $request->wantsJson()) {
+                return response()->json([
+                    'success' => true,
+                    'batch_id' => $batch->id,
+                    'total_jobs' => $batch->totalJobs,
+                    'message' => $msg,
+                ]);
+            }
+
+            return redirect()->route('tracking.index', [
+                'month' => reset($processedMonths) ?: $targetMonth,
+                'year' => $targetYear,
+                'batch' => $batch->id,
+            ])->with('success', $msg);
+        } catch (Throwable $e) {
+            return back()->with('error', 'Gagal menjadwalkan import: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Progress of a queued import batch (dipakai polling UI)
+     */
+    public function importStatus(string $batchId)
+    {
+        $batch = Bus::findBatch($batchId);
+
+        if (!$batch) {
+            return response()->json(['success' => false, 'message' => 'Batch tidak ditemukan.'], 404);
+        }
+
+        return response()->json([
+            'success' => true,
+            'batch_id' => $batch->id,
+            'total_jobs' => $batch->totalJobs,
+            'pending_jobs' => $batch->pendingJobs,
+            'processed_jobs' => $batch->processedJobs(),
+            'failed_jobs' => $batch->failedJobs,
+            'progress' => $batch->progress(),
+            'finished' => $batch->finished(),
+            'cancelled' => $batch->cancelled(),
+        ]);
     }
 
     /**
