@@ -849,16 +849,24 @@
                     year: {{ $selectedYear }}
                 })
             })
-            .then(res => res.json())
-            .then(data => {
-                if (data.success && data.download_url) {
-                    window.location.href = data.download_url;
-                } else {
-                    alert('Gagal menghasilkan file: ' + (data.message || 'Error'));
+            .then(res => {
+                if (!res.ok) {
+                    return res.json().then(data => { throw new Error(data.message || 'Error'); });
                 }
+                return res.blob();
+            })
+            .then(blob => {
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = 'Tracking_' + month + '_{{ $selectedYear }}.xlsx';
+                document.body.appendChild(link);
+                link.click();
+                link.remove();
+                URL.revokeObjectURL(url);
             })
             .catch(err => {
-                alert('Terjadi kesalahan: ' + err);
+                alert('Gagal menghasilkan file: ' + err.message);
             });
         }
     </script>

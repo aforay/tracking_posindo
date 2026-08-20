@@ -406,7 +406,7 @@ class TrackingController extends Controller
                     }
 
                     $defaultKet = $keterangan ?: ($isReturn ? 'BARANG RETUR DITERIMA' : ($isDelivered ? 'DITERIMA YANG BERSANGKUTAN' : 'PROSES PENGIRIMAN POS'));
-                    $defaultStatus = $status ?: ($isReturn ? 'DELIVERED (RETURN DELIVERY)' : 'DELIVERED');
+                    $defaultStatus = $status ?: 'ON PROCESS';
                     $defaultSla = $sla ?: '2';
 
                     if (isset($existingMap[$resi])) {

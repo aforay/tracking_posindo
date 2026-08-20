@@ -54,7 +54,7 @@ class SpreadsheetRowMapper
             'no_hp' => trim((string) ($row[8] ?? '')),
             'jumlah_cod' => trim((string) ($row[9] ?? '')),
             'keterangan' => $keterangan ?: ($isReturn ? 'BARANG RETUR DITERIMA' : ($isDelivered ? 'DITERIMA YANG BERSANGKUTAN' : 'PROSES PENGIRIMAN POS')),
-            'status' => $status ?: ($isReturn ? 'DELIVERED (RETURN DELIVERY)' : 'DELIVERED'),
+            'status' => $status ?: 'ON PROCESS',
             'sla' => $sla ?: '2',
             'color_code' => $color,
             'needs_follow_up' => $followUp,

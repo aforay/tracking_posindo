@@ -22,6 +22,7 @@ class QueuedImportTest extends TestCase
         $csv .= "1,2026-08-01,Rina,INV001,RESI_DELIVERED_01,Jl Mawar 1,CRM DILA,LAMBUNG,0812,250000,DITERIMA YANG BERSANGKUTAN,DELIVERED,2\n";
         $csv .= "2,2026-08-01,Budi,INV002,RESI_RETUR_01,Jl Melati 2,CRM DILA,LAMBUNG,0813,250000,RETUR,DELIVERED (RETURN DELIVERY),9\n";
         $csv .= "3,2026-08-01,Sari,INV003,RESI_PROSES_01,Jl Kenanga 3,CRM DILA,LAMBUNG,0814,250000,PROSES PENGIRIMAN POS,ON PROCESS,1\n";
+        $csv .= "4,2026-08-01,Tono,INV004,RESI_KOSONG_01,Jl Anggrek 4,CRM DILA,LAMBUNG,0815,250000,,,\n";
 
         return $csv;
     }
@@ -63,14 +64,17 @@ class QueuedImportTest extends TestCase
 
         $path = $this->writeCsvFile();
 
-        (new ImportSpreadsheetChunkJob($path, 'Worksheet', 'AGUSTUS', 2026, 2, 4, 'undelivered'))->handle();
+        (new ImportSpreadsheetChunkJob($path, 'Worksheet', 'AGUSTUS', 2026, 2, 5, 'undelivered'))->handle();
 
         $this->assertDatabaseHas('shipments', ['resi' => 'RESI_DELIVERED_01', 'color_code' => 'BIRU']);
         $this->assertDatabaseHas('shipments', ['resi' => 'RESI_RETUR_01', 'color_code' => 'ORANGE']);
         $this->assertDatabaseHas('shipments', ['resi' => 'RESI_PROSES_01', 'color_code' => 'PUTIH']);
 
         Queue::assertPushed(TrackShipmentChunkJob::class, function (TrackShipmentChunkJob $job) {
-            return $job->resis === ['RESI_PROSES_01'];
+            $resis = $job->resis;
+            sort($resis);
+
+            return $resis === ['RESI_KOSONG_01', 'RESI_PROSES_01'];
         });
 
         @unlink($path);
@@ -86,6 +90,24 @@ class QueuedImportTest extends TestCase
         (new ImportSpreadsheetChunkJob($path, 'Worksheet', 'AGUSTUS', 2026, 2, 4, 'only_empty'))->handle();
 
         Queue::assertNotPushed(TrackShipmentChunkJob::class);
+
+        @unlink($path);
+    }
+
+    public function test_row_without_status_stays_trackable(): void
+    {
+        Queue::fake();
+
+        $path = $this->writeCsvFile();
+
+        (new ImportSpreadsheetChunkJob($path, 'Worksheet', 'AGUSTUS', 2026, 5, 5, 'only_empty'))->handle();
+
+        $this->assertDatabaseHas('shipments', ['resi' => 'RESI_KOSONG_01', 'status' => 'ON PROCESS', 'color_code' => 'PUTIH']);
+        $this->assertEquals(['RESI_KOSONG_01'], Shipment::needsTracking()->pluck('resi')->all());
+
+        Queue::assertPushed(TrackShipmentChunkJob::class, function (TrackShipmentChunkJob $job) {
+            return $job->resis === ['RESI_KOSONG_01'];
+        });
 
         @unlink($path);
     }
