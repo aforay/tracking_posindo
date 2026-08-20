@@ -7,6 +7,25 @@
 <a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
 </p>
 
+## Import Excel Besar (Queue & Chunking)
+
+Import Excel dijalankan sebagai batch job antrean supaya memori server tetap stabil untuk 40.000+ resi.
+
+1. Jalankan web server: `php artisan serve` (atau `run-dev.bat`).
+2. Jalankan worker antrean di jendela terpisah: `php artisan queue:work --queue=tracking,default --timeout=1800` (atau `run-queue.bat`).
+3. Upload file Excel dengan opsi **Proses di Latar Belakang (Antrean)** aktif. Progress batch tampil di dashboard.
+
+Konfigurasi ada di `config/tracking.php`:
+
+| Env | Default | Fungsi |
+| --- | --- | --- |
+| `TRACKING_IMPORT_CHUNK_SIZE` | 500 | Jumlah baris Excel per job import |
+| `TRACKING_TRACK_CHUNK_SIZE` | 25 | Jumlah resi per job tracking bot |
+| `TRACKING_QUEUE` | tracking | Nama antrean |
+| `TRACKING_SYNC_LIMIT` | 100 | Batas resi saat import tanpa antrean |
+
+Smart filtering: resi yang statusnya sudah SUKSES (DELIVERED) atau RETUR otomatis dilewati, bot hanya melacak resi baru atau yang masih dalam proses.
+
 ## About Laravel
 
 Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:

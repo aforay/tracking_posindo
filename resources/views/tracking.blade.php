@@ -161,6 +161,14 @@
                             </div>
                         </div>
 
+                        <!-- Background Queue Option -->
+                        <label class="flex items-start space-x-2 p-2 bg-emerald-50 border border-emerald-200 rounded-xl cursor-pointer transition text-xs">
+                            <input type="checkbox" name="background" id="background" value="1" class="mt-0.5 text-emerald-600 focus:ring-emerald-500" checked>
+                            <span>
+                                <span class="font-bold text-emerald-900">Proses di Latar Belakang (Antrean)</span>
+                                <span class="block text-[10px] text-emerald-700">Data dipecah {{ config('tracking.import_chunk_size') }} baris per batch. Aman untuk 40.000+ resi, tidak perlu menunggu di layar.</span>
+                            </span>
+                        </label>
 
                         <!-- Submit Button -->
                         <button
@@ -172,6 +180,18 @@
                             <span>Jalankan Bot Tracking {{ $selectedMonth !== 'ALL' ? 'Bulan ' . $selectedMonth : 'Semua Bulan' }}</span>
                         </button>
                     </form>
+
+                    <!-- Queue Progress Panel -->
+                    <div id="batchProgress" class="hidden mt-3 p-3 bg-slate-50 border border-slate-200 rounded-xl">
+                        <div class="flex items-center justify-between mb-1.5">
+                            <span class="text-[11px] font-bold text-slate-700 uppercase tracking-wider">Progress Antrean</span>
+                            <span class="text-[11px] font-mono font-bold text-slate-800" id="batchPercent">0%</span>
+                        </div>
+                        <div class="w-full h-2 bg-slate-200 rounded-full overflow-hidden">
+                            <div id="batchBar" class="h-full bg-emerald-500 transition-all duration-500" style="width: 0%"></div>
+                        </div>
+                        <p class="text-[10px] text-slate-600 mt-1.5" id="batchInfo">Menunggu worker antrean...</p>
+                    </div>
                 </div>
             </div>
 
@@ -601,6 +621,51 @@
 
     <!-- Client-side Scripts -->
     <script>
+        // Poll queued import batch progress
+        (function () {
+            const batchId = new URLSearchParams(window.location.search).get('batch');
+            if (!batchId) {
+                return;
+            }
+
+            const panel = document.getElementById('batchProgress');
+            const bar = document.getElementById('batchBar');
+            const percent = document.getElementById('batchPercent');
+            const info = document.getElementById('batchInfo');
+            panel.classList.remove('hidden');
+
+            const poll = () => {
+                fetch("{{ url('/import-status') }}/" + batchId, { headers: { 'Accept': 'application/json' } })
+                    .then(res => res.json())
+                    .then(data => {
+                        if (!data.success) {
+                            info.textContent = 'Batch tidak ditemukan atau sudah dibersihkan.';
+                            return;
+                        }
+
+                        bar.style.width = data.progress + '%';
+                        percent.textContent = data.progress + '%';
+                        info.textContent = data.processed_jobs + ' dari ' + data.total_jobs + ' batch selesai'
+                            + (data.failed_jobs ? ' (' + data.failed_jobs + ' gagal)' : '');
+
+                        if (data.finished || data.cancelled) {
+                            info.textContent += ' - selesai, memuat ulang data...';
+                            setTimeout(() => {
+                                const url = new URL(window.location.href);
+                                url.searchParams.delete('batch');
+                                window.location.href = url.toString();
+                            }, 1500);
+                            return;
+                        }
+
+                        setTimeout(poll, 3000);
+                    })
+                    .catch(() => setTimeout(poll, 5000));
+            };
+
+            poll();
+        })();
+
         const dropzone = document.getElementById('dropzone');
         const fileInput = document.getElementById('excel_file');
         const fileNameDisplay = document.getElementById('fileNameDisplay');
