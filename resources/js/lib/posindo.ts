@@ -1,0 +1,170 @@
+export type FuStatus = "PUTIH" | "BIRU" | "ORANGE" | "KUNING" | "HIJAU" | "BIRU_TUA";
+
+export type NiposStatus =
+  | "DELIVERED"
+  | "RETURN"
+  | "IN LOCATION"
+  | "RUNSHEET"
+  | "OUT FOR DELIVERY";
+
+export interface Shipment {
+  id: string;
+  resi: string;
+  seller: string;
+  tanggalKirim: string; // ISO
+  tujuan: string;
+  penerima: string;
+  telepon: string;
+  alamat: string;
+  keterangan: string;
+  nipos: NiposStatus;
+  sla: number;
+  fu: FuStatus;
+  note?: string;
+  escalationDate?: string;
+}
+
+export const SELLERS = [
+  "Mitra Aliqa",
+  "Mitra Zaherba",
+  "Mitra Herbal",
+  "Mitra Nusantara",
+  "Mitra Barokah",
+];
+
+export const MONTHS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "Mei",
+  "Jun",
+  "Jul",
+  "Agu",
+  "Sep",
+  "Okt",
+  "Nov",
+  "Des",
+];
+
+export const FU_META: Record<
+  FuStatus,
+  { label: string; bg: string; fg: string; short: string }
+> = {
+  PUTIH: { label: "BLM DI FU", bg: "#F3F4F6", fg: "#374151", short: "PUTIH" },
+  BIRU: { label: "PAKET SUKSES", bg: "#BAE6FD", fg: "#0369A1", short: "BIRU" },
+  ORANGE: { label: "PAKET RETUR", bg: "#FED7AA", fg: "#C2410C", short: "ORANGE" },
+  KUNING: { label: "SUDAH DI FU", bg: "#FEF08A", fg: "#854D0E", short: "KUNING" },
+  HIJAU: { label: "FU 2 KALI", bg: "#A7F3D0", fg: "#047857", short: "HIJAU" },
+  BIRU_TUA: { label: "FU POS", bg: "#1E40AF", fg: "#FFFFFF", short: "BIRU TUA" },
+};
+
+export const FU_ORDER: FuStatus[] = ["BIRU", "ORANGE", "KUNING", "PUTIH", "HIJAU", "BIRU_TUA"];
+
+const CITIES = [
+  "Jakarta Selatan",
+  "Bandung",
+  "Surabaya",
+  "Semarang",
+  "Yogyakarta",
+  "Medan",
+  "Makassar",
+  "Denpasar",
+  "Bekasi",
+  "Purwokerto",
+  "Tangerang",
+  "Palembang",
+];
+
+const NAMES = [
+  "Siti Rohmah",
+  "Budi Santoso",
+  "Ahmad Fauzi",
+  "Dewi Lestari",
+  "Rina Marlina",
+  "Agus Prasetyo",
+  "Nur Aini",
+  "Joko Susilo",
+  "Indah Permata",
+  "Rizky Ramadhan",
+];
+
+const KETERANGAN = [
+  "Penerima tidak di tempat",
+  "Alamat kurang lengkap",
+  "Sudah diterima keluarga",
+  "Dalam pengantaran kurir",
+  "Nomor telepon tidak aktif",
+  "Tiba di kantor tujuan",
+  "Reschedule pengantaran besok",
+];
+
+function lcg(seed: number) {
+  let s = seed >>> 0;
+  return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
+}
+
+function pick<T>(arr: T[], r: number): T {
+  return arr[Math.floor(r * arr.length)] as T;
+}
+
+function pad(n: number, len = 2) {
+  return String(n).padStart(len, "0");
+}
+
+export function generateShipments(count = 4800): Shipment[] {
+  const rnd = lcg(20260821);
+  const out: Shipment[] = [];
+  for (let i = 0; i < count; i++) {
+    const month = Math.floor(rnd() * 12);
+    const day = 1 + Math.floor(rnd() * 28);
+    const r = rnd();
+    const nipos: NiposStatus =
+      r < 0.62
+        ? "DELIVERED"
+        : r < 0.74
+          ? "RETURN"
+          : r < 0.84
+            ? "OUT FOR DELIVERY"
+            : r < 0.93
+              ? "RUNSHEET"
+              : "IN LOCATION";
+    const fr = rnd();
+    const fu: FuStatus =
+      nipos === "DELIVERED"
+        ? "BIRU"
+        : nipos === "RETURN"
+          ? "ORANGE"
+          : fr < 0.55
+            ? "PUTIH"
+            : fr < 0.78
+              ? "KUNING"
+              : fr < 0.93
+                ? "HIJAU"
+                : "BIRU_TUA";
+    out.push({
+      id: `s${i}`,
+      resi: `PCP${pad(month + 1)}${pad(day)}${pad(1000000 + Math.floor(rnd() * 8999999), 7)}ID`,
+      seller: pick(SELLERS, rnd()),
+      tanggalKirim: `2026-${pad(month + 1)}-${pad(day)}`,
+      tujuan: pick(CITIES, rnd()),
+      penerima: pick(NAMES, rnd()),
+      telepon: `08${Math.floor(1000000000 + rnd() * 8999999999)}`.slice(0, 13),
+      alamat: `Jl. Merdeka No.${1 + Math.floor(rnd() * 200)}, RT0${1 + Math.floor(rnd() * 8)}`,
+      keterangan: pick(KETERANGAN, rnd()),
+      nipos,
+      sla: 1 + Math.floor(rnd() * 9),
+      fu,
+    });
+  }
+  return out;
+}
+
+export function formatDate(iso: string) {
+  const [y, m, d] = iso.split("-");
+  return `${d}/${m}/${y}`;
+}
+
+export function nf(n: number) {
+  return n.toLocaleString("id-ID");
+}

@@ -73,24 +73,36 @@ class TrackingController extends Controller
         $this->botService = $botService;
     }
 
-    /**
-     * Display tracking dashboard for selected month (12 months available)
-     */
     public function index(Request $request)
     {
         $selectedMonth = strtoupper($request->input('month', 'AGUSTUS'));
         $selectedYear = (int)$request->input('year', 2026);
-        $selectedType = $request->input('type', null); // 'keluar', 'masuk', or null
+        $selectedType = $request->input('type', null);
+        $selectedSeller = $request->input('seller', 'Semua Seller');
+        $selectedColor = $request->input('color', null);
+        $searchQuery = trim($request->input('search', ''));
 
-        // If database has no records yet, pre-seed from dummy file for AGUSTUS
-        if (Shipment::count() === 0) {
-            $this->seedFromDummyFile();
+        // Query shipments
+        $query = Shipment::query();
+        if ($selectedMonth !== 'ALL') {
+            $query->forMonth($selectedMonth, $selectedYear);
         }
-
-        // Query shipments for selected month
-        $query = Shipment::query()->forMonth($selectedMonth, $selectedYear);
         if (!empty($selectedType)) {
             $query->forType($selectedType);
+        }
+        if ($selectedSeller !== 'Semua Seller' && !empty($selectedSeller)) {
+            $query->where('seller', $selectedSeller);
+        }
+        if (!empty($selectedColor)) {
+            $query->where('color_code', strtoupper($selectedColor));
+        }
+        if (!empty($searchQuery)) {
+            $query->where(function ($q) use ($searchQuery) {
+                $q->where('resi', 'LIKE', "%{$searchQuery}%")
+                  ->orWhere('nama_konsumen', 'LIKE', "%{$searchQuery}%")
+                  ->orWhere('no_hp', 'LIKE', "%{$searchQuery}%")
+                  ->orWhere('alamat', 'LIKE', "%{$searchQuery}%");
+            });
         }
 
         $shipments = $query->orderBy('id', 'asc')->get();
@@ -114,17 +126,41 @@ class TrackingController extends Controller
             $monthCounts[$m] = Shipment::where('month', $m)->where('year', $selectedYear)->count();
         }
 
-        return view('tracking', [
-            'months' => Shipment::MONTHS,
-            'selectedMonth' => $selectedMonth,
-            'selectedYear' => $selectedYear,
-            'selectedType' => $selectedType,
-            'shipments' => $shipments,
+        $formattedShipments = $shipments->map(function ($s) {
+            return [
+                'id' => (string)$s->id,
+                'resi' => $s->resi,
+                'seller' => $s->seller ?? 'Mitra Aliqa',
+                'tanggalKirim' => $s->tanggal ?? date('Y-m-d'),
+                'tujuan' => $s->alamat ?? 'Cilacap',
+                'penerima' => $s->nama_konsumen ?? '-',
+                'telepon' => $s->no_hp ?? '-',
+                'alamat' => $s->alamat ?? '-',
+                'keterangan' => $s->keterangan ?? '-',
+                'nipos' => $s->status ?? 'ON PROCESS',
+                'sla' => (int)($s->sla ?? 2),
+                'fu' => $s->color_code ?? 'PUTIH',
+                'note' => $s->noted,
+                'escalationDate' => $s->fu_pos_date,
+            ];
+        });
+
+        if ($request->wantsJson() && !$request->header('X-Inertia')) {
+            return response()->json([
+                'shipments' => $formattedShipments,
+                'stats' => $stats,
+            ]);
+        }
+
+        return \Inertia\Inertia::render('Dashboard', [
+            'shipments' => $formattedShipments,
+            'filters' => [
+                'seller' => $selectedSeller,
+                'month' => $selectedMonth,
+                'color' => $selectedColor,
+                'search' => $searchQuery,
+            ],
             'stats' => $stats,
-            'annualStats' => $annualStats,
-            'monthCounts' => $monthCounts,
-            'colorPalette' => self::COLOR_PALETTE,
-            'dummyExists' => file_exists(base_path('POS_INPROSES_DUMMY_2026.xlsx')),
         ]);
     }
 
@@ -218,13 +254,26 @@ class TrackingController extends Controller
     public function updateColor(Request $request, int $id)
     {
         $request->validate([
-            'color_code' => 'required|string|in:BIRU,ORANGE,KUNING,PUTIH,HIJAU,BIRU_TUA',
+            'color_code' => 'required|string',
+            'fu_pos_date' => 'nullable|string',
+            'noted' => 'nullable|string',
         ]);
 
         $shipment = Shipment::findOrFail($id);
         $color = strtoupper($request->input('color_code'));
 
-        $shipment->color_code = $color;
+        if (in_array($color, ['BIRU', 'ORANGE', 'KUNING', 'PUTIH', 'HIJAU', 'BIRU_TUA'])) {
+            $shipment->color_code = $color;
+        }
+
+        if ($request->has('fu_pos_date')) {
+            $shipment->fu_pos_date = $request->input('fu_pos_date');
+        }
+
+        if ($request->has('noted')) {
+            $shipment->noted = $request->input('noted');
+        }
+
         if (in_array($color, ['KUNING', 'HIJAU', 'BIRU_TUA', 'PUTIH'])) {
             $shipment->needs_follow_up = in_array($color, ['KUNING', 'HIJAU', 'BIRU_TUA']) || !$shipment->isDelivered();
         } else {
@@ -232,12 +281,115 @@ class TrackingController extends Controller
         }
         $shipment->save();
 
+        if ($request->header('X-Inertia') || $request->wantsJson()) {
+            return back()->with('success', "Status resi {$shipment->resi} diperbarui.");
+        }
+
         return response()->json([
             'success' => true,
             'message' => "Status warna resi {$shipment->resi} diperbarui ke {$color}.",
             'shipment' => $shipment,
         ]);
     }
+
+    /**
+     * Bulk update status for multiple resis from Inertia/React frontend
+     */
+    public function updateStatusBulk(Request $request)
+    {
+        $request->validate([
+            'ids' => 'required|array',
+            'fu' => 'required|string',
+            'escalationDate' => 'nullable|string',
+        ]);
+
+        $ids = $request->input('ids');
+        $fu = strtoupper($request->input('fu'));
+        $escDate = $request->input('escalationDate');
+
+        Shipment::whereIn('id', $ids)->update([
+            'color_code' => $fu,
+            'fu_pos_date' => $escDate,
+            'needs_follow_up' => in_array($fu, ['KUNING', 'HIJAU', 'BIRU_TUA']),
+            'updated_at' => now(),
+        ]);
+
+        return back()->with('success', count($ids) . ' resi berhasil diperbarui.');
+    }
+
+    /**
+     * Trigger background bot tracking manually
+     */
+    public function startBotTracking(Request $request)
+    {
+        if (class_exists(\App\Jobs\ProcessNiposTrackingJob::class)) {
+            \App\Jobs\ProcessNiposTrackingJob::dispatch();
+        }
+
+        return back()->with('success', 'Bot tracking NIPOS@MID berhasil dijalankan.');
+    }
+
+    /**
+     * Real-time bot scraping progress polling API
+     */
+    public function progress()
+    {
+        $total = Shipment::count();
+        $tracked = Shipment::whereNotNull('last_scanned_at')->count();
+        $percentage = $total > 0 ? round(($tracked / $total) * 100, 1) : 0;
+
+        return response()->json([
+            'total' => $total,
+            'tracked' => $tracked,
+            'percentage' => $percentage,
+            'is_running' => $tracked < $total,
+        ]);
+    }
+
+    /**
+     * Bulk Action handler for Inertia frontend
+     */
+    public function bulkAction(Request $request)
+    {
+        $request->validate([
+            'ids' => 'required|array',
+            'action' => 'required|string',
+        ]);
+
+        $ids = $request->input('ids');
+        $action = strtoupper($request->input('action'));
+
+        if ($action === 'DELETE') {
+            Shipment::whereIn('id', $ids)->delete();
+            $msg = count($ids) . ' resi berhasil dihapus.';
+        } else {
+            Shipment::whereIn('id', $ids)->update([
+                'color_code' => $action,
+                'needs_follow_up' => in_array($action, ['KUNING', 'HIJAU', 'BIRU_TUA']),
+                'updated_at' => now(),
+            ]);
+            $msg = count($ids) . ' resi berhasil diperbarui.';
+        }
+
+        return back()->with('success', $msg);
+    }
+
+    /**
+     * Export Seller Report for Aliqa / selected seller
+     */
+    public function exportAliqa(Request $request)
+    {
+        $seller = $request->input('seller', 'Aliqa');
+        $onlyFollowUp = $request->boolean('only_followup');
+        $fileName = "LAPORAN_OUTGOING_SELLER_" . strtoupper($seller) . ($onlyFollowUp ? "_FOLLOW_UP" : "") . "_" . date('Ymd_His') . ".xlsx";
+
+        if (class_exists(\App\Exports\SellerAliqaExport::class) && class_exists(\Maatwebsite\Excel\Facades\Excel::class)) {
+            return \Maatwebsite\Excel\Facades\Excel::download(new \App\Exports\SellerAliqaExport($seller, $onlyFollowUp), $fileName);
+        }
+
+        return $this->exportColoredExcel($request);
+    }
+
 
     /**
      * Process Excel / Spreadsheet file upload or Google Sheets link and run batch tracking
