@@ -82,7 +82,7 @@ class TrackingController extends Controller
         $selectedColor = $request->input('color', null);
         $searchQuery = trim($request->input('search', ''));
 
-        // Query shipments
+        // Inisialisasi query dasar dan filter terlebih dahulu
         $query = Shipment::query();
         if ($selectedMonth !== 'ALL') {
             $query->forMonth($selectedMonth, $selectedYear);
@@ -90,10 +90,10 @@ class TrackingController extends Controller
         if (!empty($selectedType)) {
             $query->forType($selectedType);
         }
-        if ($selectedSeller !== 'Semua Seller' && !empty($selectedSeller)) {
+        if ($selectedSeller !== 'Semua Seller' && !empty($selectedSeller) && $selectedSeller !== 'ALL') {
             $query->where('seller', $selectedSeller);
         }
-        if (!empty($selectedColor)) {
+        if (!empty($selectedColor) && $selectedColor !== 'ALL') {
             $query->where('color_code', strtoupper($selectedColor));
         }
         if (!empty($searchQuery)) {
@@ -105,28 +105,25 @@ class TrackingController extends Controller
             });
         }
 
-        $shipments = $query->orderBy('id', 'asc')->get();
-
-        // Calculate statistics for active month
-        $stats = $this->calculateStats($shipments);
-
-        // Calculate annual overview (across all 12 months)
-        $allYearShipments = Shipment::where('year', $selectedYear)->get();
-        $annualStats = [
-            'total' => $allYearShipments->count(),
-            'delivered' => $allYearShipments->filter(fn($s) => $s->isDelivered())->count(),
-            'retur' => $allYearShipments->filter(fn($s) => $s->isReturn())->count(),
-            'inproses' => $allYearShipments->filter(fn($s) => !$s->isDelivered() && !$s->isReturn())->count(),
-            'needs_follow_up' => $allYearShipments->where('needs_follow_up', true)->count(),
+        // Aggregate counts directly from DB setelah $query terbentuk
+        $stats = [
+            'total' => (clone $query)->count(),
+            'delivered' => (clone $query)->where(function($q) {
+                $q->where('status', 'DELIVERED')->orWhere('color_code', 'BIRU');
+            })->count(),
+            'retur' => (clone $query)->where(function($q) {
+                $q->where('status', 'LIKE', '%RETURN%')->orWhere('color_code', 'ORANGE');
+            })->count(),
+            'inproses' => (clone $query)->where(function($q) {
+                $q->where('status', 'ON PROCESS')->orWhere('color_code', 'PUTIH');
+            })->count(),
+            'needs_follow_up' => (clone $query)->where('needs_follow_up', true)->count(),
         ];
 
-        // Month counts for navigation badges
-        $monthCounts = [];
-        foreach (Shipment::MONTHS as $m) {
-            $monthCounts[$m] = Shipment::where('month', $m)->where('year', $selectedYear)->count();
-        }
+        // 50 per page pagination to prevent memory exhaustion
+        $paginatedShipments = $query->orderBy('id', 'desc')->paginate(50)->withQueryString();
 
-        $formattedShipments = $shipments->map(function ($s) {
+        $formattedShipmentsData = collect($paginatedShipments->items())->map(function ($s) {
             return [
                 'id' => (string)$s->id,
                 'resi' => $s->resi,
@@ -143,17 +140,28 @@ class TrackingController extends Controller
                 'note' => $s->noted,
                 'escalationDate' => $s->fu_pos_date,
             ];
-        });
+        })->toArray();
+
+        $paginatedResult = [
+            'data' => $formattedShipmentsData,
+            'current_page' => $paginatedShipments->currentPage(),
+            'last_page' => $paginatedShipments->lastPage(),
+            'per_page' => $paginatedShipments->perPage(),
+            'total' => $paginatedShipments->total(),
+            'from' => $paginatedShipments->firstItem(),
+            'to' => $paginatedShipments->lastItem(),
+            'links' => $paginatedShipments->linkCollection()->toArray(),
+        ];
 
         if ($request->wantsJson() && !$request->header('X-Inertia')) {
             return response()->json([
-                'shipments' => $formattedShipments,
+                'shipments' => $paginatedResult,
                 'stats' => $stats,
             ]);
         }
 
         return \Inertia\Inertia::render('Dashboard', [
-            'shipments' => $formattedShipments,
+            'shipments' => $paginatedResult,
             'filters' => [
                 'seller' => $selectedSeller,
                 'month' => $selectedMonth,

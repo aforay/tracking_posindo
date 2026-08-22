@@ -20,13 +20,6 @@ import { Toaster } from "@/components/ui/sonner";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { TopBar } from "@/components/posindo/TopBar";
 import { DataTable } from "@/components/posindo/DataTable";
 import { ExportPanel } from "@/components/posindo/ExportPanel";
@@ -40,14 +33,37 @@ import {
   type Shipment,
 } from "@/lib/posindo";
 
+export interface PaginatedData<T> {
+  data: T[];
+  current_page: number;
+  last_page: number;
+  per_page: number;
+  total: number;
+  from: number | null;
+  to: number | null;
+  links?: Array<{ url: string | null; label: string; active: boolean }>;
+}
+
 export interface PageProps {
-  shipments?: Shipment[];
+  shipments?: Shipment[] | PaginatedData<Shipment>;
   filters?: {
     seller?: string;
     month?: string | number;
     color?: string;
     search?: string;
+    kategori?: string;
   };
+  stats?: {
+    total?: number;
+    sukses?: number;
+    retur?: number;
+    follow_up?: number;
+    belum?: number;
+    perluFu?: number;
+  };
+  sellersList?: string[];
+  googleSheetUrl?: string;
+  googleSheetId?: string;
   trackingProgress?: {
     percentage: number;
     tracked: number;
@@ -60,9 +76,17 @@ const DUMMY_SEED = generateShipments();
 
 export default function Dashboard() {
   const { props } = usePage<PageProps>();
-  const initialShipments = props.shipments && props.shipments.length > 0 ? props.shipments : DUMMY_SEED;
 
-  const [rows, setRows] = useState<Shipment[]>(initialShipments);
+  // 1. Extract shipmentList array safely from props.shipments or fallback
+  const shipmentList = useMemo<Shipment[]>(() => {
+    if (!props.shipments) return DUMMY_SEED;
+    if (Array.isArray(props.shipments)) return props.shipments;
+    return Array.isArray((props.shipments as PaginatedData<Shipment>).data)
+      ? (props.shipments as PaginatedData<Shipment>).data
+      : DUMMY_SEED;
+  }, [props.shipments]);
+
+  const [rows, setRows] = useState<Shipment[]>(shipmentList);
   const [seller, setSeller] = useState(props.filters?.seller || "Semua Seller");
   const [month, setMonth] = useState<number | "all">(
     props.filters?.month !== undefined ? (props.filters.month === "ALL" ? "all" : Number(props.filters.month)) : "all"
@@ -72,15 +96,21 @@ export default function Dashboard() {
   );
   const [query, setQuery] = useState(props.filters?.search || "");
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [page, setPage] = useState(1);
-  const [perPage, setPerPage] = useState(20);
   const [exportOpen, setExportOpen] = useState(false);
 
   useEffect(() => {
-    if (props.shipments && props.shipments.length > 0) {
-      setRows(props.shipments);
-    }
-  }, [props.shipments]);
+    setRows(shipmentList);
+  }, [shipmentList]);
+
+  // Extract pagination info safely
+  const isPaginated = props.shipments && !Array.isArray(props.shipments);
+  const paginatedObj = isPaginated ? (props.shipments as PaginatedData<Shipment>) : null;
+
+  const totalCount = paginatedObj?.total ?? rows.length;
+  const currentPage = paginatedObj?.current_page ?? 1;
+  const lastPage = paginatedObj?.last_page ?? 1;
+  const fromItem = paginatedObj?.from ?? (rows.length > 0 ? 1 : 0);
+  const toItem = paginatedObj?.to ?? rows.length;
 
   const bySeller = useMemo(
     () => (seller === "Semua Seller" ? rows : rows.filter((r) => r.seller === seller)),
@@ -90,45 +120,35 @@ export default function Dashboard() {
   const monthCounts = useMemo(() => {
     const c = new Array(12).fill(0) as number[];
     bySeller.forEach((r) => {
-      const idx = Number(r.tanggalKirim.slice(5, 7)) - 1;
-      if (idx >= 0 && idx < 12) {
-        c[idx] = (c[idx] ?? 0) + 1;
+      if (r.tanggalKirim) {
+        const idx = Number(r.tanggalKirim.slice(5, 7)) - 1;
+        if (idx >= 0 && idx < 12) {
+          c[idx] = (c[idx] ?? 0) + 1;
+        }
       }
     });
     return c;
   }, [bySeller]);
 
-  const filtered = useMemo(() => {
-    const terms = query
-      .split(/[\s,\n;]+/)
-      .map((t) => t.trim().toLowerCase())
-      .filter(Boolean);
-    return bySeller.filter((r) => {
-      if (month !== "all" && Number(r.tanggalKirim.slice(5, 7)) - 1 !== month) return false;
-      if (colorFilter && r.fu !== colorFilter) return false;
-      if (terms.length) {
-        const hay = `${r.resi} ${r.penerima} ${r.seller} ${r.tujuan}`.toLowerCase();
-        if (!terms.some((t) => hay.includes(t))) return false;
-      }
-      return true;
-    });
-  }, [bySeller, month, colorFilter, query]);
-
   const kpi = useMemo(() => {
-    const c = (f: FuStatus) => filtered.filter((r) => r.fu === f).length;
+    if (props.stats) {
+      return {
+        total: props.stats.total ?? 0,
+        sukses: props.stats.sukses ?? 0,
+        retur: props.stats.retur ?? 0,
+        belum: props.stats.belum ?? (props.stats.total ?? 0) - (props.stats.sukses ?? 0) - (props.stats.retur ?? 0) - (props.stats.follow_up ?? 0),
+        perluFu: props.stats.follow_up ?? props.stats.perluFu ?? 0,
+      };
+    }
+    const c = (f: FuStatus) => rows.filter((r) => r.fu === f).length;
     return {
-      total: filtered.length,
+      total: rows.length,
       sukses: c("BIRU"),
       retur: c("ORANGE"),
       belum: c("PUTIH"),
       perluFu: c("KUNING") + c("HIJAU") + c("BIRU_TUA"),
     };
-  }, [filtered]);
-
-  const pageCount = Math.max(1, Math.ceil(filtered.length / perPage));
-  const current = Math.min(page, pageCount);
-  const start = (current - 1) * perPage;
-  const pageRows = filtered.slice(start, start + perPage);
+  }, [props.stats, rows]);
 
   // Send update-status request to Laravel backend via Inertia router
   const setStatus = (ids: string[], fu: FuStatus, escalationDate?: string) => {
@@ -149,7 +169,6 @@ export default function Dashboard() {
           toast.success(`${ids.length} resi diperbarui → ${FU_META[fu]?.label || fu}`);
         },
         onError: () => {
-          // Fallback endpoint if route is /shipments/{id}/update-color
           if (ids.length === 1) {
             router.post(`/shipments/${ids[0]}/update-color`, { color_code: fu, fu_pos_date: escalationDate });
           }
@@ -174,12 +193,12 @@ export default function Dashboard() {
       return next;
     });
 
-  const allSelected = pageRows.length > 0 && pageRows.every((r) => selected.has(r.id));
+  const allSelected = rows.length > 0 && rows.every((r) => selected.has(r.id));
   const toggleAll = () =>
     setSelected((prev) => {
       const next = new Set(prev);
-      if (allSelected) pageRows.forEach((r) => next.delete(r.id));
-      else pageRows.forEach((r) => next.add(r.id));
+      if (allSelected) rows.forEach((r) => next.delete(r.id));
+      else rows.forEach((r) => next.add(r.id));
       return next;
     });
 
@@ -259,11 +278,13 @@ export default function Dashboard() {
             setSeller(s);
             router.get("/shipments", { seller: s, month, color: colorFilter, search: query }, { preserveState: true, preserveScroll: true });
           }}
-          total={bySeller.length}
+          total={totalCount}
           trackingProgress={props.trackingProgress}
+          googleSheetUrl={props.googleSheetUrl}
+          googleSheetId={props.googleSheetId}
         />
         <div className="pos-scroll flex gap-1 overflow-x-auto border-b border-border bg-card/95 px-5 py-1.5 backdrop-blur">
-          {[{ label: "Semua (Setahun)", idx: "all" as const, n: bySeller.length }].concat(
+          {[{ label: "Semua (Setahun)", idx: "all" as const, n: totalCount }].concat(
             MONTHS.map((m, i) => ({ label: m, idx: i as never, n: monthCounts[i] ?? 0 }))
           ).map((t) => {
             const active = month === t.idx;
@@ -272,7 +293,6 @@ export default function Dashboard() {
                 key={t.label}
                 onClick={() => {
                   setMonth(t.idx);
-                  setPage(1);
                   router.get("/shipments", { seller, month: t.idx === "all" ? "ALL" : t.idx, color: colorFilter, search: query }, { preserveState: true, preserveScroll: true });
                 }}
                 className={`relative shrink-0 rounded-md px-3 py-1.5 text-xs font-semibold transition cursor-pointer ${
@@ -328,7 +348,6 @@ export default function Dashboard() {
                 onClick={() => {
                   const nextColor = colorFilter === k ? null : k;
                   setColorFilter(nextColor);
-                  setPage(1);
                   router.get("/shipments", { seller, month, color: nextColor, search: query }, { preserveState: true, preserveScroll: true });
                 }}
                 style={{ backgroundColor: FU_META[k].bg, color: FU_META[k].fg }}
@@ -375,9 +394,14 @@ export default function Dashboard() {
               value={query}
               onChange={(e) => {
                 setQuery(e.target.value);
-                setPage(1);
               }}
-              placeholder="Cari multi-resi — tempel beberapa nomor resi dipisah koma atau baris baru, atau cari nama penerima / kota tujuan..."
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  router.get("/shipments", { seller, month, color: colorFilter, search: query }, { preserveState: true, preserveScroll: true });
+                }
+              }}
+              placeholder="Cari multi-resi — tempel beberapa nomor resi dipisah koma atau baris baru, lalu tekan Enter..."
               className="min-h-[42px] resize-y pl-9 text-xs"
               rows={1}
             />
@@ -385,6 +409,11 @@ export default function Dashboard() {
           <Input
             value={seller === "Semua Seller" ? "" : seller}
             onChange={(e) => setSeller(e.target.value || "Semua Seller")}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                router.get("/shipments", { seller, month, color: colorFilter, search: query }, { preserveState: true, preserveScroll: true });
+              }
+            }}
             placeholder="Filter nama seller..."
             className="text-xs"
           />
@@ -430,8 +459,8 @@ export default function Dashboard() {
         </AnimatePresence>
 
         <DataTable
-          rows={pageRows}
-          startIndex={start}
+          rows={rows}
+          startIndex={fromItem > 0 ? fromItem - 1 : 0}
           selected={selected}
           allSelected={allSelected}
           onToggle={toggle}
@@ -444,47 +473,33 @@ export default function Dashboard() {
           <div className="text-xs text-muted-foreground">
             Menampilkan{" "}
             <b className="text-foreground">
-              {nf(filtered.length ? start + 1 : 0)}–{nf(Math.min(start + perPage, filtered.length))}
+              {nf(fromItem)}–{nf(toItem)}
             </b>{" "}
-            dari <b className="text-foreground">{nf(filtered.length)}</b> resi
+            dari <b className="text-foreground">{nf(totalCount)}</b> resi
           </div>
           <div className="flex items-center gap-2">
-            <Select
-              value={String(perPage)}
-              onValueChange={(v) => {
-                setPerPage(Number(v));
-                setPage(1);
-              }}
-            >
-              <SelectTrigger className="h-8 w-[110px] text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {[20, 50, 100].map((n) => (
-                  <SelectItem key={n} value={String(n)}>
-                    {n} / halaman
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
             <Button
               size="icon"
               variant="outline"
-              className="h-8 w-8"
-              disabled={current <= 1}
-              onClick={() => setPage(current - 1)}
+              className="h-8 w-8 cursor-pointer"
+              disabled={currentPage <= 1}
+              onClick={() => {
+                router.get("/shipments", { seller, month, color: colorFilter, search: query, page: currentPage - 1 }, { preserveState: true, preserveScroll: true });
+              }}
             >
               <ChevronLeft className="h-4 w-4" />
             </Button>
             <span className="font-mono text-xs">
-              {current} / {pageCount}
+              Halaman {currentPage} dari {lastPage}
             </span>
             <Button
               size="icon"
               variant="outline"
-              className="h-8 w-8"
-              disabled={current >= pageCount}
-              onClick={() => setPage(current + 1)}
+              className="h-8 w-8 cursor-pointer"
+              disabled={currentPage >= lastPage}
+              onClick={() => {
+                router.get("/shipments", { seller, month, color: colorFilter, search: query, page: currentPage + 1 }, { preserveState: true, preserveScroll: true });
+              }}
             >
               <ChevronRight className="h-4 w-4" />
             </Button>
@@ -495,7 +510,7 @@ export default function Dashboard() {
       <ExportPanel
         open={exportOpen}
         onOpenChange={setExportOpen}
-        rows={selected.size ? filtered.filter((r) => selected.has(r.id)) : filtered}
+        rows={selected.size ? rows.filter((r) => selected.has(r.id)) : rows}
         seller={seller === "Semua Seller" ? "Mitra Aliqa (Semua Seller)" : seller}
       />
     </div>

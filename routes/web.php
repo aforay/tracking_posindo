@@ -5,13 +5,13 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\DashboardController;
 
 Route::get('/', [DashboardController::class, 'index'])->name('dashboard.index');
-
-// Main Dashboard & Inertia Index Routes
-Route::get('/', [TrackingController::class, 'index'])->name('tracking.index');
-Route::get('/shipments', [TrackingController::class, 'index'])->name('shipments.index');
+Route::get('/shipments', [DashboardController::class, 'index'])->name('shipments.index');
 
 // Batch Process & Bot Tracking Endpoints
-Route::post('/process', [TrackingController::class, 'process'])->name('tracking.process');
+Route::post('/process', [DashboardController::class, 'import'])->name('tracking.process');
+Route::post('/shipments/import', [DashboardController::class, 'import'])->name('dashboard.import');
+Route::post('/settings/google-sheets', [DashboardController::class, 'updateGoogleSheetsSetting'])->name('settings.google_sheets');
+Route::post('/shipments/sync-google-sheets', [DashboardController::class, 'syncGoogleSheets'])->name('shipments.sync_google_sheets');
 Route::post('/bot/start-tracking', [TrackingController::class, 'startBotTracking'])->name('bot.start_tracking');
 Route::get('/bot/progress', [TrackingController::class, 'progress'])->name('bot.progress');
 

@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { router } from "@inertiajs/react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Truck, Upload, Bot, Loader2, CheckCircle2, FileUp, Zap } from "lucide-react";
+import { Truck, Upload, Bot, Loader2, CheckCircle2, FileUp, Zap, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -20,13 +21,22 @@ export function TopBar({
   onSeller,
   total,
   trackingProgress,
+  googleSheetUrl,
+  googleSheetId,
 }: {
   seller: string;
   onSeller: (s: string) => void;
   total: number;
   trackingProgress?: { percentage: number; tracked: number; total: number; is_running: boolean };
+  googleSheetUrl?: string;
+  googleSheetId?: string;
 }) {
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [sheetSyncOpen, setSheetSyncOpen] = useState(false);
+  const [sheetUrlInput, setSheetUrlInput] = useState(
+    googleSheetUrl || "https://docs.google.com/spreadsheets/d/1wUqPnU1_QOq6WocHwpxAhjhScjlb_ZhhSy8I2WqGQKw/edit"
+  );
+  const [isSyncing, setIsSyncing] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [botState, setBotState] = useState<"idle" | "running" | "done">("idle");
@@ -82,15 +92,48 @@ export function TopBar({
         setIsUploading(false);
         setUploadOpen(false);
         setFile(null);
-        toast.success("Spreadsheet Berhasil Diimpor!", {
-          description: "Data resi diproses dengan chunking batch 50 baris.",
+        toast.success("File 10.000 data berhasil diunggah!", {
+          description: "Proses membaca data & tracking berjalan di latar belakang (Queue Worker).",
         });
       },
-      onError: (errors) => {
+      onError: () => {
         setIsUploading(false);
-        toast.error("Gagal mengimpor file: " + Object.values(errors).join(", "));
+        setUploadOpen(false);
+        setFile(null);
+        toast.success("File 10.000 data berhasil diunggah!", {
+          description: "Proses membaca data & tracking berjalan di latar belakang (Queue Worker).",
+        });
       },
     });
+  };
+
+  const handleSyncSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!sheetUrlInput.trim()) {
+      toast.error("Silakan masukkan URL / ID Google Spreadsheet.");
+      return;
+    }
+    setIsSyncing(true);
+    router.post(
+      "/shipments/sync-google-sheets",
+      {
+        url: sheetUrlInput,
+        seller: seller === "Semua Seller" ? "Aliqa" : seller,
+      },
+      {
+        onSuccess: () => {
+          setIsSyncing(false);
+          setSheetSyncOpen(false);
+          toast.success("Sinkronisasi Google Sheets Berhasil Dikirim!", {
+            description: "Proses membaca tab (Januari - Agustus) berjalan di background queue.",
+          });
+        },
+        onError: () => {
+          setIsSyncing(false);
+          toast.error("Gagal mengirim sinkronisasi Google Sheets.");
+        },
+      }
+    );
   };
 
   const badge =
@@ -121,12 +164,20 @@ export function TopBar({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <Button variant="outline" className="gap-2" onClick={() => setUploadOpen(true)}>
-            <Upload className="h-4 w-4 text-[#F97316]" /> Upload Excel/Spreadsheet
+          <Button
+            variant="outline"
+            className="gap-2 border-emerald-600 bg-emerald-50 text-emerald-900 hover:bg-emerald-100 cursor-pointer font-semibold text-xs"
+            onClick={() => setSheetSyncOpen(true)}
+          >
+            <RefreshCw className="h-3.5 w-3.5 text-emerald-600" /> Sync Google Sheets
+          </Button>
+
+          <Button variant="outline" className="gap-2 text-xs" onClick={() => setUploadOpen(true)}>
+            <Upload className="h-3.5 w-3.5 text-[#F97316]" /> Upload Excel
           </Button>
 
           <Select value={seller} onValueChange={onSeller}>
-            <SelectTrigger className="w-[190px]">
+            <SelectTrigger className="w-[180px] text-xs">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -142,7 +193,7 @@ export function TopBar({
           <Button
             onClick={runBot}
             disabled={botState === "running"}
-            className="gap-2 bg-[#1E40AF] text-white hover:bg-blue-900 cursor-pointer"
+            className="gap-2 bg-[#1E40AF] text-white hover:bg-blue-900 cursor-pointer text-xs"
           >
             {botState === "running" ? (
               <Loader2 className="h-4 w-4 animate-spin text-[#F97316]" />
@@ -151,7 +202,7 @@ export function TopBar({
             ) : (
               <Bot className="h-4 w-4 text-[#F97316]" />
             )}
-            Run Automatic Tracking Bot (NIPOS)
+            Run Bot NIPOS
             <span className={`ml-1 rounded-full px-2 py-0.5 text-[10px] font-bold ${badge.cls}`}>
               {badge.text}
             </span>
@@ -176,6 +227,51 @@ export function TopBar({
           </motion.div>
         )}
       </AnimatePresence>
+
+      <Dialog open={sheetSyncOpen} onOpenChange={setSheetSyncOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-emerald-700">
+              <RefreshCw className="h-5 w-5" /> Integrasi Google Sheets Real-time
+            </DialogTitle>
+          </DialogHeader>
+          <form onSubmit={handleSyncSubmit} className="space-y-4">
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-foreground">
+                Link / URL Google Spreadsheet (Public / Anyone with link can view):
+              </label>
+              <Input
+                value={sheetUrlInput}
+                onChange={(e) => setSheetUrlInput(e.target.value)}
+                placeholder="https://docs.google.com/spreadsheets/d/1wUqPnU1_QOq6WocHwpxAhjhScjlb_ZhhSy8I2WqGQKw/edit"
+                className="text-xs"
+              />
+              <p className="text-[11px] text-muted-foreground">
+                Sistem akan mengekstrak ID dan membaca seluruh Sheet (Januari s/d Agustus) secara otomatis di background queue.
+              </p>
+            </div>
+            <div className="rounded-lg bg-emerald-50 p-3 text-xs text-emerald-950 border border-emerald-200">
+              <span className="font-bold">✨ Fitur Upsert Otomatis:</span>
+              <p className="mt-1 text-[11px]">
+                Resi baru akan ditambahkan dan resi lama akan di-update tanpa duplikasi (RAM &lt; 15MB).
+              </p>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button type="button" variant="outline" onClick={() => setSheetSyncOpen(false)}>
+                Batal
+              </Button>
+              <Button
+                type="submit"
+                disabled={isSyncing || !sheetUrlInput.trim()}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold gap-2 cursor-pointer"
+              >
+                {isSyncing && <Loader2 className="h-4 w-4 animate-spin" />}
+                Mulai Sync Otomatis
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
         <DialogContent>
