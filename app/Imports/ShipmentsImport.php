@@ -371,8 +371,9 @@ class ShipmentsImport
             foreach ($candidateIndexes as $idx) {
                 if (isset($rowArray[$idx])) {
                     $strVal = trim((string)$rowArray[$idx]);
-                    if (preg_match('/^[A-Za-z0-9]{8,30}$/', $strVal) && (str_starts_with(strtoupper($strVal), 'P') || is_numeric($strVal))) {
-                        $strUpper = strtoupper($strVal);
+                    $strUpper = strtoupper($strVal);
+                    $hasResiPrefix = str_starts_with($strUpper, 'P') || str_starts_with($strUpper, 'BAC') || str_starts_with($strUpper, 'POS') || str_starts_with($strUpper, 'E') || str_starts_with($strUpper, 'J');
+                    if (preg_match('/^[A-Za-z0-9]{8,35}$/', $strVal) && ($hasResiPrefix || is_numeric($strVal))) {
                         if (!in_array($strUpper, ['RESI', 'NO RESI', 'BARCODE', 'NO', 'INVOICE', 'NO HP', 'TELEPON', 'TANGGAL', 'STATUS', 'SELLER'])) {
                             $resi = $strVal;
                             break;
@@ -386,8 +387,9 @@ class ShipmentsImport
         if (empty($resi)) {
             foreach ($rowArray as $colVal) {
                 $strVal = trim((string)$colVal);
-                if (preg_match('/^[A-Za-z0-9]{8,30}$/', $strVal) && (str_starts_with(strtoupper($strVal), 'P') || (is_numeric($strVal) && strlen($strVal) >= 10))) {
-                    $strUpper = strtoupper($strVal);
+                $strUpper = strtoupper($strVal);
+                $hasResiPrefix = str_starts_with($strUpper, 'P') || str_starts_with($strUpper, 'BAC') || str_starts_with($strUpper, 'POS') || str_starts_with($strUpper, 'E') || str_starts_with($strUpper, 'J');
+                if (preg_match('/^[A-Za-z0-9]{8,35}$/', $strVal) && ($hasResiPrefix || (is_numeric($strVal) && strlen($strVal) >= 10))) {
                     if (!in_array($strUpper, ['RESI', 'NO RESI', 'BARCODE', 'NO', 'INVOICE', 'NO HP', 'TELEPON', 'TANGGAL', 'STATUS', 'SELLER'])) {
                         $resi = $strVal;
                         break;

@@ -129,8 +129,8 @@ class GoogleSheetsSyncService
             if ($response->successful()) {
                 $html = (string)$response->body();
 
-                // Match sheet name JSON patterns in Google Sheets HTML
-                if (preg_match_all('/"(?:name|sheetName)"\s*:\s*"([^"]+)"/i', $html, $matches)) {
+                // Match sheet name JSON patterns in Google Sheets HTML (supports {name: "..."} and {"name": "..."})
+                if (preg_match_all('/(?:"?name"?|"?sheetName"?)\s*:\s*"([^"]+)"/i', $html, $matches)) {
                     foreach ($matches[1] as $name) {
                         $cleanName = trim(strip_tags($name));
                         if (!empty($cleanName) && !in_array($cleanName, $discovered)) {
@@ -143,12 +143,12 @@ class GoogleSheetsSyncService
             Log::warning("GoogleSheetsSyncService: HTML sheet discovery failed: " . $e->getMessage());
         }
 
-        // Standard monthly sheet names fallback list
+        // Standard monthly sheet names fallback list (including suffixes)
         $defaultMonthSheets = [
-            'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus',
-            'JANUARI', 'FEBRUARI', 'MARET', 'APRIL', 'MEI', 'JUNI', 'JULI', 'AGUSTUS',
-            'September', 'Oktober', 'November', 'Desember',
-            'JANUARI (ZAHERBA)', 'Sheet1', 'Sheet 1', 'Master Data'
+            'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember',
+            'JANUARI', 'FEBRUARI', 'MARET', 'APRIL', 'MEI', 'JUNI', 'JULI', 'AGUSTUS', 'SEPTEMBER', 'OKTOBER', 'NOVEMBER', 'DESEMBER',
+            'JANUARI (ZAHERBA)', 'FEBRUARI (ZAHERBA)', 'MARET (ZAHERBA)', 'APRIL (ZAHERBA)', 'MEI (ZAHERBA)', 'JUNI (ZAHERBA)', 'JULI (ZAHERBA)', 'AGUSTUS (ZAHERBA)', 'SEPTEMBER (ZAHERBA)', 'OKTOBER (ZAHERBA)', 'NOVEMBER (ZAHERBA)', 'DESEMBER (ZAHERBA)',
+            'Sheet1', 'Sheet 1', 'Master Data'
         ];
 
         foreach ($defaultMonthSheets as $fallbackSheet) {
