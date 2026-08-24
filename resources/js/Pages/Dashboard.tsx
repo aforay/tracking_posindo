@@ -79,11 +79,11 @@ export default function Dashboard() {
 
   // 1. Extract shipmentList array safely from props.shipments or fallback
   const shipmentList = useMemo<Shipment[]>(() => {
-    if (!props.shipments) return DUMMY_SEED;
+    if (!props.shipments) return [];
     if (Array.isArray(props.shipments)) return props.shipments;
     return Array.isArray((props.shipments as PaginatedData<Shipment>).data)
       ? (props.shipments as PaginatedData<Shipment>).data
-      : DUMMY_SEED;
+      : [];
   }, [props.shipments]);
 
   const [rows, setRows] = useState<Shipment[]>(shipmentList);

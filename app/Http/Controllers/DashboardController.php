@@ -30,9 +30,7 @@ class DashboardController extends Controller
      */
     public function index(Request $request)
     {
-        if (OutgoingShipment::count() === 0) {
-            // $this->seedInitialDummyData(); // Disabled dummy data seeding for empty DB
-        }
+        // Dummy data seeding removed - ensure stats return 0 when database is empty
 
         $selectedSeller = $request->input('seller', 'ALL');
         $selectedKategori = $request->input('kategori', 'ALL');
@@ -317,81 +315,12 @@ class DashboardController extends Controller
     }
 
     /**
-     * Helper to seed initial sample records
+     * Helper to seed initial sample records (DISABLED)
      */
     protected function seedInitialDummyData(): void
     {
-        $samples = [
-            [
-                'nama_seller' => 'Aliqa',
-                'no_resi' => 'P2601020130901',
-                'nama_penerima' => 'Siti Nurhaliza',
-                'no_hp' => '081234567890',
-                'alamat' => 'Jl. Merdeka No. 12, Cilacap',
-                'tanggal_kirim' => '2026-08-15',
-                'status_pos' => 'DELIVERED',
-                'keterangan' => 'DITERIMA YANG BERSANGKUTAN',
-                'status_kategori' => 'SUKSES',
-                'sla_days' => 2,
-                'last_tracked_at' => now(),
-            ],
-            [
-                'nama_seller' => 'Aliqa',
-                'no_resi' => 'P2601020130902',
-                'nama_penerima' => 'Budi Santoso',
-                'no_hp' => '085678901234',
-                'alamat' => 'Jl. Jenderal Sudirman No. 45, Cilacap',
-                'tanggal_kirim' => '2026-08-16',
-                'status_pos' => 'DELIVERED (RETURN DELIVERY)',
-                'keterangan' => 'RETUR ALAMAT TIDAK DITEMUKAN',
-                'status_kategori' => 'RETUR',
-                'sla_days' => 5,
-                'last_tracked_at' => now(),
-            ],
-            [
-                'nama_seller' => 'Aliqa',
-                'no_resi' => 'P2601020130903',
-                'nama_penerima' => 'Dewi Anggraini',
-                'no_hp' => '087890123456',
-                'alamat' => 'Jl. Diponegoro No. 88, Cilacap',
-                'tanggal_kirim' => '2026-08-18',
-                'status_pos' => 'FAILEDTODELIVERED',
-                'keterangan' => 'RUMAH KOSONG (PERLU FOLLOW UP CS)',
-                'status_kategori' => 'FOLLOW_UP',
-                'sla_days' => 3,
-                'last_tracked_at' => now(),
-            ],
-            [
-                'nama_seller' => 'Aliqa',
-                'no_resi' => 'P2601020130904',
-                'nama_penerima' => 'Eko Prasetyo',
-                'no_hp' => '089012345678',
-                'alamat' => 'Jl. Gatot Subroto No. 101, Cilacap',
-                'tanggal_kirim' => '2026-08-19',
-                'status_pos' => 'ON PROCESS',
-                'keterangan' => 'PROSES PENGOLAHAN KIRIMAN POS',
-                'status_kategori' => 'IN_PROCESS',
-                'sla_days' => 1,
-                'last_tracked_at' => now(),
-            ],
-            [
-                'nama_seller' => 'Bagas Store',
-                'no_resi' => 'P2601020130905',
-                'nama_penerima' => 'Fajar Pratama',
-                'no_hp' => '082134567891',
-                'alamat' => 'Jl. Ahmad Yani No. 22, Cilacap',
-                'tanggal_kirim' => '2026-08-17',
-                'status_pos' => 'DELIVERED',
-                'keterangan' => 'DITERIMA ORANG SERUMAH',
-                'status_kategori' => 'SUKSES',
-                'sla_days' => 2,
-                'last_tracked_at' => now(),
-            ],
-        ];
-
-        foreach ($samples as $sample) {
-            OutgoingShipment::updateOrCreate(['no_resi' => $sample['no_resi']], $sample);
-        }
+        // Dummy data seeding disabled to ensure clean 0 stats on empty database
+        return;
     }
 
     /**
