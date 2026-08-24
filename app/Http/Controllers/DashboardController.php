@@ -31,7 +31,7 @@ class DashboardController extends Controller
     public function index(Request $request)
     {
         if (OutgoingShipment::count() === 0) {
-            $this->seedInitialDummyData();
+            // $this->seedInitialDummyData(); // Disabled dummy data seeding for empty DB
         }
 
         $selectedSeller = $request->input('seller', 'ALL');
