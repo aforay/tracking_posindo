@@ -21,12 +21,10 @@ Route::get('/export-aliqa', [TrackingController::class, 'exportAliqa'])->name('t
 Route::get('/download/{filename}', [TrackingController::class, 'download'])->name('tracking.download');
 
 // Status Update & Bulk Action Endpoints (Inertia & AJAX)
-Route::post('/shipments', [TrackingController::class, 'store'])->name('shipments.store');
-Route::post('/shipments/update-status', [TrackingController::class, 'updateStatusBulk'])->name('shipments.update_status');
-Route::post('/shipments/bulk-action', [TrackingController::class, 'bulkAction'])->name('shipments.bulk_action');
-Route::post('/shipments/{id}/track', [TrackingController::class, 'trackSingle'])->name('shipments.track');
-Route::post('/shipments/{id}/color', [TrackingController::class, 'updateColor'])->name('shipments.color');
-Route::post('/shipments/{id}/update-color', [TrackingController::class, 'updateColor'])->name('shipments.update_color');
+Route::post('/shipments/update-status', [DashboardController::class, 'updateStatusBulk'])->name('shipments.update_status');
+Route::post('/shipments/bulk-action', [DashboardController::class, 'bulkAction'])->name('shipments.bulk_action');
+Route::post('/shipments/{id}/color', [DashboardController::class, 'updateColor'])->name('shipments.color');
+Route::post('/shipments/{id}/update-color', [DashboardController::class, 'updateColor'])->name('shipments.update_color');
 
 // NIPOS Simulation / Endpoint
 Route::match(['get', 'post'], '/mock-nipos/lacak_item_banyakzaref.php', [TrackingController::class, 'mockNipos'])->name('mock.nipos');

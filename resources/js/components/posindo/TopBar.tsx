@@ -164,6 +164,17 @@ export function TopBar({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          <div className="inline-flex items-center gap-1.5 rounded-full border border-emerald-300 bg-emerald-50/90 px-3 py-1 text-xs font-bold text-emerald-800 shadow-sm transition-all hover:bg-emerald-100">
+            <span className="relative flex h-2.5 w-2.5">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500"></span>
+            </span>
+            <span>Auto-Sync Active</span>
+            <span className="rounded bg-emerald-200/80 px-1.5 py-0.5 text-[10px] font-extrabold text-emerald-900">
+              Every 15m
+            </span>
+          </div>
+
           <Button
             variant="outline"
             className="gap-2 border-emerald-600 bg-emerald-50 text-emerald-900 hover:bg-emerald-100 cursor-pointer font-semibold text-xs"

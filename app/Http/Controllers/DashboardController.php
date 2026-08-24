@@ -79,7 +79,27 @@ class DashboardController extends Controller
 
         // 3. Color & Kategori Filter
         if (!empty($selectedColor) && $selectedColor !== 'ALL') {
-            $query->where('color_code', strtoupper($selectedColor));
+            $cUpper = strtoupper($selectedColor);
+            $query->where(function ($q) use ($cUpper) {
+                $q->where('color_code', $cUpper);
+                if ($cUpper === 'BIRU') {
+                    $q->orWhere(function ($sub) {
+                        $sub->whereNull('color_code')->where('status_kategori', 'SUKSES');
+                    });
+                } elseif ($cUpper === 'ORANGE') {
+                    $q->orWhere(function ($sub) {
+                        $sub->whereNull('color_code')->where('status_kategori', 'RETUR');
+                    });
+                } elseif ($cUpper === 'KUNING') {
+                    $q->orWhere(function ($sub) {
+                        $sub->whereNull('color_code')->where('status_kategori', 'FOLLOW_UP');
+                    });
+                } elseif ($cUpper === 'PUTIH') {
+                    $q->orWhere(function ($sub) {
+                        $sub->whereNull('color_code')->where('status_kategori', 'IN_PROCESS');
+                    });
+                }
+            });
         }
         if (!empty($selectedKategori) && $selectedKategori !== 'ALL') {
             $query->where('status_kategori', strtoupper($selectedKategori));
@@ -210,6 +230,94 @@ class DashboardController extends Controller
     }
 
     /**
+     * Bulk status update for multiple resis from Inertia/React frontend (AJAX)
+     */
+    public function updateStatusBulk(Request $request)
+    {
+        $request->validate([
+            'ids' => 'required|array',
+            'fu' => 'required|string',
+            'escalationDate' => 'nullable|string',
+        ]);
+
+        $ids = $request->input('ids');
+        $fu = strtoupper($request->input('fu'));
+        $escDate = $request->input('escalationDate');
+
+        $kategori = 'IN_PROCESS';
+        if ($fu === 'BIRU') {
+            $kategori = 'SUKSES';
+        } elseif ($fu === 'ORANGE') {
+            $kategori = 'RETUR';
+        } elseif (in_array($fu, ['KUNING', 'HIJAU', 'BIRU_TUA'])) {
+            $kategori = 'FOLLOW_UP';
+        }
+
+        $updateData = [
+            'color_code' => $fu,
+            'status_kategori' => $kategori,
+            'updated_at' => now(),
+        ];
+        if ($escDate) {
+            $updateData['fu_pos_date'] = $escDate;
+        }
+
+        OutgoingShipment::whereIn('id', $ids)->update($updateData);
+
+        return back()->with('success', count($ids) . ' resi berhasil diperbarui.');
+    }
+
+    /**
+     * Update color, escalation date, or note for a single shipment via AJAX
+     */
+    public function updateColor(Request $request, int $id)
+    {
+        $request->validate([
+            'color_code' => 'nullable|string',
+            'color' => 'nullable|string',
+            'fu_pos_date' => 'nullable|string',
+            'noted' => 'nullable|string',
+        ]);
+
+        $shipment = OutgoingShipment::findOrFail($id);
+        $colorInput = $request->input('color_code', $request->input('color', ''));
+        $color = strtoupper((string)$colorInput);
+
+        if (!empty($color) && in_array($color, ['BIRU', 'ORANGE', 'KUNING', 'PUTIH', 'HIJAU', 'BIRU_TUA'])) {
+            $shipment->color_code = $color;
+            if ($color === 'BIRU') {
+                $shipment->status_kategori = 'SUKSES';
+            } elseif ($color === 'ORANGE') {
+                $shipment->status_kategori = 'RETUR';
+            } elseif (in_array($color, ['KUNING', 'HIJAU', 'BIRU_TUA'])) {
+                $shipment->status_kategori = 'FOLLOW_UP';
+            } else {
+                $shipment->status_kategori = 'IN_PROCESS';
+            }
+        }
+
+        if ($request->has('fu_pos_date')) {
+            $shipment->fu_pos_date = $request->input('fu_pos_date');
+        }
+
+        if ($request->has('noted')) {
+            $shipment->noted = $request->input('noted');
+        }
+
+        $shipment->save();
+
+        if ($request->header('X-Inertia') || $request->wantsJson()) {
+            return back()->with('success', "Status resi {$shipment->no_resi} diperbarui.");
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => "Status warna resi {$shipment->no_resi} diperbarui.",
+            'shipment' => $shipment,
+        ]);
+    }
+
+    /**
      * Bulk Action: Mark multiple resis as Completed, Follow-Up, Retur, or Delete
      */
     public function bulkAction(Request $request)
@@ -217,19 +325,32 @@ class DashboardController extends Controller
         $request->validate([
             'ids' => 'required|array',
             'ids.*' => 'integer|exists:outgoing_shipments,id',
-            'action' => 'required|string|in:SUKSES,FOLLOW_UP,RETUR,IN_PROCESS,DELETE',
+            'action' => 'required|string',
         ]);
 
         $ids = $request->input('ids');
-        $action = $request->input('action');
+        $action = strtoupper($request->input('action'));
 
         if ($action === 'DELETE') {
             OutgoingShipment::whereIn('id', $ids)->delete();
             $msg = count($ids) . " data resi berhasil dihapus.";
         } else {
+            $kategori = 'IN_PROCESS';
+            if ($action === 'BIRU' || $action === 'SUKSES') {
+                $kategori = 'SUKSES';
+                $action = 'BIRU';
+            } elseif ($action === 'ORANGE' || $action === 'RETUR') {
+                $kategori = 'RETUR';
+                $action = 'ORANGE';
+            } elseif (in_array($action, ['KUNING', 'HIJAU', 'BIRU_TUA', 'FOLLOW_UP'])) {
+                $kategori = 'FOLLOW_UP';
+                if ($action === 'FOLLOW_UP') $action = 'KUNING';
+            }
+
             OutgoingShipment::whereIn('id', $ids)->update([
-                'status_kategori' => $action,
-                'status_pos' => $action === 'SUKSES' ? 'DELIVERED' : ($action === 'RETUR' ? 'DELIVERED (RETURN DELIVERY)' : 'PERLU FOLLOW UP CS'),
+                'color_code' => $action,
+                'status_kategori' => $kategori,
+                'status_pos' => $kategori === 'SUKSES' ? 'DELIVERED' : ($kategori === 'RETUR' ? 'DELIVERED (RETURN DELIVERY)' : 'PERLU FOLLOW UP CS'),
                 'updated_at' => now(),
             ]);
             $msg = count($ids) . " data resi berhasil diperbarui ke status " . $action . ".";

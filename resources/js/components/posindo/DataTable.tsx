@@ -74,23 +74,23 @@ export function DataTable({
       <div className="pos-scroll overflow-x-auto rounded-xl border border-border bg-card">
         <table className="w-full min-w-[1400px] border-collapse text-[13px]">
           <thead className="sticky top-0 z-10 bg-[#1E40AF] text-white">
-            <tr className="[&>th]:whitespace-nowrap [&>th]:px-3 [&>th]:py-2.5 [&>th]:text-left [&>th]:font-semibold [&>th]:tracking-wide">
-              <th className="w-10">
+            <tr className="[&>th]:px-3 [&>th]:py-2.5 [&>th]:text-left [&>th]:font-semibold [&>th]:tracking-wide">
+              <th className="w-10 whitespace-nowrap">
                 <Checkbox
                   checked={allSelected}
                   onCheckedChange={onToggleAll}
                   className="border-white/60 data-[state=checked]:bg-[#F97316] data-[state=checked]:border-[#F97316]"
                 />
               </th>
-              <th className="w-12">No</th>
-              <th>Seller / Mitra</th>
-              <th>No. Resi</th>
-              <th>Tgl Kirim</th>
-              <th>Asal &amp; Tujuan</th>
-              <th className="min-w-[260px]">Penerima &amp; Keterangan (K)</th>
-              <th>Status NIPOS (L)</th>
-              <th>SLA (M)</th>
-              <th className="min-w-[190px]">Status Follow-Up CS</th>
+              <th className="w-12 whitespace-nowrap">No</th>
+              <th className="w-32 whitespace-nowrap">Seller / Mitra</th>
+              <th className="w-44 whitespace-nowrap">No. Resi</th>
+              <th className="w-28 whitespace-nowrap">Tgl Kirim</th>
+              <th className="max-w-[220px] min-w-[170px] whitespace-normal">Asal &amp; Tujuan</th>
+              <th className="min-w-[260px] max-w-[320px] whitespace-normal">Penerima &amp; Keterangan (K)</th>
+              <th className="w-36 whitespace-nowrap">Status NIPOS (L)</th>
+              <th className="w-20 whitespace-nowrap">SLA (M)</th>
+              <th className="min-w-[190px] whitespace-nowrap">Status Follow-Up CS</th>
             </tr>
           </thead>
           <tbody>
@@ -108,7 +108,7 @@ export function DataTable({
                     exit={{ opacity: 0 }}
                     transition={{ duration: 0.15 }}
                     style={{ backgroundColor: meta.bg, color: dark ? "#FFFFFF" : "#111827" }}
-                    className="border-b border-border/70 align-top"
+                    className="border-b border-border/70 align-top transition-colors duration-200"
                   >
                     <td className="px-3 py-2">
                       <Checkbox
@@ -130,38 +130,57 @@ export function DataTable({
                     </td>
                     <td className="px-3 py-2">
                       <div className="flex items-center gap-1">
-                        <a
-                          href={`https://nipos.posindonesia.co.id/track/${row.resi}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="font-mono text-xs font-bold underline-offset-2 hover:underline"
-                        >
-                          {row.resi}
-                        </a>
-                        <button
-                          onClick={() => copy(row.resi)}
-                          className="rounded p-1 opacity-60 transition hover:opacity-100 cursor-pointer"
-                          aria-label="Salin resi"
-                        >
-                          <Copy className="h-3.5 w-3.5" />
-                        </button>
-                        <ExternalLink className="h-3 w-3 opacity-40" />
+                        {(() => {
+                          const encryptedResi = encodeURIComponent(btoa(row.resi));
+                          const detailUrl = `https://pid.posindonesia.co.id/lacak/admin/detail_lacak_banyak.php?id=${encryptedResi}`;
+                          return (
+                            <>
+                              <a
+                                href={detailUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="font-mono text-xs font-bold underline-offset-2 hover:underline text-[#1E40AF]"
+                                title="Buka Detail Lacak NIPOS"
+                              >
+                                {row.resi}
+                              </a>
+                              <button
+                                onClick={() => copy(row.resi)}
+                                className="rounded p-1 opacity-60 transition hover:opacity-100 cursor-pointer"
+                                aria-label="Salin resi"
+                              >
+                                <Copy className="h-3.5 w-3.5" />
+                              </button>
+                              <a
+                                href={detailUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="rounded p-0.5 opacity-60 transition hover:opacity-100 cursor-pointer text-[#1E40AF]"
+                                title="Buka Detail Lacak NIPOS di Tab Baru"
+                              >
+                                <ExternalLink className="h-3.5 w-3.5" />
+                              </a>
+                            </>
+                          );
+                        })()}
                       </div>
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap tabular-nums">
                       {formatDate(row.tanggalKirim)}
                     </td>
-                    <td className="px-3 py-2 whitespace-nowrap">
-                      <span className="inline-flex items-center gap-1.5 text-xs font-medium">
-                        Cilacap <ArrowRight className="h-3 w-3 opacity-60" /> {row.tujuan}
-                      </span>
+                    <td className="px-3 py-2 max-w-[220px] min-w-[170px] whitespace-normal break-words">
+                      <div className="inline-flex flex-wrap items-center gap-1 text-xs font-medium line-clamp-2 break-words leading-snug">
+                        <span className="font-semibold shrink-0">Cilacap</span>
+                        <ArrowRight className="h-3 w-3 shrink-0 opacity-60" />
+                        <span className="break-words">{row.tujuan}</span>
+                      </div>
                     </td>
-                    <td className="px-3 py-2">
+                    <td className="px-3 py-2 min-w-[260px] max-w-[320px] whitespace-normal break-words">
                       <div className="font-semibold">{row.penerima}</div>
-                      <div className="text-[11px] opacity-75">
+                      <div className="text-[11px] opacity-75 break-words line-clamp-3 leading-snug">
                         {row.telepon} &middot; {row.alamat}
                       </div>
-                      <div className="text-[11px] italic opacity-70">{row.keterangan}</div>
+                      <div className="text-[11px] italic opacity-70 break-words line-clamp-2 leading-snug">{row.keterangan}</div>
                       {row.note && (
                         <div className="mt-1 inline-flex items-center gap-1 rounded bg-[#E5E7EB] px-1.5 py-0.5 text-[11px] font-medium text-[#374151]">
                           <StickyNote className="h-3 w-3" /> {row.note}

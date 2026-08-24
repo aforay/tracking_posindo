@@ -21,6 +21,9 @@ class OutgoingShipment extends Model
         'status_pos',
         'keterangan',
         'status_kategori',
+        'color_code',
+        'fu_pos_date',
+        'noted',
         'sla_days',
         'last_tracked_at',
     ];

@@ -14,6 +14,7 @@ import {
   ChevronLeft,
   ChevronRight,
   X,
+  Check,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
@@ -340,35 +341,47 @@ export default function Dashboard() {
         <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card p-3">
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="mr-1 text-[11px] font-bold tracking-wide uppercase text-muted-foreground">
-              Filter Warna
+              Filter Status CS
             </span>
-            {FU_ORDER.map((k) => (
-              <button
-                key={k}
-                onClick={() => {
-                  const nextColor = colorFilter === k ? null : k;
-                  setColorFilter(nextColor);
-                  router.get("/shipments", { seller, month, color: nextColor, search: query }, { preserveState: true, preserveScroll: true });
-                }}
-                style={{ backgroundColor: FU_META[k].bg, color: FU_META[k].fg }}
-                className={`rounded-full border px-2.5 py-1 text-[11px] font-bold transition cursor-pointer ${
-                  colorFilter === k
-                    ? "border-[#1E40AF] ring-2 ring-[#1E40AF]/40"
-                    : "border-black/10 hover:brightness-95"
-                }`}
-              >
-                {FU_META[k].short}
-              </button>
-            ))}
+            {FU_ORDER.map((k) => {
+              const active = colorFilter === k;
+              return (
+                <button
+                  key={k}
+                  onClick={() => {
+                    const nextColor = active ? null : k;
+                    setColorFilter(nextColor);
+                    router.get(
+                      "/shipments",
+                      { seller, month, color: nextColor, search: query },
+                      { preserveState: true, preserveScroll: true, only: ["shipments", "stats", "filters"] }
+                    );
+                  }}
+                  style={{ backgroundColor: FU_META[k].bg, color: FU_META[k].fg }}
+                  className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] font-extrabold transition-all transform cursor-pointer ${
+                    active
+                      ? "ring-2 ring-[#1E40AF] ring-offset-1 border-[#1E40AF] shadow-md scale-105"
+                      : "border-black/20 hover:scale-102 hover:brightness-95 opacity-85 hover:opacity-100"
+                  }`}
+                >
+                  {active && <Check className="h-3 w-3 text-current stroke-[3]" />}
+                  {FU_META[k].label}
+                </button>
+              );
+            })}
             {colorFilter && (
               <button
                 onClick={() => {
                   setColorFilter(null);
-                  router.get("/shipments", { seller, month, search: query }, { preserveState: true, preserveScroll: true });
+                  router.get(
+                    "/shipments",
+                    { seller, month, search: query },
+                    { preserveState: true, preserveScroll: true, only: ["shipments", "stats", "filters"] }
+                  );
                 }}
-                className="ml-1 inline-flex items-center gap-1 text-[11px] font-semibold text-muted-foreground hover:text-foreground cursor-pointer"
+                className="ml-1 inline-flex items-center gap-1 rounded-full bg-slate-200 px-2 py-0.5 text-[11px] font-bold text-slate-700 hover:bg-slate-300 transition cursor-pointer"
               >
-                <X className="h-3 w-3" /> reset
+                <X className="h-3 w-3" /> Reset Filter
               </button>
             )}
           </div>
