@@ -23,6 +23,7 @@ export function TopBar({
   trackingProgress,
   googleSheetUrl,
   googleSheetId,
+  googleSheetWebhookUrl,
 }: {
   seller: string;
   onSeller: (s: string) => void;
@@ -30,12 +31,14 @@ export function TopBar({
   trackingProgress?: { percentage: number; tracked: number; total: number; is_running: boolean };
   googleSheetUrl?: string;
   googleSheetId?: string;
+  googleSheetWebhookUrl?: string;
 }) {
   const [uploadOpen, setUploadOpen] = useState(false);
   const [sheetSyncOpen, setSheetSyncOpen] = useState(false);
   const [sheetUrlInput, setSheetUrlInput] = useState(
     googleSheetUrl || "https://docs.google.com/spreadsheets/d/1wUqPnU1_QOq6WocHwpxAhjhScjlb_ZhhSy8I2WqGQKw/edit"
   );
+  const [webhookUrlInput, setWebhookUrlInput] = useState(googleSheetWebhookUrl || "");
   const [isSyncing, setIsSyncing] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -249,7 +252,7 @@ export function TopBar({
           <form onSubmit={handleSyncSubmit} className="space-y-4">
             <div className="space-y-1.5">
               <label className="text-xs font-bold text-foreground">
-                Link / URL Google Spreadsheet (Public / Anyone with link can view):
+                1. Link / URL Google Spreadsheet (Public / Anyone with link can view):
               </label>
               <Input
                 value={sheetUrlInput}
@@ -258,13 +261,28 @@ export function TopBar({
                 className="text-xs"
               />
               <p className="text-[11px] text-muted-foreground">
-                Sistem akan mengekstrak ID dan membaca seluruh Sheet (Januari s/d Agustus) secara otomatis di background queue.
+                Sistem akan membaca seluruh Sheet (Januari s/d Agustus) secara otomatis (RAM &lt; 15MB).
+              </p>
+            </div>
+            <div className="space-y-1.5 pt-1">
+              <label className="text-xs font-bold text-emerald-800 flex items-center justify-between">
+                <span>2. Webhook Apps Script URL (Dua Arah / Two-Way Sync):</span>
+                <span className="text-[10px] font-normal text-muted-foreground">(Opsional)</span>
+              </label>
+              <Input
+                value={webhookUrlInput}
+                onChange={(e) => setWebhookUrlInput(e.target.value)}
+                placeholder="https://script.google.com/macros/s/AKfycbx.../exec"
+                className="text-xs font-mono"
+              />
+              <p className="text-[11px] text-muted-foreground">
+                URL ini akan secara otomatis mengubah warna baris di Google Sheets saat status diubah di Dashboard UI.
               </p>
             </div>
             <div className="rounded-lg bg-emerald-50 p-3 text-xs text-emerald-950 border border-emerald-200">
-              <span className="font-bold">✨ Fitur Upsert Otomatis:</span>
+              <span className="font-bold">✨ Two-Way Real-time Synchronization:</span>
               <p className="mt-1 text-[11px]">
-                Resi baru akan ditambahkan dan resi lama akan di-update tanpa duplikasi (RAM &lt; 15MB).
+                Impor otomatis seluruh tab + eksekusi update warna status resi secara instan ke Google Sheets via Apps Script Webhook.
               </p>
             </div>
             <div className="flex justify-end gap-2 pt-2">
@@ -277,7 +295,7 @@ export function TopBar({
                 className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold gap-2 cursor-pointer"
               >
                 {isSyncing && <Loader2 className="h-4 w-4 animate-spin" />}
-                Mulai Sync Otomatis
+                Simpan &amp; Sync Otomatis
               </Button>
             </div>
           </form>

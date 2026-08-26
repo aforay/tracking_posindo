@@ -65,6 +65,7 @@ export interface PageProps {
   sellersList?: string[];
   googleSheetUrl?: string;
   googleSheetId?: string;
+  googleSheetWebhookUrl?: string;
   trackingProgress?: {
     percentage: number;
     tracked: number;
@@ -283,6 +284,7 @@ export default function Dashboard() {
           trackingProgress={props.trackingProgress}
           googleSheetUrl={props.googleSheetUrl}
           googleSheetId={props.googleSheetId}
+          googleSheetWebhookUrl={props.googleSheetWebhookUrl}
         />
         <div className="pos-scroll flex gap-1 overflow-x-auto border-b border-border bg-card/95 px-5 py-1.5 backdrop-blur">
           {[{ label: "Semua (Setahun)", idx: "all" as const, n: totalCount }].concat(

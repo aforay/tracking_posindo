@@ -227,6 +227,91 @@ class GoogleSheetsSyncService
     }
 
     /**
+     * Update status/color for specific resis in Google Spreadsheet (Two-Way Sync)
+     *
+     * @param array $resiList List of resis to update
+     * @param string $statusColor Target color code (BIRU, ORANGE, KUNING, HIJAU, BIRU_TUA, PUTIH)
+     * @param string|null $note Optional follow-up note
+     * @param string|null $escalationDate Optional escalation date
+     * @return array Result metrics
+     */
+    public function updateResiStatus(array $resiList, string $statusColor, ?string $note = null, ?string $escalationDate = null): array
+    {
+        $statusColor = strtoupper(trim($statusColor));
+        $savedUrl = SystemSetting::get('google_sheet_url') ?: SystemSetting::get('google_sheet_id');
+        $spreadsheetId = SystemSetting::extractSpreadsheetId($savedUrl) ?: '1wUqPnU1_QOq6WocHwpxAhjhScjlb_ZhhSy8I2WqGQKw';
+        $webhookUrl = SystemSetting::get('google_sheet_webhook_url') ?: env('GOOGLE_SHEET_WEBHOOK_URL');
+
+        $statusLabelMap = [
+            'BIRU' => 'PAKET SUKSES (DELIVERED)',
+            'ORANGE' => 'PAKET RETUR (RETURN)',
+            'KUNING' => 'SUDAH DI FU',
+            'HIJAU' => 'FU 2 KALI',
+            'BIRU_TUA' => 'FU POS',
+            'PUTIH' => 'BLM DI FU (IN TRANSIT)',
+        ];
+        $statusLabel = $statusLabelMap[$statusColor] ?? $statusColor;
+
+        $logMsg = "GoogleSheetsSyncService Two-Way Sync: Updating " . count($resiList) . " resis → {$statusColor} ({$statusLabel}) on Spreadsheet [{$spreadsheetId}]";
+        dump($logMsg);
+        Log::info($logMsg);
+
+        $webhookSuccess = false;
+
+        // Mode A: Apps Script Webhook / Custom Webhook POST endpoint
+        if (!empty($webhookUrl)) {
+            try {
+                $payload = [
+                    'action' => 'update_status',
+                    'spreadsheet_id' => $spreadsheetId,
+                    'resis' => array_values($resiList),
+                    'resi_list' => array_values($resiList),
+                    'status_color' => $statusColor,
+                    'color_code' => $statusColor,
+                    'status_label' => $statusLabel,
+                    'note' => $note ?: '',
+                    'escalation_date' => $escalationDate ?: '',
+                    'updated_at' => now()->toDateTimeString(),
+                ];
+
+                $ch = curl_init($webhookUrl);
+                curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+                curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+                curl_setopt($ch, CURLOPT_POST, true);
+                curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
+                curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+                curl_setopt($ch, CURLOPT_TIMEOUT, 15);
+                $body = curl_exec($ch);
+                $statusCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                curl_close($ch);
+
+                $jsonRes = json_decode($body, true);
+                $webhookSuccess = ($statusCode === 200 && isset($jsonRes['status']) && $jsonRes['status'] === 'success');
+
+                Log::info("GoogleSheetsSyncService Webhook POST status: " . ($webhookSuccess ? 'SUCCESS' : "HTTP {$statusCode}"), [
+                    'response' => $jsonRes ?: substr((string)$body, 0, 300),
+                ]);
+            } catch (Throwable $e) {
+                Log::warning("GoogleSheetsSyncService Webhook POST exception: " . $e->getMessage());
+            }
+        }
+
+        return [
+            'success' => true,
+            'webhook_sent' => !empty($webhookUrl),
+            'webhook_success' => $webhookSuccess,
+            'spreadsheet_id' => $spreadsheetId,
+            'resi_count' => count($resiList),
+            'resis' => $resiList,
+            'color_code' => $statusColor,
+            'status_label' => $statusLabel,
+            'note' => $note,
+            'escalation_date' => $escalationDate,
+            'timestamp' => now()->toDateTimeString(),
+        ];
+    }
+
+    /**
      * Helper to invoke protected methods on ShipmentsImport
      */
     protected function callProtectedMethod(object $object, string $methodName, array $parameters = []): mixed

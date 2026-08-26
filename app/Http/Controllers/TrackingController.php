@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Shipment;
+use App\Jobs\UpdateSheetStatusJob;
 use App\Services\TrackingBotService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -289,13 +290,25 @@ class TrackingController extends Controller
         }
         $shipment->save();
 
+        // Two-Way Sync to Google Sheets in background queue
+        if (!empty($shipment->resi)) {
+            UpdateSheetStatusJob::dispatch(
+                [$shipment->resi],
+                $shipment->color_code ?: 'PUTIH',
+                $shipment->noted,
+                $shipment->fu_pos_date
+            );
+        }
+
+        $successMsg = "Status resi {$shipment->resi} berhasil diperbarui & disinkronkan ke Google Sheets!";
+
         if ($request->header('X-Inertia') || $request->wantsJson()) {
-            return back()->with('success', "Status resi {$shipment->resi} diperbarui.");
+            return back()->with('success', $successMsg);
         }
 
         return response()->json([
             'success' => true,
-            'message' => "Status warna resi {$shipment->resi} diperbarui ke {$color}.",
+            'message' => $successMsg,
             'shipment' => $shipment,
         ]);
     }

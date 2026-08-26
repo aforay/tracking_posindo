@@ -7,6 +7,7 @@ use App\Imports\ShipmentsImport;
 use App\Jobs\ProcessExcelImportJob;
 use App\Jobs\ProcessGoogleSheetSyncJob;
 use App\Jobs\ProcessNiposTrackingJob;
+use App\Jobs\UpdateSheetStatusJob;
 use App\Models\OutgoingShipment;
 use App\Models\SystemSetting;
 use App\Services\TrackingBotService;
@@ -201,6 +202,7 @@ class DashboardController extends Controller
             'sellersList' => array_values(array_unique($sellersList)),
             'googleSheetUrl' => SystemSetting::get('google_sheet_url', 'https://docs.google.com/spreadsheets/d/1wUqPnU1_QOq6WocHwpxAhjhScjlb_ZhhSy8I2WqGQKw/edit'),
             'googleSheetId' => SystemSetting::get('google_sheet_id', '1wUqPnU1_QOq6WocHwpxAhjhScjlb_ZhhSy8I2WqGQKw'),
+            'googleSheetWebhookUrl' => SystemSetting::get('google_sheet_webhook_url', env('GOOGLE_SHEET_WEBHOOK_URL', '')),
             'filters' => [
                 'seller' => $selectedSeller,
                 'kategori' => $selectedKategori,
@@ -264,7 +266,13 @@ class DashboardController extends Controller
 
         OutgoingShipment::whereIn('id', $ids)->update($updateData);
 
-        return back()->with('success', count($ids) . ' resi berhasil diperbarui.');
+        // Two-Way Sync to Google Sheets in background queue
+        $resis = OutgoingShipment::whereIn('id', $ids)->pluck('no_resi')->toArray();
+        if (!empty($resis)) {
+            UpdateSheetStatusJob::dispatch($resis, $fu, null, $escDate);
+        }
+
+        return back()->with('success', 'Status ' . count($ids) . ' resi berhasil diperbarui & disinkronkan ke Google Sheets!');
     }
 
     /**
@@ -306,13 +314,25 @@ class DashboardController extends Controller
 
         $shipment->save();
 
+        // Two-Way Sync to Google Sheets in background queue
+        if (!empty($shipment->no_resi)) {
+            UpdateSheetStatusJob::dispatch(
+                [$shipment->no_resi],
+                $shipment->color_code ?: 'PUTIH',
+                $shipment->noted,
+                $shipment->fu_pos_date
+            );
+        }
+
+        $successMsg = "Status resi {$shipment->no_resi} berhasil diperbarui & disinkronkan ke Google Sheets!";
+
         if ($request->header('X-Inertia') || $request->wantsJson()) {
-            return back()->with('success', "Status resi {$shipment->no_resi} diperbarui.");
+            return back()->with('success', $successMsg);
         }
 
         return response()->json([
             'success' => true,
-            'message' => "Status warna resi {$shipment->no_resi} diperbarui.",
+            'message' => $successMsg,
             'shipment' => $shipment,
         ]);
     }
@@ -353,7 +373,14 @@ class DashboardController extends Controller
                 'status_pos' => $kategori === 'SUKSES' ? 'DELIVERED' : ($kategori === 'RETUR' ? 'DELIVERED (RETURN DELIVERY)' : 'PERLU FOLLOW UP CS'),
                 'updated_at' => now(),
             ]);
-            $msg = count($ids) . " data resi berhasil diperbarui ke status " . $action . ".";
+
+            // Two-Way Sync to Google Sheets in background queue
+            $resis = OutgoingShipment::whereIn('id', $ids)->pluck('no_resi')->toArray();
+            if (!empty($resis)) {
+                UpdateSheetStatusJob::dispatch($resis, $action);
+            }
+
+            $msg = "Status " . count($ids) . " resi berhasil diperbarui & disinkronkan ke Google Sheets!";
         }
 
         return back()->with('success', $msg);
@@ -445,11 +472,13 @@ class DashboardController extends Controller
     }
 
     /**
-     * Save dynamic Google Spreadsheet URL & ID to system_settings table
+     * Save dynamic Google Spreadsheet URL, ID, and Webhook URL to system_settings table
      */
     public function updateGoogleSheetsSetting(Request $request)
     {
         $url = trim($request->input('url', ''));
+        $webhookUrl = trim($request->input('webhook_url', ''));
+
         if (empty($url)) {
             return back()->with('error', 'URL Google Spreadsheet tidak boleh kosong.');
         }
@@ -462,7 +491,11 @@ class DashboardController extends Controller
         SystemSetting::set('google_sheet_url', $url);
         SystemSetting::set('google_sheet_id', $id);
 
-        return back()->with('success', "URL Google Spreadsheet berhasil diperbarui (ID: {$id}).");
+        if (!empty($webhookUrl)) {
+            SystemSetting::set('google_sheet_webhook_url', $webhookUrl);
+        }
+
+        return back()->with('success', "URL Google Spreadsheet & Webhook berhasil diperbarui (ID: {$id}).");
     }
 
     /**
@@ -471,6 +504,7 @@ class DashboardController extends Controller
     public function syncGoogleSheets(Request $request)
     {
         $url = trim($request->input('url', ''));
+        $webhookUrl = trim($request->input('webhook_url', ''));
         $seller = $request->input('seller', 'Aliqa');
 
         if (!empty($url)) {
@@ -479,6 +513,10 @@ class DashboardController extends Controller
                 SystemSetting::set('google_sheet_url', $url);
                 SystemSetting::set('google_sheet_id', $id);
             }
+        }
+
+        if (!empty($webhookUrl)) {
+            SystemSetting::set('google_sheet_webhook_url', $webhookUrl);
         }
 
         ProcessGoogleSheetSyncJob::dispatch($url ?: null, $seller);
