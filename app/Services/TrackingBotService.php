@@ -159,7 +159,7 @@ class TrackingBotService
             return 'RETUR';
         }
 
-        if (str_contains($combined, 'FAILED') || str_contains($combined, 'GAGAL') || str_contains($combined, 'KENDALA') || str_contains($combined, 'FOLLOW UP') || str_contains($combined, 'RUNSHEET')) {
+        if (str_contains($combined, 'FAILED') || str_contains($combined, 'GAGAL') || str_contains($combined, 'KENDALA') || str_contains($combined, 'FOLLOW UP')) {
             return 'FOLLOW_UP';
         }
 

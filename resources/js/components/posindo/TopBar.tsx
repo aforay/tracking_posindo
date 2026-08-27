@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useMemo, useEffect, useState } from "react";
 import { router } from "@inertiajs/react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Truck, Upload, Bot, Loader2, CheckCircle2, FileUp, Zap, RefreshCw } from "lucide-react";
@@ -18,6 +18,7 @@ import { SELLERS, nf } from "@/lib/posindo";
 
 export function TopBar({
   seller,
+  sellersList,
   onSeller,
   total,
   trackingProgress,
@@ -26,6 +27,7 @@ export function TopBar({
   googleSheetWebhookUrl,
 }: {
   seller: string;
+  sellersList?: string[];
   onSeller: (s: string) => void;
   total: number;
   trackingProgress?: { percentage: number; tracked: number; total: number; is_running: boolean };
@@ -33,6 +35,17 @@ export function TopBar({
   googleSheetId?: string;
   googleSheetWebhookUrl?: string;
 }) {
+  const sellerOptions = useMemo(() => {
+    const list = new Set<string>(SELLERS);
+    if (sellersList && Array.isArray(sellersList)) {
+      sellersList.forEach((s) => {
+        if (s && s !== "ALL" && s !== "Semua Seller") {
+          list.add(s.startsWith("Mitra ") ? s : `Mitra ${s}`);
+        }
+      });
+    }
+    return Array.from(list);
+  }, [sellersList]);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [sheetSyncOpen, setSheetSyncOpen] = useState(false);
   const [sheetUrlInput, setSheetUrlInput] = useState(
@@ -191,13 +204,13 @@ export function TopBar({
           </Button>
 
           <Select value={seller} onValueChange={onSeller}>
-            <SelectTrigger className="w-[180px] text-xs">
+            <SelectTrigger className="w-[180px] text-xs bg-white border border-slate-300 font-semibold cursor-pointer shadow-sm">
               <SelectValue />
             </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="Semua Seller">Semua Seller</SelectItem>
-              {SELLERS.map((s) => (
-                <SelectItem key={s} value={s}>
+            <SelectContent className="bg-white border border-slate-200 shadow-xl rounded-xl">
+              <SelectItem value="Semua Seller" className="font-semibold cursor-pointer">Semua Seller</SelectItem>
+              {sellerOptions.map((s) => (
+                <SelectItem key={s} value={s} className="font-semibold cursor-pointer">
                   {s}
                 </SelectItem>
               ))}

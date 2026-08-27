@@ -7,6 +7,8 @@ import {
   RotateCcw,
   Clock,
   BellRing,
+  Repeat,
+  Send,
   Search,
   FileSpreadsheet,
   FileDown,
@@ -59,9 +61,14 @@ export interface PageProps {
     sukses?: number;
     retur?: number;
     follow_up?: number;
+    sudah_fu?: number;
+    fu_2_kali?: number;
+    fu_pos?: number;
     belum?: number;
     perluFu?: number;
   };
+  monthCounts?: number[];
+  yearTotal?: number;
   sellersList?: string[];
   googleSheetUrl?: string;
   googleSheetId?: string;
@@ -120,6 +127,9 @@ export default function Dashboard() {
   );
 
   const monthCounts = useMemo(() => {
+    if (props.monthCounts && Array.isArray(props.monthCounts) && props.monthCounts.length === 12) {
+      return props.monthCounts;
+    }
     const c = new Array(12).fill(0) as number[];
     bySeller.forEach((r) => {
       if (r.tanggalKirim) {
@@ -130,7 +140,7 @@ export default function Dashboard() {
       }
     });
     return c;
-  }, [bySeller]);
+  }, [props.monthCounts, bySeller]);
 
   const kpi = useMemo(() => {
     if (props.stats) {
@@ -138,7 +148,10 @@ export default function Dashboard() {
         total: props.stats.total ?? 0,
         sukses: props.stats.sukses ?? 0,
         retur: props.stats.retur ?? 0,
-        belum: props.stats.belum ?? (props.stats.total ?? 0) - (props.stats.sukses ?? 0) - (props.stats.retur ?? 0) - (props.stats.follow_up ?? 0),
+        belum: props.stats.belum ?? 0,
+        sudahFu: props.stats.sudah_fu ?? 0,
+        fu2Kali: props.stats.fu_2_kali ?? 0,
+        fuPos: props.stats.fu_pos ?? 0,
         perluFu: props.stats.follow_up ?? props.stats.perluFu ?? 0,
       };
     }
@@ -148,6 +161,9 @@ export default function Dashboard() {
       sukses: c("BIRU"),
       retur: c("ORANGE"),
       belum: c("PUTIH"),
+      sudahFu: c("KUNING"),
+      fu2Kali: c("HIJAU"),
+      fuPos: c("BIRU_TUA"),
       perluFu: c("KUNING") + c("HIJAU") + c("BIRU_TUA"),
     };
   }, [props.stats, rows]);
@@ -235,6 +251,7 @@ export default function Dashboard() {
       bg: "#F3F4F6",
       fg: "#374151",
       sub: "seluruh resi outgoing",
+      colorKey: null,
     },
     {
       label: "Paket Sukses",
@@ -243,6 +260,7 @@ export default function Dashboard() {
       bg: "#BAE6FD",
       fg: "#0369A1",
       sub: "DELIVERED",
+      colorKey: "BIRU" as FuStatus,
     },
     {
       label: "Paket Retur",
@@ -251,22 +269,43 @@ export default function Dashboard() {
       bg: "#FED7AA",
       fg: "#C2410C",
       sub: "RETURN / GAGAL SERAH",
+      colorKey: "ORANGE" as FuStatus,
     },
     {
-      label: "Belum di FU / In-Transit",
+      label: "Belum di FU",
       value: kpi.belum,
       icon: Clock,
       bg: "#FFFFFF",
       fg: "#374151",
       sub: "ON PROCESS / RUNSHEET",
+      colorKey: "PUTIH" as FuStatus,
     },
     {
-      label: "Perlu Follow-Up CS",
-      value: kpi.perluFu,
+      label: "Sudah di FU",
+      value: kpi.sudahFu,
       icon: BellRing,
       bg: "#FEF08A",
       fg: "#854D0E",
-      sub: "SUDAH DI FU + 2 KALI + FU POS",
+      sub: "FOLLOW-UP CS 1X",
+      colorKey: "KUNING" as FuStatus,
+    },
+    {
+      label: "FU 2 Kali",
+      value: kpi.fu2Kali,
+      icon: Repeat,
+      bg: "#A7F3D0",
+      fg: "#047857",
+      sub: "FOLLOW-UP 2 KALI",
+      colorKey: "HIJAU" as FuStatus,
+    },
+    {
+      label: "FU POS",
+      value: kpi.fuPos,
+      icon: Send,
+      bg: "#1E40AF",
+      fg: "#FFFFFF",
+      sub: "ESKALASI POS PUSAT",
+      colorKey: "BIRU_TUA" as FuStatus,
     },
   ];
 
@@ -276,6 +315,7 @@ export default function Dashboard() {
       <header className="sticky top-0 z-30 shadow-sm">
         <TopBar
           seller={seller}
+          sellersList={props.sellersList}
           onSeller={(s) => {
             setSeller(s);
             router.get("/shipments", { seller: s, month, color: colorFilter, search: query }, { preserveState: true, preserveScroll: true });
@@ -287,7 +327,7 @@ export default function Dashboard() {
           googleSheetWebhookUrl={props.googleSheetWebhookUrl}
         />
         <div className="pos-scroll flex gap-1 overflow-x-auto border-b border-border bg-card/95 px-5 py-1.5 backdrop-blur">
-          {[{ label: "Semua (Setahun)", idx: "all" as const, n: totalCount }].concat(
+          {[{ label: "Semua (Setahun)", idx: "all" as const, n: props.yearTotal ?? totalCount }].concat(
             MONTHS.map((m, i) => ({ label: m, idx: i as never, n: monthCounts[i] ?? 0 }))
           ).map((t) => {
             const active = month === t.idx;
@@ -313,31 +353,46 @@ export default function Dashboard() {
       </header>
 
       <main className="space-y-4 p-5">
-        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-          {cards.map((c, i) => (
-            <motion.div
-              key={c.label}
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.04 }}
-              style={{ backgroundColor: c.bg, color: c.fg }}
-              className="rounded-xl border border-border p-4 shadow-sm"
-            >
-              <div className="flex items-start justify-between">
-                <div>
-                  <div className="text-[11px] font-bold tracking-wide uppercase opacity-80">
-                    {c.label}
+        <section className="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
+          {cards.map((c, i) => {
+            const isSelected = c.colorKey !== null && colorFilter === c.colorKey;
+            return (
+              <motion.div
+                key={c.label}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: i * 0.03 }}
+                onClick={() => {
+                  if (c.colorKey === null) {
+                    setColorFilter(null);
+                    router.get("/shipments", { seller, month, search: query }, { preserveState: true, preserveScroll: true });
+                  } else if (c.colorKey) {
+                    const nextColor = colorFilter === c.colorKey ? null : c.colorKey;
+                    setColorFilter(nextColor);
+                    router.get("/shipments", { seller, month, color: nextColor, search: query }, { preserveState: true, preserveScroll: true });
+                  }
+                }}
+                style={{ backgroundColor: c.bg, color: c.fg }}
+                className={`rounded-xl border p-3.5 shadow-sm transition-all cursor-pointer hover:shadow-md hover:scale-[1.02] ${
+                  isSelected ? "ring-2 ring-[#1E40AF] ring-offset-2 border-[#1E40AF]" : "border-border"
+                }`}
+              >
+                <div className="flex items-start justify-between">
+                  <div>
+                    <div className="text-[10.5px] font-bold tracking-wide uppercase opacity-85">
+                      {c.label}
+                    </div>
+                    <div className="mt-1 text-2xl font-extrabold tabular-nums">{nf(c.value)}</div>
+                    <div className="text-[10px] opacity-75 font-medium mt-0.5">
+                      {c.sub} ·{" "}
+                      {kpi.total ? ((c.value / kpi.total) * 100).toFixed(1) : "0.0"}%
+                    </div>
                   </div>
-                  <div className="mt-1 text-2xl font-extrabold tabular-nums">{nf(c.value)}</div>
-                  <div className="text-[11px] opacity-70">
-                    {c.sub} ·{" "}
-                    {kpi.total ? ((c.value / kpi.total) * 100).toFixed(1) : "0.0"}%
-                  </div>
+                  <c.icon className="h-4.5 w-4.5 opacity-75 shrink-0 ml-1 mt-0.5" />
                 </div>
-                <c.icon className="h-5 w-5 opacity-70" />
-              </div>
-            </motion.div>
-          ))}
+              </motion.div>
+            );
+          })}
         </section>
 
         <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card p-3">
@@ -356,7 +411,7 @@ export default function Dashboard() {
                     router.get(
                       "/shipments",
                       { seller, month, color: nextColor, search: query },
-                      { preserveState: true, preserveScroll: true, only: ["shipments", "stats", "filters"] }
+                      { preserveState: true, preserveScroll: true }
                     );
                   }}
                   style={{ backgroundColor: FU_META[k].bg, color: FU_META[k].fg }}
@@ -378,7 +433,7 @@ export default function Dashboard() {
                   router.get(
                     "/shipments",
                     { seller, month, search: query },
-                    { preserveState: true, preserveScroll: true, only: ["shipments", "stats", "filters"] }
+                    { preserveState: true, preserveScroll: true }
                   );
                 }}
                 className="ml-1 inline-flex items-center gap-1 rounded-full bg-slate-200 px-2 py-0.5 text-[11px] font-bold text-slate-700 hover:bg-slate-300 transition cursor-pointer"
@@ -390,14 +445,10 @@ export default function Dashboard() {
           <div className="flex flex-wrap items-center gap-2">
             <Button
               onClick={() => setExportOpen(true)}
-              className="gap-2 bg-[#1E40AF] text-white hover:bg-blue-900 cursor-pointer"
+              className="gap-2 bg-[#1E40AF] text-white hover:bg-blue-900 cursor-pointer font-bold shadow-sm text-xs px-4"
             >
               <FileSpreadsheet className="h-4 w-4 text-[#F97316]" />
-              Generate Laporan Seller{" "}
-              {seller === "Semua Seller" ? "Aliqa" : seller.replace("Mitra ", "")} (.XLSX)
-            </Button>
-            <Button variant="outline" className="gap-2 cursor-pointer" onClick={() => setExportOpen(true)}>
-              <FileDown className="h-4 w-4" /> Export Full Color-Coded Excel
+              Export Laporan Seller {seller === "Semua Seller" ? "ALL" : seller.replace("Mitra ", "")} (.XLSX)
             </Button>
           </div>
         </section>
@@ -442,32 +493,41 @@ export default function Dashboard() {
               exit={{ opacity: 0, y: -6 }}
               className="flex flex-wrap items-center gap-2 rounded-xl border border-blue-300 bg-blue-50 p-3"
             >
-              <span className="text-xs font-bold text-[#1E40AF]">{selected.size} resi dipilih</span>
-              <Button size="sm" variant="secondary" onClick={() => bulk("BIRU")}>
+              <span className="text-xs font-bold text-[#1E40AF] mr-1">{selected.size} resi dipilih</span>
+              <Button size="sm" variant="secondary" className="cursor-pointer bg-sky-100 text-sky-800 hover:bg-sky-200 border border-sky-300 font-bold text-xs" onClick={() => bulk("BIRU")}>
                 Mark as Sukses
               </Button>
-              <Button size="sm" variant="secondary" onClick={() => bulk("KUNING")}>
-                Mark as Follow-Up
+              <Button size="sm" variant="secondary" className="cursor-pointer bg-yellow-100 text-yellow-800 hover:bg-yellow-200 border border-yellow-300 font-bold text-xs" onClick={() => bulk("KUNING")}>
+                Mark as Sudah FU
               </Button>
-              <Button size="sm" variant="secondary" onClick={() => bulk("ORANGE")}>
+              <Button size="sm" variant="secondary" className="cursor-pointer bg-emerald-100 text-emerald-800 hover:bg-emerald-200 border border-emerald-300 font-bold text-xs" onClick={() => bulk("HIJAU")}>
+                Mark as FU 2 Kali
+              </Button>
+              <Button size="sm" variant="secondary" className="cursor-pointer bg-[#1E40AF] text-white hover:bg-blue-900 border border-blue-900 font-bold text-xs" onClick={() => bulk("BIRU_TUA")}>
+                Mark as FU POS
+              </Button>
+              <Button size="sm" variant="secondary" className="cursor-pointer bg-orange-100 text-orange-800 hover:bg-orange-200 border border-orange-300 font-bold text-xs" onClick={() => bulk("ORANGE")}>
                 Mark as Retur
               </Button>
-              <Button size="sm" variant="outline" onClick={() => setExportOpen(true)}>
+              <Button size="sm" variant="secondary" className="cursor-pointer bg-white text-slate-700 hover:bg-slate-100 border border-slate-300 font-bold text-xs" onClick={() => bulk("PUTIH")}>
+                Mark as Belum FU
+              </Button>
+              <Button size="sm" variant="outline" className="cursor-pointer font-bold text-xs ml-auto" onClick={() => setExportOpen(true)}>
                 Export Selected
               </Button>
               <Button
                 size="sm"
                 variant="destructive"
-                className="gap-1"
+                className="gap-1 cursor-pointer font-bold text-xs"
                 onClick={deleteSelected}
               >
                 <Trash2 className="h-3.5 w-3.5" /> Delete Selected
               </Button>
               <button
-                className="ml-auto text-xs text-muted-foreground hover:text-foreground cursor-pointer"
+                className="text-xs text-muted-foreground hover:text-foreground cursor-pointer font-medium"
                 onClick={() => setSelected(new Set())}
               >
-                Batalkan pilihan
+                Batalkan
               </button>
             </motion.div>
           )}

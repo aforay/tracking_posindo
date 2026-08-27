@@ -301,13 +301,31 @@ export function DataTable({
       </div>
 
       <Dialog open={!!escalateFor} onOpenChange={(o) => !o && setEscalateFor(null)}>
-        <DialogContent className="max-w-fit">
+        <DialogContent className="max-w-md bg-white border border-slate-200 shadow-2xl rounded-2xl p-6 text-slate-900">
           <DialogHeader>
-            <DialogTitle>Tanggal Eskalasi ke Pos Pusat</DialogTitle>
+            <DialogTitle className="text-lg font-bold text-slate-900">Tanggal Eskalasi ke Pos Pusat</DialogTitle>
           </DialogHeader>
-          <Calendar mode="single" selected={escDate} onSelect={setEscDate} className="rounded-md" />
-          <DialogFooter>
+          <div className="flex flex-col gap-2.5 py-3">
+            <label className="text-xs font-semibold text-slate-700">Pilih Tanggal Eskalasi:</label>
+            <Input
+              type="date"
+              value={escDate ? (escDate instanceof Date ? escDate.toISOString().slice(0, 10) : String(escDate).slice(0, 10)) : new Date().toISOString().slice(0, 10)}
+              onChange={(e) => setEscDate(e.target.value ? new Date(e.target.value) : new Date())}
+              className="bg-white border border-slate-300 text-slate-900 font-semibold text-sm h-10 px-3 rounded-lg shadow-sm focus:ring-2 focus:ring-[#1E40AF]"
+            />
+          </div>
+          <DialogFooter className="flex flex-row justify-end gap-2 mt-2">
             <Button
+              type="button"
+              variant="outline"
+              onClick={() => setEscalateFor(null)}
+              className="cursor-pointer border-slate-300 text-slate-700 hover:bg-slate-100 font-semibold px-4"
+            >
+              Batal
+            </Button>
+            <Button
+              type="button"
+              className="cursor-pointer bg-[#1E40AF] text-white hover:bg-blue-900 font-bold px-5"
               onClick={() => {
                 if (escalateFor)
                   onStatus(

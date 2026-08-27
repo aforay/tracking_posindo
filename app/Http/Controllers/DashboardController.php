@@ -43,27 +43,28 @@ class DashboardController extends Controller
         $query = OutgoingShipment::query();
 
         // 1. Month & Year Filters
-        if (!empty($selectedMonth) && $selectedMonth !== 'ALL') {
+        $monthMap = [
+            'JANUARI' => 1, 'JAN' => 1,
+            'FEBRUARI' => 2, 'FEB' => 2,
+            'MARET' => 3, 'MAR' => 3,
+            'APRIL' => 4, 'APR' => 4,
+            'MEI' => 5, 'MAY' => 5,
+            'JUNI' => 6, 'JUN' => 6,
+            'JULI' => 7, 'JUL' => 7,
+            'AGUSTUS' => 8, 'AGT' => 8, 'AGUS' => 8,
+            'SEPTEMBER' => 9, 'SEP' => 9,
+            'OKTOBER' => 10, 'OKT' => 10,
+            'NOVEMBER' => 11, 'NOV' => 11,
+            'DESEMBER' => 12, 'DES' => 12,
+        ];
+
+        if ($selectedMonth !== 'ALL' && $selectedMonth !== null && $selectedMonth !== '') {
             if (is_numeric($selectedMonth)) {
                 $mInt = (int)$selectedMonth;
                 $mNum = ($mInt >= 0 && $mInt <= 11) ? ($mInt + 1) : $mInt;
                 $query->whereMonth('tanggal_kirim', $mNum);
             } else {
-                $monthMap = [
-                    'JANUARI' => 1, 'JAN' => 1,
-                    'FEBRUARI' => 2, 'FEB' => 2,
-                    'MARET' => 3, 'MAR' => 3,
-                    'APRIL' => 4, 'APR' => 4,
-                    'MEI' => 5, 'MAY' => 5,
-                    'JUNI' => 6, 'JUN' => 6,
-                    'JULI' => 7, 'JUL' => 7,
-                    'AGUSTUS' => 8, 'AGT' => 8, 'AGUS' => 8,
-                    'SEPTEMBER' => 9, 'SEP' => 9,
-                    'OKTOBER' => 10, 'OKT' => 10,
-                    'NOVEMBER' => 11, 'NOV' => 11,
-                    'DESEMBER' => 12, 'DES' => 12,
-                ];
-                $mNum = $monthMap[strtoupper($selectedMonth)] ?? null;
+                $mNum = $monthMap[strtoupper((string)$selectedMonth)] ?? null;
                 if ($mNum) {
                     $query->whereMonth('tanggal_kirim', $mNum);
                 }
@@ -75,30 +76,56 @@ class DashboardController extends Controller
 
         // 2. Seller Filter
         if (!empty($selectedSeller) && $selectedSeller !== 'ALL' && $selectedSeller !== 'Semua Seller') {
-            $query->where('nama_seller', $selectedSeller);
+            $cleanSeller = trim(preg_replace('/^Mitra\s+/i', '', $selectedSeller));
+            $query->where(function ($q) use ($selectedSeller, $cleanSeller) {
+                $q->where('nama_seller', $selectedSeller)
+                  ->orWhere('nama_seller', $cleanSeller)
+                  ->orWhere('nama_seller', 'Mitra ' . $cleanSeller)
+                  ->orWhere('nama_seller', 'LIKE', "%{$cleanSeller}%");
+            });
         }
 
         // 3. Color & Kategori Filter
         if (!empty($selectedColor) && $selectedColor !== 'ALL') {
             $cUpper = strtoupper($selectedColor);
             $query->where(function ($q) use ($cUpper) {
-                $q->where('color_code', $cUpper);
                 if ($cUpper === 'BIRU') {
-                    $q->orWhere(function ($sub) {
-                        $sub->whereNull('color_code')->where('status_kategori', 'SUKSES');
-                    });
+                    $q->where('color_code', 'BIRU')
+                      ->orWhere(function ($sub) {
+                          $sub->where(function ($c) {
+                              $c->whereNull('color_code')->orWhere('color_code', '');
+                          })->where('status_kategori', 'SUKSES');
+                      });
                 } elseif ($cUpper === 'ORANGE') {
-                    $q->orWhere(function ($sub) {
-                        $sub->whereNull('color_code')->where('status_kategori', 'RETUR');
-                    });
+                    $q->where('color_code', 'ORANGE')
+                      ->orWhere(function ($sub) {
+                          $sub->where(function ($c) {
+                              $c->whereNull('color_code')->orWhere('color_code', '');
+                          })->where('status_kategori', 'RETUR');
+                      });
                 } elseif ($cUpper === 'KUNING') {
-                    $q->orWhere(function ($sub) {
-                        $sub->whereNull('color_code')->where('status_kategori', 'FOLLOW_UP');
-                    });
+                    $q->where('color_code', 'KUNING')
+                      ->orWhere(function ($sub) {
+                          $sub->where(function ($c) {
+                              $c->whereNull('color_code')->orWhere('color_code', '');
+                          })->where('status_kategori', 'FOLLOW_UP');
+                      });
                 } elseif ($cUpper === 'PUTIH') {
-                    $q->orWhere(function ($sub) {
-                        $sub->whereNull('color_code')->where('status_kategori', 'IN_PROCESS');
-                    });
+                    $q->where('color_code', 'PUTIH')
+                      ->orWhere(function ($sub) {
+                          $sub->where(function ($c) {
+                              $c->whereNull('color_code')->orWhere('color_code', '');
+                          })->where(function ($sub2) {
+                              $sub2->where('status_kategori', 'IN_PROCESS')
+                                   ->orWhereNull('status_kategori')
+                                   ->orWhere('status_kategori', '')
+                                   ->orWhereNotIn('status_kategori', ['SUKSES', 'RETUR', 'FOLLOW_UP']);
+                          });
+                      });
+                } elseif ($cUpper === 'HIJAU' || $cUpper === 'BIRU_TUA') {
+                    $q->where('color_code', $cUpper);
+                } else {
+                    $q->where('color_code', $cUpper);
                 }
             });
         }
@@ -124,12 +151,98 @@ class DashboardController extends Controller
             });
         }
 
-        // Summary Statistics Cards (Memory < 1MB via SQL count)
+        // Summary Statistics Cards (calculated respecting seller/month/year/search filters, but independent of color filter so all card counters reflect the full breakdown)
+        $statsBaseQuery = OutgoingShipment::query();
+        if ($selectedMonth !== 'ALL' && $selectedMonth !== null && $selectedMonth !== '') {
+            if (is_numeric($selectedMonth)) {
+                $mInt = (int)$selectedMonth;
+                $mNum = ($mInt >= 0 && $mInt <= 11) ? ($mInt + 1) : $mInt;
+                $statsBaseQuery->whereMonth('tanggal_kirim', $mNum);
+            } else {
+                $mNum = $monthMap[strtoupper((string)$selectedMonth)] ?? null;
+                if ($mNum) {
+                    $statsBaseQuery->whereMonth('tanggal_kirim', $mNum);
+                }
+            }
+        }
+        if (!empty($selectedYear)) {
+            $statsBaseQuery->whereYear('tanggal_kirim', (int)$selectedYear);
+        }
+        if (!empty($selectedSeller) && $selectedSeller !== 'ALL' && $selectedSeller !== 'Semua Seller') {
+            $cleanSeller = trim(preg_replace('/^Mitra\s+/i', '', $selectedSeller));
+            $statsBaseQuery->where(function ($q) use ($selectedSeller, $cleanSeller) {
+                $q->where('nama_seller', $selectedSeller)
+                  ->orWhere('nama_seller', $cleanSeller)
+                  ->orWhere('nama_seller', 'Mitra ' . $cleanSeller)
+                  ->orWhere('nama_seller', 'LIKE', "%{$cleanSeller}%");
+            });
+        }
+        if (!empty($searchQuery)) {
+            $terms = preg_split('/[\s,\n;]+/', $searchQuery);
+            $terms = array_filter(array_map('trim', $terms));
+
+            $statsBaseQuery->where(function ($q) use ($terms, $searchQuery) {
+                if (count($terms) > 1) {
+                    $q->whereIn('no_resi', $terms);
+                } else {
+                    $q->where('no_resi', 'LIKE', "%{$searchQuery}%")
+                      ->orWhere('nama_penerima', 'LIKE', "%{$searchQuery}%")
+                      ->orWhere('no_hp', 'LIKE', "%{$searchQuery}%")
+                      ->orWhere('alamat', 'LIKE', "%{$searchQuery}%")
+                      ->orWhere('status_pos', 'LIKE', "%{$searchQuery}%");
+                }
+            });
+        }
+
         $stats = [
-            'total' => (clone $query)->count(),
-            'sukses' => (clone $query)->where('status_kategori', 'SUKSES')->count(),
-            'retur' => (clone $query)->where('status_kategori', 'RETUR')->count(),
-            'follow_up' => (clone $query)->whereIn('status_kategori', ['IN_PROCESS', 'FOLLOW_UP'])->count(),
+            'total' => (clone $statsBaseQuery)->count(),
+            'sukses' => (clone $statsBaseQuery)->where(function ($q) {
+                $q->where('color_code', 'BIRU')
+                  ->orWhere(function ($sub) {
+                      $sub->where(function ($c) {
+                          $c->whereNull('color_code')->orWhere('color_code', '');
+                      })->where('status_kategori', 'SUKSES');
+                  });
+            })->count(),
+            'retur' => (clone $statsBaseQuery)->where(function ($q) {
+                $q->where('color_code', 'ORANGE')
+                  ->orWhere(function ($sub) {
+                      $sub->where(function ($c) {
+                          $c->whereNull('color_code')->orWhere('color_code', '');
+                      })->where('status_kategori', 'RETUR');
+                  });
+            })->count(),
+            'belum' => (clone $statsBaseQuery)->where(function ($q) {
+                $q->where('color_code', 'PUTIH')
+                  ->orWhere(function ($sub) {
+                      $sub->where(function ($c) {
+                          $c->whereNull('color_code')->orWhere('color_code', '');
+                      })->where(function ($sub2) {
+                          $sub2->where('status_kategori', 'IN_PROCESS')
+                               ->orWhereNull('status_kategori')
+                               ->orWhere('status_kategori', '')
+                               ->orWhereNotIn('status_kategori', ['SUKSES', 'RETUR', 'FOLLOW_UP']);
+                      });
+                  });
+            })->count(),
+            'sudah_fu' => (clone $statsBaseQuery)->where(function ($q) {
+                $q->where('color_code', 'KUNING')
+                  ->orWhere(function ($sub) {
+                      $sub->where(function ($c) {
+                          $c->whereNull('color_code')->orWhere('color_code', '');
+                      })->where('status_kategori', 'FOLLOW_UP');
+                  });
+            })->count(),
+            'fu_2_kali' => (clone $statsBaseQuery)->where('color_code', 'HIJAU')->count(),
+            'fu_pos' => (clone $statsBaseQuery)->where('color_code', 'BIRU_TUA')->count(),
+            'follow_up' => (clone $statsBaseQuery)->where(function ($q) {
+                $q->whereIn('color_code', ['KUNING', 'HIJAU', 'BIRU_TUA'])
+                  ->orWhere(function ($sub) {
+                      $sub->where(function ($c) {
+                          $c->whereNull('color_code')->orWhere('color_code', '');
+                      })->where('status_kategori', 'FOLLOW_UP');
+                  });
+            })->count(),
         ];
 
         // 50 Items Per Page Pagination to prevent Memory Exhaustion
@@ -137,14 +250,16 @@ class DashboardController extends Controller
 
         $formattedShipmentsData = collect($paginatedShipments->items())->map(function ($s) {
             $fu = 'PUTIH';
-            if ($s->color_code) {
-                $fu = $s->color_code;
+            if (!empty($s->color_code)) {
+                $fu = strtoupper($s->color_code);
             } elseif ($s->status_kategori === 'SUKSES') {
                 $fu = 'BIRU';
             } elseif ($s->status_kategori === 'RETUR') {
                 $fu = 'ORANGE';
             } elseif ($s->status_kategori === 'FOLLOW_UP') {
                 $fu = 'KUNING';
+            } else {
+                $fu = 'PUTIH';
             }
 
             $tglStr = date('Y-m-d');
@@ -185,20 +300,44 @@ class DashboardController extends Controller
             'links' => $paginatedShipments->linkCollection()->toArray(),
         ];
 
-        $sellersList = OutgoingShipment::select('nama_seller')
+        // Calculate accurate monthly shipment distribution for month tabs
+        $monthQuery = OutgoingShipment::query();
+        if (!empty($selectedSeller) && $selectedSeller !== 'ALL' && $selectedSeller !== 'Semua Seller') {
+            $cleanSeller = trim(preg_replace('/^Mitra\s+/i', '', $selectedSeller));
+            $monthQuery->where(function ($q) use ($selectedSeller, $cleanSeller) {
+                $q->where('nama_seller', $selectedSeller)
+                  ->orWhere('nama_seller', $cleanSeller)
+                  ->orWhere('nama_seller', 'Mitra ' . $cleanSeller)
+                  ->orWhere('nama_seller', 'LIKE', "%{$cleanSeller}%");
+            });
+        }
+        if (!empty($selectedYear)) {
+            $monthQuery->whereYear('tanggal_kirim', (int)$selectedYear);
+        }
+
+        $monthCounts = array_fill(0, 12, 0);
+        for ($m = 1; $m <= 12; $m++) {
+            $monthCounts[$m - 1] = (clone $monthQuery)->whereMonth('tanggal_kirim', $m)->count();
+        }
+        $yearTotal = (clone $monthQuery)->count();
+
+        $dbSellers = OutgoingShipment::select('nama_seller')
             ->distinct()
             ->whereNotNull('nama_seller')
-            ->orderBy('nama_seller', 'asc')
+            ->where('nama_seller', '!=', '')
+            ->where('nama_seller', '!=', 'ALL')
             ->pluck('nama_seller')
             ->toArray();
 
-        if (!in_array('Aliqa', $sellersList)) {
-            array_unshift($sellersList, 'Aliqa');
-        }
+        $defaultSellers = ['Mitra Aliqa', 'Mitra Zaherba', 'Mitra Herbal', 'Mitra Nusantara', 'Mitra Barokah'];
+        $formattedDbSellers = array_map(fn($s) => str_starts_with($s, 'Mitra ') ? $s : 'Mitra ' . $s, $dbSellers);
+        $sellersList = array_values(array_unique(array_merge($defaultSellers, $formattedDbSellers)));
 
         return Inertia::render('Dashboard', [
             'shipments' => $paginatedResult,
             'stats' => $stats,
+            'monthCounts' => $monthCounts,
+            'yearTotal' => $yearTotal,
             'sellersList' => array_values(array_unique($sellersList)),
             'googleSheetUrl' => SystemSetting::get('google_sheet_url', 'https://docs.google.com/spreadsheets/d/1wUqPnU1_QOq6WocHwpxAhjhScjlb_ZhhSy8I2WqGQKw/edit'),
             'googleSheetId' => SystemSetting::get('google_sheet_id', '1wUqPnU1_QOq6WocHwpxAhjhScjlb_ZhhSy8I2WqGQKw'),

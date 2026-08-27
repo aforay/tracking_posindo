@@ -457,7 +457,7 @@ class ShipmentsImport
             }
         } elseif (str_contains($statusUpper, 'RETUR') || str_contains($statusUpper, 'RETURN')) {
             $kategori = 'RETUR';
-        } elseif (str_contains($statusUpper, 'FAILED') || str_contains($statusUpper, 'GAGAL') || str_contains($statusUpper, 'KENDALA') || str_contains($statusUpper, 'FOLLOW UP') || str_contains($statusUpper, 'RUNSHEET')) {
+        } elseif (str_contains($statusUpper, 'FAILED') || str_contains($statusUpper, 'GAGAL') || str_contains($statusUpper, 'KENDALA') || str_contains($statusUpper, 'FOLLOW UP')) {
             $kategori = 'FOLLOW_UP';
         }
 
