@@ -7,6 +7,7 @@ use App\Imports\ShipmentsImport;
 use App\Jobs\ProcessExcelImportJob;
 use App\Jobs\ProcessGoogleSheetSyncJob;
 use App\Jobs\ProcessNiposTrackingJob;
+use App\Jobs\SyncSheetFilterJob;
 use App\Jobs\UpdateSheetStatusJob;
 use App\Models\OutgoingShipment;
 use App\Models\SystemSetting;
@@ -39,6 +40,16 @@ class DashboardController extends Controller
         $selectedYear = $request->input('year', null);
         $selectedColor = $request->input('color', null);
         $searchQuery = trim($request->input('search', ''));
+
+        // Auto-sync active filter to Google Spreadsheet via Webhook
+        if ($request->has('seller') || $request->has('month') || $request->has('color') || $request->has('search')) {
+            SyncSheetFilterJob::dispatch(
+                $selectedSeller,
+                $selectedMonth,
+                $selectedColor,
+                $searchQuery
+            );
+        }
 
         $query = OutgoingShipment::query();
 
@@ -245,8 +256,8 @@ class DashboardController extends Controller
             })->count(),
         ];
 
-        // 50 Items Per Page Pagination to prevent Memory Exhaustion
-        $paginatedShipments = $query->orderBy('id', 'desc')->paginate(50)->withQueryString();
+        // 50 Items Per Page Pagination to prevent Memory Exhaustion (Ordered ascending from row 1 downwards)
+        $paginatedShipments = $query->orderBy('id', 'asc')->paginate(50)->withQueryString();
 
         $formattedShipmentsData = collect($paginatedShipments->items())->map(function ($s) {
             $fu = 'PUTIH';
@@ -284,8 +295,8 @@ class DashboardController extends Controller
                 'nipos' => $s->status_pos ?? 'ON PROCESS',
                 'sla' => (int)($s->sla_days ?? 2),
                 'fu' => $fu,
-                'note' => $s->keterangan,
-                'escalationDate' => $s->last_tracked_at ? (is_string($s->last_tracked_at) ? $s->last_tracked_at : $s->last_tracked_at->format('Y-m-d H:i')) : null,
+                'note' => $s->noted ?: $s->keterangan,
+                'escalationDate' => $s->fu_pos_date ?: ($s->last_tracked_at ? (is_string($s->last_tracked_at) ? $s->last_tracked_at : $s->last_tracked_at->format('Y-m-d H:i')) : null),
             ];
         })->toArray();
 
@@ -368,6 +379,25 @@ class DashboardController extends Controller
             'percentage' => $percentage,
             'is_running' => $tracked < $total,
         ]);
+    }
+
+    /**
+     * Real-time Google Sheets Sync Progress API Endpoint
+     */
+    public function syncProgress()
+    {
+        $progress = \Illuminate\Support\Facades\Cache::get('sync_progress', [
+            'is_syncing' => false,
+            'current_sheet' => '',
+            'current_sheet_index' => 0,
+            'total_sheets' => 0,
+            'processed_rows' => 0,
+            'inserted_rows' => 0,
+            'percentage' => 0,
+            'message' => 'Idle',
+        ]);
+
+        return response()->json($progress);
     }
 
     /**
@@ -465,15 +495,19 @@ class DashboardController extends Controller
 
         $successMsg = "Status resi {$shipment->no_resi} berhasil diperbarui & disinkronkan ke Google Sheets!";
 
-        if ($request->header('X-Inertia') || $request->wantsJson()) {
+        if ($request->header('X-Inertia')) {
             return back()->with('success', $successMsg);
         }
 
-        return response()->json([
-            'success' => true,
-            'message' => $successMsg,
-            'shipment' => $shipment,
-        ]);
+        if ($request->wantsJson()) {
+            return response()->json([
+                'success' => true,
+                'message' => $successMsg,
+                'shipment' => $shipment,
+            ]);
+        }
+
+        return back()->with('success', $successMsg);
     }
 
     /**
@@ -661,5 +695,20 @@ class DashboardController extends Controller
         ProcessGoogleSheetSyncJob::dispatch($url ?: null, $seller);
 
         return redirect()->back()->with('success', 'Sinkronisasi Google Sheets berhasil dikirim ke background Queue Worker!');
+    }
+
+    /**
+     * Explicit trigger to sync filter state to Google Spreadsheet
+     */
+    public function syncFilter(Request $request)
+    {
+        $seller = $request->input('seller', 'ALL');
+        $month = $request->input('month', 'ALL');
+        $color = $request->input('color', 'ALL');
+        $search = $request->input('search', '');
+
+        SyncSheetFilterJob::dispatch($seller, $month, $color, $search);
+
+        return back()->with('success', 'Filter berhasil disinkronkan ke Google Spreadsheet!');
     }
 }

@@ -50,14 +50,48 @@ class GoogleSheetsSyncService
         $sheetNames = $this->discoverSheetNames($spreadsheetId);
         dump("Discovered " . count($sheetNames) . " sheets to sync: ", $sheetNames);
         echo "Discovered " . count($sheetNames) . " sheets to sync: " . json_encode($sheetNames) . "\n";
+        Log::info("Discovered " . count($sheetNames) . " sheets: " . json_encode($sheetNames));
+
+        \Illuminate\Support\Facades\Cache::put('sync_progress', [
+            'is_syncing' => true,
+            'current_sheet' => 'Memulai...',
+            'current_sheet_index' => 0,
+            'total_sheets' => count($sheetNames),
+            'processed_rows' => 0,
+            'inserted_rows' => 0,
+            'percentage' => 5,
+            'message' => 'Memulai sinkronisasi Google Sheets...',
+            'updated_at' => now()->toDateTimeString(),
+        ], 3600);
 
         $totalProcessed = 0;
         $totalInserted = 0;
         $processedSheets = [];
+        $totalSheetCount = max(1, count($sheetNames));
 
         // 3. Iterate and stream data from each Sheet
-        foreach ($sheetNames as $sheetName) {
-            $msg = "Membaca Google Sheet: {$sheetName}";
+        foreach ($sheetNames as $sheetIndex => $sheetName) {
+            $sheetSeller = $defaultSeller;
+            if (str_contains(strtoupper($sheetName), 'ZAHERBA')) {
+                $sheetSeller = 'Mitra Zaherba';
+            } elseif (str_contains(strtoupper($sheetName), 'ALIQA')) {
+                $sheetSeller = 'Mitra Aliqa';
+            }
+
+            $currentPct = round((($sheetIndex) / $totalSheetCount) * 90) + 5;
+            \Illuminate\Support\Facades\Cache::put('sync_progress', [
+                'is_syncing' => true,
+                'current_sheet' => $sheetName,
+                'current_sheet_index' => $sheetIndex + 1,
+                'total_sheets' => $totalSheetCount,
+                'processed_rows' => $totalProcessed,
+                'inserted_rows' => $totalInserted,
+                'percentage' => $currentPct,
+                'message' => "Membaca sheet: {$sheetName} (Tab " . ($sheetIndex + 1) . "/{$totalSheetCount})...",
+                'updated_at' => now()->toDateTimeString(),
+            ], 3600);
+
+            $msg = "Membaca Google Sheet: {$sheetName} (Seller: {$sheetSeller})";
             dump($msg);
             echo $msg . "\n";
             Log::info("GoogleSheetsSyncService: Fetching CSV for sheet -> {$sheetName}");
@@ -81,7 +115,7 @@ class GoogleSheetsSyncService
                 $csvBody = (string)$response->body();
                 
                 // Parse CSV stream line by line
-                $metrics = $this->parseCsvContent($csvBody, $sheetName, $defaultSeller);
+                $metrics = $this->parseCsvContent($csvBody, $sheetName, $sheetSeller);
                 
                 if ($metrics['processed'] > 0) {
                     $totalProcessed += $metrics['processed'];
@@ -108,6 +142,18 @@ class GoogleSheetsSyncService
             'total_rows_processed' => $totalProcessed,
             'total_rows_inserted' => $totalInserted,
         ];
+
+        \Illuminate\Support\Facades\Cache::put('sync_progress', [
+            'is_syncing' => false,
+            'current_sheet' => 'Selesai',
+            'current_sheet_index' => count($processedSheets),
+            'total_sheets' => count($processedSheets),
+            'processed_rows' => $totalProcessed,
+            'inserted_rows' => $totalInserted,
+            'percentage' => 100,
+            'message' => "Sinkronisasi selesai! {$totalProcessed} baris data berhasil disinkronkan.",
+            'updated_at' => now()->toDateTimeString(),
+        ], 3600);
 
         dump("GoogleSheetsSyncService COMPLETED: ", $doneSummary);
         Log::info("GoogleSheetsSyncService finished: " . json_encode($doneSummary));
@@ -143,21 +189,20 @@ class GoogleSheetsSyncService
             Log::warning("GoogleSheetsSyncService: HTML sheet discovery failed: " . $e->getMessage());
         }
 
-        // Standard monthly sheet names fallback list (including suffixes)
-        $defaultMonthSheets = [
-            'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember',
-            'JANUARI', 'FEBRUARI', 'MARET', 'APRIL', 'MEI', 'JUNI', 'JULI', 'AGUSTUS', 'SEPTEMBER', 'OKTOBER', 'NOVEMBER', 'DESEMBER',
-            'JANUARI (ZAHERBA)', 'FEBRUARI (ZAHERBA)', 'MARET (ZAHERBA)', 'APRIL (ZAHERBA)', 'MEI (ZAHERBA)', 'JUNI (ZAHERBA)', 'JULI (ZAHERBA)', 'AGUSTUS (ZAHERBA)', 'SEPTEMBER (ZAHERBA)', 'OKTOBER (ZAHERBA)', 'NOVEMBER (ZAHERBA)', 'DESEMBER (ZAHERBA)',
-            'Sheet1', 'Sheet 1', 'Master Data'
-        ];
-
-        foreach ($defaultMonthSheets as $fallbackSheet) {
-            if (!in_array($fallbackSheet, $discovered)) {
-                $discovered[] = $fallbackSheet;
-            }
+        if (!empty($discovered)) {
+            return array_values(array_unique($discovered));
         }
 
-        return array_values(array_unique($discovered));
+        // Standard monthly sheet names fallback list (only if discovery returned nothing)
+        $defaultMonthSheets = [
+            'JANUARI (ZAHERBA)', 'FEBRUARI (ZAHERBA)', 'MARET (ZAHERBA)', 'APRIL (ZAHERBA)',
+            'MEI (ZAHERBA)', 'JUNI (ZAHERBA)', 'JULI (ZAHERBA)', 'AGUSTUS (ZAHERBA)',
+            'SEPTEMBER (ZAHERBA)', 'OKTOBER (ZAHERBA)', 'NOVEMBER (ZAHERBA)', 'DESEMBER (ZAHERBA)',
+            'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember',
+            'Sheet1', 'Master Data'
+        ];
+
+        return $defaultMonthSheets;
     }
 
     /**
@@ -223,6 +268,79 @@ class GoogleSheetsSyncService
         return [
             'processed' => $processedCount,
             'inserted' => $insertedCount,
+        ];
+    }
+
+    /**
+     * Auto-Update Back to Google Sheets (Reverse Sync):
+     * Sends updated NIPOS tracking status & keterangan back to Google Spreadsheet via Apps Script Webhook
+     *
+     * @param array $trackingItems Array of tracked resis with status_pos, keterangan, color_code, sla_days
+     * @return array Result metrics
+     */
+    public function reverseSyncNiposTracking(array $trackingItems, ?string $customWebhookUrl = null): array
+    {
+        if (empty($trackingItems)) {
+            return ['success' => false, 'message' => 'No tracking items provided'];
+        }
+
+        $savedUrl = SystemSetting::get('google_sheet_url') ?: SystemSetting::get('google_sheet_id');
+        $spreadsheetId = SystemSetting::extractSpreadsheetId($savedUrl) ?: '1wUqPnU1_QOq6WocHwpxAhjhScjlb_ZhhSy8I2WqGQKw';
+        $webhookUrl = $customWebhookUrl !== null ? $customWebhookUrl : (SystemSetting::get('google_sheet_webhook_url') ?: env('GOOGLE_SHEET_WEBHOOK_URL'));
+
+        $logMsg = "GoogleSheetsSyncService: Reverse Syncing " . count($trackingItems) . " NIPos tracking updates back to Google Sheet [{$spreadsheetId}]";
+        dump($logMsg);
+        Log::info($logMsg);
+
+        $webhookSuccess = false;
+        $responseBody = null;
+        $statusCode = null;
+
+        if (!empty($webhookUrl)) {
+            try {
+                $payload = [
+                    'action' => 'reverse_sync_nipos',
+                    'spreadsheet_id' => $spreadsheetId,
+                    'total_items' => count($trackingItems),
+                    'items' => array_values($trackingItems),
+                    'resis' => array_values(array_filter(array_column($trackingItems, 'resi'))),
+                    'updated_at' => now()->toDateTimeString(),
+                ];
+
+                $ch = curl_init($webhookUrl);
+                curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+                curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+                curl_setopt($ch, CURLOPT_POST, true);
+                curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
+                curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+                curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+                $body = curl_exec($ch);
+                $statusCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                curl_close($ch);
+
+                $responseBody = json_decode($body, true);
+                $webhookSuccess = ($statusCode === 200 && isset($responseBody['status']) && $responseBody['status'] === 'success');
+
+                Log::info("GoogleSheetsSyncService Reverse Sync Webhook: " . ($webhookSuccess ? 'SUCCESS' : "HTTP {$statusCode}"), [
+                    'items_count' => count($trackingItems),
+                    'response' => $responseBody ?: substr((string)$body, 0, 300),
+                ]);
+            } catch (Throwable $e) {
+                Log::warning("GoogleSheetsSyncService Reverse Sync exception: " . $e->getMessage());
+            }
+        } else {
+            Log::info("GoogleSheetsSyncService: Reverse Sync skipped - No Google Sheet Webhook URL configured.");
+        }
+
+        return [
+            'success' => true,
+            'webhook_sent' => !empty($webhookUrl),
+            'webhook_success' => $webhookSuccess,
+            'status_code' => $statusCode,
+            'spreadsheet_id' => $spreadsheetId,
+            'items_count' => count($trackingItems),
+            'timestamp' => now()->toDateTimeString(),
+            'response' => $responseBody,
         ];
     }
 
@@ -309,6 +427,65 @@ class GoogleSheetsSyncService
             'escalation_date' => $escalationDate,
             'timestamp' => now()->toDateTimeString(),
         ];
+    }
+
+    /**
+     * Synchronize active dashboard filter to Google Spreadsheet via Webhook (Two-Way Filter Sync)
+     */
+    public function syncFilter(?string $seller = 'ALL', ?string $month = 'ALL', ?string $color = null, ?string $search = null): array
+    {
+        $savedUrl = SystemSetting::get('google_sheet_url') ?: SystemSetting::get('google_sheet_id');
+        $spreadsheetId = SystemSetting::extractSpreadsheetId($savedUrl) ?: '1wUqPnU1_QOq6WocHwpxAhjhScjlb_ZhhSy8I2WqGQKw';
+        $webhookUrl = SystemSetting::get('google_sheet_webhook_url') ?: env('GOOGLE_SHEET_WEBHOOK_URL');
+
+        if (empty($webhookUrl)) {
+            return ['success' => false, 'message' => 'Google Sheet Webhook URL not configured'];
+        }
+
+        $cleanSeller = ($seller && $seller !== 'Semua Seller') ? $seller : 'ALL';
+        $cleanMonth = $month ?: 'ALL';
+        $cleanColor = $color ?: 'ALL';
+
+        $payload = [
+            'action' => 'apply_filter',
+            'spreadsheet_id' => $spreadsheetId,
+            'seller' => $cleanSeller,
+            'month' => $cleanMonth,
+            'color_code' => $cleanColor,
+            'status_color' => $cleanColor,
+            'search' => $search ?: '',
+            'updated_at' => now()->toDateTimeString(),
+        ];
+
+        try {
+            $ch = curl_init($webhookUrl);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+            curl_setopt($ch, CURLOPT_POST, true);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
+            curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 6);
+            $body = curl_exec($ch);
+            $statusCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            curl_close($ch);
+
+            $jsonRes = json_decode($body, true);
+            $success = ($statusCode === 200 && isset($jsonRes['status']) && $jsonRes['status'] === 'success');
+
+            Log::info("GoogleSheetsSyncService Webhook Filter Sync: " . ($success ? 'SUCCESS' : "HTTP {$statusCode}"), [
+                'payload' => $payload,
+                'response' => $jsonRes ?: substr((string)$body, 0, 200),
+            ]);
+
+            return [
+                'success' => $success,
+                'status_code' => $statusCode,
+                'response' => $jsonRes,
+            ];
+        } catch (Throwable $e) {
+            Log::warning("GoogleSheetsSyncService Webhook Filter Sync exception: " . $e->getMessage());
+            return ['success' => false, 'error' => $e->getMessage()];
+        }
     }
 
     /**

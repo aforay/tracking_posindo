@@ -480,7 +480,7 @@ class ShipmentsImport
     /**
      * Robust Date Parsing with Sheet Name Month Fallback
      */
-    protected function parseDateValue($val, ?string $sheetName = null): string
+    protected function parseDateValue($val, ?string $sheetName = null): ?string
     {
         if (!empty($val) && !in_array(strtoupper((string)$val), ['TANGGAL', 'TGL', 'TGL KIRIM', 'TANGGAL KIRIM'])) {
             try {
@@ -524,11 +524,11 @@ class ShipmentsImport
             }
         }
 
-        return date('Y-m-d');
+        return null;
     }
 
     /**
-     * Process 1,000 rows buffer batch with DB Transaction & Terminal Output
+     * Process 1,000 rows buffer batch with DB Transaction & Data Preservation
      * @return int Number of inserted/updated rows
      */
     protected function processBufferBatch(array $batchBuffer, array $resisInBuffer): int
@@ -537,64 +537,111 @@ class ShipmentsImport
             return 0;
         }
 
-        // 1. SMART FILTERING: Check database status before queueing for tracking
+        // 1. Fetch existing database records to preserve established statuses & manual CS updates
         $existingMap = OutgoingShipment::whereIn('no_resi', $resisInBuffer)
-            ->get(['no_resi', 'status_kategori'])
+            ->get()
             ->keyBy('no_resi');
 
-        $resisNeedingTracking = [];
+        $mergedBatch = [];
+        $now = now()->toDateTimeString();
 
         foreach ($batchBuffer as $data) {
             $resiKey = $data['no_resi'];
             $existing = $existingMap[$resiKey] ?? null;
 
-            if ($existing && in_array(strtoupper((string)$existing->status_kategori), ['SUKSES', 'RETUR'])) {
-                continue;
-            }
+            if ($existing) {
+                // PRESERVE established data for existing records:
+                $seller = (!empty($data['nama_seller']) && $data['nama_seller'] !== 'Aliqa') ? $data['nama_seller'] : ($existing->nama_seller ?: $data['nama_seller']);
+                $penerima = !empty($data['nama_penerima']) ? $data['nama_penerima'] : $existing->nama_penerima;
+                $noHp = !empty($data['no_hp']) ? $data['no_hp'] : $existing->no_hp;
+                $alamat = !empty($data['alamat']) ? $data['alamat'] : $existing->alamat;
+                $tanggalKirim = !empty($data['tanggal_kirim']) ? $data['tanggal_kirim'] : ($existing->tanggal_kirim ? (is_string($existing->tanggal_kirim) ? substr($existing->tanggal_kirim, 0, 10) : $existing->tanggal_kirim->format('Y-m-d')) : date('Y-m-d'));
 
-            if (in_array($data['status_kategori'], ['SUKSES', 'RETUR'])) {
-                continue;
-            }
+                // NIPos is Primary Source of Truth:
+                // If record has already been tracked via NIPos (last_tracked_at is set or status_pos exists), preserve NIPos status & keterangan
+                $hasNiposTracking = !empty($existing->last_tracked_at) || !empty($existing->status_pos);
+                if ($hasNiposTracking) {
+                    $statusPos = $existing->status_pos ?: ($data['status_pos'] ?: 'ON PROCESS');
+                    $keterangan = $existing->keterangan ?: ($data['keterangan'] ?: 'PROSES PENGIRIMAN POS');
+                    $statusKategori = $existing->status_kategori ?: ($data['status_kategori'] ?: 'IN_PROCESS');
+                    $slaDays = $existing->sla_days ?: $data['sla_days'];
+                } else {
+                    $statusPos = !empty($data['status_pos']) ? $data['status_pos'] : 'ON PROCESS';
+                    $keterangan = !empty($data['keterangan']) ? $data['keterangan'] : 'PROSES PENGIRIMAN POS';
+                    $statusKategori = !empty($data['status_kategori']) ? $data['status_kategori'] : 'IN_PROCESS';
+                    $slaDays = $data['sla_days'];
+                }
 
-            $resisNeedingTracking[] = $resiKey;
+                // Always preserve existing CS manual overrides, colors, and tracking timestamps
+                $colorCode = $existing->color_code ?: ($statusKategori === 'SUKSES' ? 'BIRU' : ($statusKategori === 'RETUR' ? 'ORANGE' : ($statusKategori === 'FOLLOW_UP' ? 'KUNING' : 'PUTIH')));
+                $fuPosDate = $existing->fu_pos_date;
+                $noted = $existing->noted;
+                $lastTrackedAt = $existing->last_tracked_at;
+
+                $mergedBatch[] = [
+                    'nama_seller' => $seller,
+                    'no_resi' => $resiKey,
+                    'nama_penerima' => $penerima,
+                    'no_hp' => $noHp,
+                    'alamat' => $alamat,
+                    'tanggal_kirim' => $tanggalKirim,
+                    'status_pos' => $statusPos ?: 'ON PROCESS',
+                    'keterangan' => $keterangan ?: 'PROSES PENGIRIMAN POS',
+                    'status_kategori' => $statusKategori ?: 'IN_PROCESS',
+                    'color_code' => $colorCode,
+                    'fu_pos_date' => $fuPosDate,
+                    'noted' => $noted,
+                    'sla_days' => $slaDays,
+                    'last_tracked_at' => $lastTrackedAt,
+                    'created_at' => $existing->created_at ? (is_string($existing->created_at) ? $existing->created_at : $existing->created_at->toDateTimeString()) : $now,
+                    'updated_at' => $now,
+                ];
+            } else {
+                // NEW SHIPMENT: Use defaults
+                $mergedBatch[] = [
+                    'nama_seller' => $data['nama_seller'] ?: $this->defaultSeller,
+                    'no_resi' => $resiKey,
+                    'nama_penerima' => $data['nama_penerima'],
+                    'no_hp' => $data['no_hp'],
+                    'alamat' => $data['alamat'],
+                    'tanggal_kirim' => $data['tanggal_kirim'] ?: date('Y-m-d'),
+                    'status_pos' => $data['status_pos'] ?: 'ON PROCESS',
+                    'keterangan' => $data['keterangan'] ?: 'PROSES PENGIRIMAN POS',
+                    'status_kategori' => $data['status_kategori'] ?: 'IN_PROCESS',
+                    'color_code' => ($data['status_kategori'] === 'SUKSES' ? 'BIRU' : ($data['status_kategori'] === 'RETUR' ? 'ORANGE' : null)),
+                    'fu_pos_date' => null,
+                    'noted' => null,
+                    'sla_days' => $data['sla_days'],
+                    'last_tracked_at' => null,
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ];
+            }
         }
 
         // 2. DB Transaction & Upsert per 1,000 items (DB::table)
-        $insertedCount = count($batchBuffer);
+        $insertedCount = count($mergedBatch);
 
         DB::beginTransaction();
         try {
-            foreach (array_chunk($batchBuffer, 1000) as $chunk) {
+            foreach (array_chunk($mergedBatch, 1000) as $chunk) {
                 DB::table('outgoing_shipments')->upsert(
                     $chunk,
                     ['no_resi'],
-                    ['nama_seller', 'nama_penerima', 'no_hp', 'alamat', 'tanggal_kirim', 'status_pos', 'keterangan', 'status_kategori', 'sla_days', 'updated_at']
+                    ['nama_seller', 'nama_penerima', 'no_hp', 'alamat', 'tanggal_kirim', 'status_pos', 'keterangan', 'status_kategori', 'color_code', 'fu_pos_date', 'noted', 'sla_days', 'last_tracked_at', 'updated_at']
                 );
             }
             DB::commit();
 
-            dump("Inserted {$insertedCount} rows to DB");
-            echo "Inserted {$insertedCount} rows to DB\n";
-            Log::info("ShipmentsImport: Inserted {$insertedCount} rows to DB");
+            dump("Inserted/Synced {$insertedCount} rows to DB");
+            echo "Inserted/Synced {$insertedCount} rows to DB\n";
+            Log::info("ShipmentsImport: Inserted/Synced {$insertedCount} rows to DB");
         } catch (Throwable $e) {
             DB::rollBack();
             dump("ERROR IMPORT: " . $e->getMessage());
             echo "ERROR IMPORT: " . $e->getMessage() . "\n";
             Log::error("ERROR IMPORT: " . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
             return 0;
-        }
-
-        // 3. Dispatch batch to ProcessNiposTrackingJob for asynchronous tracking (500 resi/batch)
-        if (!empty($resisNeedingTracking)) {
-            $shipmentIds = OutgoingShipment::whereIn('no_resi', $resisNeedingTracking)
-                ->pluck('id')
-                ->toArray();
-
-            if (!empty($shipmentIds)) {
-                foreach (array_chunk($shipmentIds, 500) as $batchIds) {
-                    ProcessNiposTrackingJob::dispatch($batchIds);
-                }
-            }
         }
 
         return $insertedCount;

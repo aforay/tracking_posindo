@@ -73,22 +73,30 @@ class TrackingBotService
                         $res = $responses[$resi] ?? null;
                         if ($res && $res->successful() && !empty(trim((string)$res->body()))) {
                             $rawBody = (string)$res->body();
-                            $results[$resi] = $this->parseStatusResult(strip_tags($rawBody), $rawBody, $resi);
+                            $parsedResult = $this->parseStatusResult(strip_tags($rawBody), $rawBody, $resi);
+                            if ($parsedResult !== null) {
+                                $results[$resi] = $parsedResult;
+                            }
                         } else {
-                            $results[$resi] = $this->trackSingleResiDirect($url, $resi);
+                            $singleResult = $this->trackSingleResiDirect($url, $resi);
+                            if ($singleResult !== null) {
+                                $results[$resi] = $singleResult;
+                            }
                         }
                     } catch (Throwable $e) {
-                        Log::warning("TrackingBotService: Resi {$resi} pool error, using single fallback: " . $e->getMessage());
-                        $results[$resi] = $this->generateSimulatedResult($resi, "Pool fallback: " . $e->getMessage());
+                        Log::warning("TrackingBotService: Resi {$resi} pool error: " . $e->getMessage());
                     }
                 }
             } catch (Throwable $e) {
                 Log::warning("TrackingBotService: Http pool batch failed: " . $e->getMessage() . " - fallback to individual GETs.");
                 foreach ($chunk as $resi) {
                     try {
-                        $results[$resi] = $this->trackSingleResiDirect($url, $resi);
+                        $singleResult = $this->trackSingleResiDirect($url, $resi);
+                        if ($singleResult !== null) {
+                            $results[$resi] = $singleResult;
+                        }
                     } catch (Throwable $ex) {
-                        $results[$resi] = $this->generateSimulatedResult($resi, $ex->getMessage());
+                        Log::warning("TrackingBotService: Individual track failed for {$resi}: " . $ex->getMessage());
                     }
                 }
             }
@@ -100,7 +108,7 @@ class TrackingBotService
     /**
      * Direct HTTP single resi tracker (No virtual browser)
      */
-    public function trackSingleResiDirect(string $url, string $resi): array
+    public function trackSingleResiDirect(string $url, string $resi): ?array
     {
         try {
             $response = Http::timeout(10)
@@ -130,14 +138,14 @@ class TrackingBotService
             }
 
             $rawBody = (string)$response->body();
-            if (empty(trim($rawBody))) {
-                return $this->generateSimulatedResult($resi);
+            if (empty(trim($rawBody)) || $response->failed()) {
+                return null;
             }
 
             return $this->parseStatusResult(strip_tags($rawBody), $rawBody, $resi);
         } catch (Throwable $e) {
             Log::warning("Direct HTTP error tracking resi {$resi}: " . $e->getMessage());
-            return $this->generateSimulatedResult($resi, $e->getMessage());
+            return null;
         }
     }
 

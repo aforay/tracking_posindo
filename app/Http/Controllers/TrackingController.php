@@ -17,31 +17,31 @@ class TrackingController extends Controller
 {
     protected TrackingBotService $botService;
 
-    // Standard color palette matching Pos Indonesia follow-up specifications
+    // Standard color palette matching Pos Indonesia Google Sheets specifications
     public const COLOR_PALETTE = [
         'BIRU' => [
             'name' => 'BIRU',
             'label' => 'PAKET SUKSES',
-            'argb_fill' => 'FFBAE6FD', // Sky / Cyan
-            'argb_font' => 'FF0369A1',
-            'css_bg' => '#BAE6FD',
-            'css_class' => 'bg-sky-200 text-sky-950 border-sky-300',
+            'argb_fill' => 'FF46BDC6', // Cyan-Teal
+            'argb_font' => 'FF083344',
+            'css_bg' => '#46BDC6',
+            'css_class' => 'bg-[#46BDC6] text-cyan-950 border-cyan-400',
         ],
         'ORANGE' => [
             'name' => 'ORANGE',
             'label' => 'PAKET RETUR',
-            'argb_fill' => 'FFFDE68A', // Orange / Amber
-            'argb_font' => 'FF92400E',
-            'css_bg' => '#FED7AA',
-            'css_class' => 'bg-orange-200 text-orange-950 border-orange-300',
+            'argb_fill' => 'FFFBBC04', // Orange / Amber
+            'argb_font' => 'FF451A03',
+            'css_bg' => '#FBBC04',
+            'css_class' => 'bg-[#FBBC04] text-amber-950 border-amber-400',
         ],
         'KUNING' => [
             'name' => 'KUNING',
             'label' => 'SUDAH DI FU',
-            'argb_fill' => 'FFFEF08A', // Yellow
-            'argb_font' => 'FF854D0E',
-            'css_bg' => '#FEF08A',
-            'css_class' => 'bg-yellow-200 text-yellow-950 border-yellow-300',
+            'argb_fill' => 'FFFFFF00', // Bright Yellow
+            'argb_font' => 'FF422006',
+            'css_bg' => '#FFFF00',
+            'css_class' => 'bg-[#FFFF00] text-yellow-950 border-yellow-400',
         ],
         'PUTIH' => [
             'name' => 'PUTIH',
@@ -54,18 +54,18 @@ class TrackingController extends Controller
         'HIJAU' => [
             'name' => 'HIJAU',
             'label' => 'FU 2 KALI',
-            'argb_fill' => 'FFA7F3D0', // Green
-            'argb_font' => 'FF065F46',
-            'css_bg' => '#A7F3D0',
-            'css_class' => 'bg-emerald-200 text-emerald-950 border-emerald-300',
+            'argb_fill' => 'FF93C47D', // Soft Green
+            'argb_font' => 'FF14532D',
+            'css_bg' => '#93C47D',
+            'css_class' => 'bg-[#93C47D] text-emerald-950 border-emerald-400',
         ],
         'BIRU_TUA' => [
             'name' => 'BIRU TUA',
             'label' => 'FU POS',
-            'argb_fill' => 'FF1E40AF', // Navy Blue
+            'argb_fill' => 'FF1C4587', // Navy Blue
             'argb_font' => 'FFFFFFFF',
-            'css_bg' => '#1E40AF',
-            'css_class' => 'bg-blue-900 text-white border-blue-950',
+            'css_bg' => '#1C4587',
+            'css_class' => 'bg-[#1C4587] text-white border-blue-950',
         ],
     ];
 
@@ -121,8 +121,8 @@ class TrackingController extends Controller
             'needs_follow_up' => (clone $query)->where('needs_follow_up', true)->count(),
         ];
 
-        // 50 per page pagination to prevent memory exhaustion
-        $paginatedShipments = $query->orderBy('id', 'desc')->paginate(50)->withQueryString();
+        // 50 per page pagination to prevent memory exhaustion (Ordered ascending from row 1 downwards)
+        $paginatedShipments = $query->orderBy('id', 'asc')->paginate(50)->withQueryString();
 
         $formattedShipmentsData = collect($paginatedShipments->items())->map(function ($s) {
             return [

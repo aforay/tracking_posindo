@@ -67,6 +67,8 @@ class ProcessNiposTrackingJob implements ShouldQueue
             }
 
             $updatedCount = 0;
+            $syncPayload = [];
+
             foreach ($shipments as $shipment) {
                 try {
                     $resi = $shipment->no_resi;
@@ -81,10 +83,25 @@ class ProcessNiposTrackingJob implements ShouldQueue
                             $shipment->status_kategori = $res['status_kategori'] ?? ($res['kategori'] ?? $shipment->status_kategori);
                         }
 
+                        if ($shipment->status_kategori === 'SUKSES' && (empty($shipment->color_code) || $shipment->color_code === 'PUTIH')) {
+                            $shipment->color_code = 'BIRU';
+                        } elseif ($shipment->status_kategori === 'RETUR' && (empty($shipment->color_code) || $shipment->color_code === 'PUTIH')) {
+                            $shipment->color_code = 'ORANGE';
+                        }
+
                         $shipment->sla_days = $res['sla_days'] ?? ($res['sla'] ?? $shipment->sla_days);
                         $shipment->last_tracked_at = now();
                         $shipment->save();
                         $updatedCount++;
+
+                        $syncPayload[] = [
+                            'resi' => $shipment->no_resi,
+                            'status_pos' => $shipment->status_pos,
+                            'keterangan' => $shipment->keterangan,
+                            'status_kategori' => $shipment->status_kategori,
+                            'color_code' => $shipment->color_code ?: 'PUTIH',
+                            'sla_days' => $shipment->sla_days,
+                        ];
                     }
                 } catch (Throwable $e) {
                     // Log individual shipment error and skip to next resi without failing the job
@@ -94,6 +111,13 @@ class ProcessNiposTrackingJob implements ShouldQueue
             }
 
             Log::info("ProcessNiposTrackingJob finished updating {$updatedCount} of " . count($shipments) . " shipments.");
+
+            // Auto-Update Back to Google Sheets (Reverse Sync via Background Queue Worker)
+            if (!empty($syncPayload)) {
+                Log::info("ProcessNiposTrackingJob: Dispatching ReverseSyncGoogleSheetsJob for " . count($syncPayload) . " updated shipments.");
+                \App\Jobs\ReverseSyncGoogleSheetsJob::dispatch($syncPayload);
+                event(new \App\Events\NiposTrackingUpdatedEvent($syncPayload));
+            }
         } catch (Throwable $e) {
             Log::error("ProcessNiposTrackingJob global catch: " . $e->getMessage());
         }

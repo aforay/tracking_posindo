@@ -1,30 +1,33 @@
 /**
- * POSINDO TRACKING TWO-WAY SYNC GOOGLE APPS SCRIPT WEBHOOK
+ * POSINDO TRACKING TWO-WAY SYNC GOOGLE APPS SCRIPT WEBHOOK & EXTENSION
  * 
- * Petunjuk Pemasangan:
- * 1. Buka Google Spreadsheet Anda.
- * 2. Klik menu "Extensions" (Ekstensi) -> "Apps Script".
- * 3. Hapus seluruh kode bawaan, lalu Tempelkan (Paste) kode di bawah ini.
- * 4. Klik tombol "Deploy" (Terapkan) -> "New deployment" (Terapkan baru).
- * 5. Pilih tipe: "Web app".
- * 6. Execute as: "Me" (Email Anda).
- * 7. Who has access: "Anyone" (Siapa saja).
- * 8. Klik "Deploy", lalu Berikan Izin (Grant Access).
- * 9. Salin "Web App URL" yang dihasilkan.
- * 10. Tempelkan URL tersebut di file `.env` Laravel:
- *     GOOGLE_SHEET_WEBHOOK_URL="https://script.google.com/macros/s/..."
- *     atau melalui Modal "Sync Google Sheets" di UI Admin.
+ * Khusus Mewarnai Rentang Kolom C sampai Kolom J (Kolom 3 s/d 10).
  */
 
-// Color Palette Definition matching Pos Indonesia Specification
 const COLOR_HEX_MAP = {
-  'BIRU': '#93C5FD',      // Light Blue (Sukses / Delivered)
-  'ORANGE': '#FDBA74',    // Orange (Retur / Return)
-  'KUNING': '#FEF08A',    // Yellow (Sudah di FU / Follow-Up)
-  'HIJAU': '#86EFAC',     // Green (FU 2 Kali)
-  'BIRU_TUA': '#60A5FA',  // Dark Blue (FU Pos)
-  'PUTIH': '#FFFFFF'      // White (On Process / In Transit)
+  'BIRU': '#32B8C8',      // Cyan-Teal (Paket Sukses)
+  'ORANGE': '#FFB719',    // Orange/Amber (Paket Retur)
+  'KUNING': '#FFFF00',    // Bright Yellow (Sudah di FU)
+  'PUTIH': '#FFFFFF',     // White (Blm di FU / Reset)
+  'HIJAU': '#93C47D',     // Soft Green (FU 2 Kali)
+  'BIRU_TUA': '#1F4E79'   // Dark Navy Blue (FU POS)
 };
+
+/**
+ * MENU EKSTENSI DI SPREADSHEET
+ */
+function onOpen() {
+  const ui = SpreadsheetApp.getUi();
+  ui.createMenu('📦 Posindo Tools')
+    .addItem('Warnai Baris Terpilih - BIRU (Sukses)', 'colorSelectedBiru')
+    .addItem('Warnai Baris Terpilih - ORANGE (Retur)', 'colorSelectedOrange')
+    .addItem('Warnai Baris Terpilih - KUNING (FU 1)', 'colorSelectedKuning')
+    .addItem('Warnai Baris Terpilih - HIJAU (FU 2)', 'colorSelectedHijau')
+    .addItem('Warnai Baris Terpilih - BIRU TUA (FU POS)', 'colorSelectedBiruTua')
+    .addSeparator()
+    .addItem('Reset Warna (PUTIH)', 'colorSelectedPutih')
+    .addToUi();
+}
 
 function doPost(e) {
   try {
@@ -36,6 +39,229 @@ function doPost(e) {
     }
 
     const data = JSON.parse(e.postData.contents);
+    const action = data.action || 'update_status';
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheets = ss.getSheets();
+
+    // ACTION 1: APPLY FILTER TO GOOGLE SPREADSHEET
+    if (action === 'apply_filter' || action === 'filter') {
+      const targetSeller = String(data.seller || 'ALL').trim().toUpperCase();
+      const targetMonth = String(data.month || 'ALL').trim().toUpperCase();
+      const targetColor = String(data.color_code || data.status_color || 'ALL').trim().toUpperCase();
+      const targetSearch = String(data.search || '').trim().toUpperCase();
+
+      const isReset = (targetSeller === 'ALL' || targetSeller === 'SEMUA SELLER') && targetColor === 'ALL' && !targetSearch;
+      let totalFilteredRows = 0;
+
+      sheets.forEach(function(sheet) {
+        const lastRow = sheet.getLastRow();
+        if (lastRow < 2) return;
+
+        const sheetTitle = sheet.getName().toUpperCase();
+        if (targetMonth !== 'ALL' && sheetTitle.indexOf(targetMonth) !== -1) {
+          ss.setActiveSheet(sheet);
+        }
+
+        if (isReset) {
+          sheet.showRows(1, lastRow);
+          return;
+        }
+
+        const dataRange = sheet.getDataRange();
+        const values = dataRange.getValues();
+        const backgrounds = dataRange.getBackgrounds();
+
+        const headers = values[0].map(function(h) {
+          return String(h).trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+        });
+
+        let sellerCol = -1;
+        let resiCol = -1;
+        let statusCol = -1;
+
+        headers.forEach(function(h, idx) {
+          if (['seller', 'mitra', 'namaseller', 'cs', 'namacs'].indexOf(h) !== -1 && sellerCol === -1) sellerCol = idx;
+          if (['resi', 'noresi', 'barcode', 'awb'].indexOf(h) !== -1 && resiCol === -1) resiCol = idx;
+          if (['trackingpos', 'statuspos', 'status'].indexOf(h) !== -1 && statusCol === -1) statusCol = idx;
+        });
+
+        if (sellerCol === -1) sellerCol = 6;
+        if (resiCol === -1) resiCol = 3;
+        if (statusCol === -1) statusCol = 11;
+
+        const targetHex = COLOR_HEX_MAP[targetColor] || null;
+
+        for (let r = 1; r < values.length; r++) {
+          const rowNum = r + 1;
+          let match = true;
+
+          if (targetSeller !== 'ALL' && targetSeller !== 'SEMUA SELLER') {
+            const cleanTarget = targetSeller.replace('MITRA ', '');
+            const rowSeller = String(values[r][sellerCol] || '').toUpperCase();
+            if (rowSeller.indexOf(cleanTarget) === -1 && sheetTitle.indexOf(cleanTarget) === -1) {
+              match = false;
+            }
+          }
+
+          if (match && targetColor !== 'ALL') {
+            const rowBg = String(backgrounds[r][2] || backgrounds[r][0] || '').toUpperCase(); // Cek warna Kolom C
+            const rowStatus = String(values[r][statusCol] || '').toUpperCase();
+
+            let colorMatch = false;
+            if (targetHex && rowBg === targetHex.toUpperCase()) {
+              colorMatch = true;
+            } else if (targetColor === 'BIRU' && (rowStatus.indexOf('DELIVERED') !== -1 && rowStatus.indexOf('RETURN') === -1)) {
+              colorMatch = true;
+            } else if (targetColor === 'ORANGE' && (rowStatus.indexOf('RETURN') !== -1 || rowStatus.indexOf('RETUR') !== -1)) {
+              colorMatch = true;
+            } else if (targetColor === 'KUNING' && (rowStatus.indexOf('FOLLOW UP') !== -1 || rowStatus.indexOf('GAGAL') !== -1)) {
+              colorMatch = true;
+            } else if (targetColor === 'PUTIH' && (rowStatus.indexOf('ON PROCESS') !== -1 || rowStatus.indexOf('RUNSHEET') !== -1 || !rowStatus)) {
+              colorMatch = true;
+            } else if (targetColor === 'HIJAU' || targetColor === 'BIRU_TUA') {
+              colorMatch = (rowBg === targetHex.toUpperCase());
+            }
+
+            if (!colorMatch) match = false;
+          }
+
+          if (match && targetSearch) {
+            const rowText = values[r].join(' ').toUpperCase();
+            if (rowText.indexOf(targetSearch) === -1) {
+              match = false;
+            }
+          }
+
+          if (match) {
+            sheet.showRows(rowNum, 1);
+            totalFilteredRows++;
+          } else {
+            sheet.hideRows(rowNum, 1);
+          }
+        }
+      });
+
+      return ContentService.createTextOutput(JSON.stringify({
+        status: 'success',
+        message: `Filter applied: Seller [${targetSeller}], Color [${targetColor}]`,
+        matched_rows: totalFilteredRows
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // ACTION 2: REVERSE SYNC NIPOS (AUTO-UPDATE STATUS NIPOS & KETERANGAN TO GOOGLE SHEETS)
+    if (action === 'reverse_sync_nipos' || action === 'sync_nipos_status' || action === 'reverse_sync') {
+      const items = Array.isArray(data.items) ? data.items : [];
+      const itemMap = {};
+
+      items.forEach(function(it) {
+        if (it && it.resi) {
+          itemMap[String(it.resi).trim().toUpperCase()] = it;
+        }
+      });
+
+      if (Object.keys(itemMap).length === 0 && data.resis) {
+        // Fallback for flat resis list
+        (data.resis || []).forEach(function(r) {
+          if (r) {
+            itemMap[String(r).trim().toUpperCase()] = {
+              resi: r,
+              status_pos: data.status_pos || data.status || 'DELIVERED',
+              keterangan: data.keterangan || 'DITERIMA YANG BERSANGKUTAN',
+              color_code: data.color_code || data.status_color || 'BIRU',
+              sla_days: data.sla_days || data.sla || 2
+            };
+          }
+        });
+      }
+
+      if (Object.keys(itemMap).length === 0) {
+        return ContentService.createTextOutput(JSON.stringify({
+          status: 'error',
+          message: 'No reverse sync items provided'
+        })).setMimeType(ContentService.MimeType.JSON);
+      }
+
+      let updatedCount = 0;
+      const updatedResis = [];
+
+      sheets.forEach(function(sheet) {
+        const dataRange = sheet.getDataRange();
+        const values = dataRange.getValues();
+        if (values.length < 2) return;
+
+        const headers = values[0].map(function(h) {
+          return String(h).trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+        });
+
+        let resiCol = -1;
+        let trackingPosCol = -1;
+        let keteranganCol = -1;
+        let slaCol = -1;
+
+        headers.forEach(function(h, idx) {
+          if (['resi', 'noresi', 'barcode', 'awb', 'barcodeitem'].indexOf(h) !== -1 && resiCol === -1) {
+            resiCol = idx;
+          } else if (['trackingpos', 'statuspos', 'status', 'nipos', 'statusnipos', 'statusniposl', 'statusakhir'].indexOf(h) !== -1 && trackingPosCol === -1) {
+            trackingPosCol = idx;
+          } else if (['keterangan', 'note', 'alasan', 'penerimaketerangank', 'penerima', 'penerimaketerangan'].indexOf(h) !== -1 && keteranganCol === -1) {
+            keteranganCol = idx;
+          } else if (['sla', 'slamasatahan', 'sladays'].indexOf(h) !== -1 && slaCol === -1) {
+            slaCol = idx;
+          }
+        });
+
+        if (resiCol === -1) resiCol = 3;       // Default Kolom D
+        if (keteranganCol === -1) keteranganCol = 10; // Default Kolom K
+        if (trackingPosCol === -1) trackingPosCol = 11; // Default Kolom L
+        if (slaCol === -1) slaCol = 12;         // Default Kolom M
+
+        for (let r = 1; r < values.length; r++) {
+          const cellResi = String(values[r][resiCol] || '').trim().toUpperCase();
+          if (cellResi && itemMap[cellResi]) {
+            const item = itemMap[cellResi];
+            const rowNumber = r + 1;
+
+            const colorCode = String(item.color_code || item.status_color || 'PUTIH').toUpperCase();
+            const hexColor = COLOR_HEX_MAP[colorCode] || '#FFFFFF';
+
+            // 1. Mewarnai Kolom C sampai J (Kolom 3 sebanyak 8 kolom)
+            sheet.getRange(rowNumber, 3, 1, 8).setBackground(hexColor);
+
+            // 2. Update Sel Kolom 'Status NIPOS' (Kolom L / Tracking POS)
+            const statusPos = item.status_pos || item.status_nipos || item.status;
+            if (trackingPosCol >= 0 && statusPos) {
+              sheet.getRange(rowNumber, trackingPosCol + 1).setValue(String(statusPos));
+            }
+
+            // 3. Update Sel Kolom 'Keterangan' (Kolom K / Penerima & Keterangan)
+            const keterangan = item.keterangan || item.note;
+            if (keteranganCol >= 0 && keterangan) {
+              sheet.getRange(rowNumber, keteranganCol + 1).setValue(String(keterangan));
+            }
+
+            // 4. Update Sel Kolom 'SLA' (Kolom M) jika tersedia
+            const slaVal = item.sla_days || item.sla;
+            if (slaCol >= 0 && slaVal) {
+              sheet.getRange(rowNumber, slaCol + 1).setValue(slaVal);
+            }
+
+            updatedCount++;
+            updatedResis.push(cellResi);
+          }
+        }
+      });
+
+      return ContentService.createTextOutput(JSON.stringify({
+        status: 'success',
+        message: `Reverse Sync success: Updated ${updatedCount} resis in Google Sheet`,
+        action: 'reverse_sync_nipos',
+        updated_count: updatedCount,
+        updated_resis: updatedResis,
+        timestamp: new Date().toISOString()
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // ACTION 3: UPDATE RESI STATUS & CS FOLLOW-UP (TWO-WAY SYNC)
     const resiList = data.resis || data.resi_list || (data.no_resi ? [data.no_resi] : []);
     const statusColor = (data.status_color || data.color_code || 'PUTIH').toUpperCase();
     const statusLabel = data.status_label || statusColor;
@@ -45,36 +271,28 @@ function doPost(e) {
     if (resiList.length === 0) {
       return ContentService.createTextOutput(JSON.stringify({
         status: 'error',
-        message: 'No resi provided in resis/resi_list array'
+        message: 'No resi provided'
       })).setMimeType(ContentService.MimeType.JSON);
     }
 
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const sheets = ss.getSheets();
     const hexColor = COLOR_HEX_MAP[statusColor] || '#FFFFFF';
-
     let updatedCount = 0;
     const updatedResis = [];
-
-    // Convert resi list to uppercase string set for fast matching
     const targetResiMap = {};
     resiList.forEach(function(r) {
-      if (r) {
-        targetResiMap[String(r).trim().toUpperCase()] = true;
-      }
+      if (r) targetResiMap[String(r).trim().toUpperCase()] = true;
     });
 
-    // Iterate across all sheets (Januari - Agustus, Master, etc.)
     sheets.forEach(function(sheet) {
       const dataRange = sheet.getDataRange();
       const values = dataRange.getValues();
 
       if (values.length < 2) return;
 
-      // Find column indexes dynamically from header row
       const headers = values[0].map(function(h) {
         return String(h).trim().toLowerCase().replace(/[^a-z0-9]/g, '');
       });
+
       let resiCol = -1;
       let trackingPosCol = -1;
       let keteranganCol = -1;
@@ -83,41 +301,35 @@ function doPost(e) {
       headers.forEach(function(h, idx) {
         if (['resi', 'noresi', 'barcode', 'awb', 'barcodeitem'].indexOf(h) !== -1 && resiCol === -1) {
           resiCol = idx;
-        } else if (['trackingpos', 'statuspos', 'status', 'nipos'].indexOf(h) !== -1 && trackingPosCol === -1) {
+        } else if (['trackingpos', 'statuspos', 'status', 'nipos', 'statusnipos', 'statusniposl', 'statusakhir'].indexOf(h) !== -1 && trackingPosCol === -1) {
           trackingPosCol = idx;
-        } else if (['keterangan', 'note', 'alasan', 'penerimaketerangank'].indexOf(h) !== -1 && keteranganCol === -1) {
+        } else if (['keterangan', 'note', 'alasan', 'penerimaketerangank', 'penerima', 'penerimaketerangan'].indexOf(h) !== -1 && keteranganCol === -1) {
           keteranganCol = idx;
         } else if (['fubycs', 'fuposdate', 'tglfu', 'escalationdate'].indexOf(h) !== -1 && fuPosDateCol === -1) {
           fuPosDateCol = idx;
         }
       });
 
-      // Default fallback indexes if header not found
-      if (resiCol === -1) resiCol = 4; // Column E
-      if (trackingPosCol === -1) trackingPosCol = 11; // Column L
-      if (keteranganCol === -1) keteranganCol = 10; // Column K
+      if (resiCol === -1) resiCol = 3; // Kolom D (Resi)
+      if (keteranganCol === -1) keteranganCol = 10; // Kolom K (Keterangan)
+      if (trackingPosCol === -1) trackingPosCol = 11; // Kolom L (Tracking POS)
 
-      // Scan rows in this sheet
       for (let r = 1; r < values.length; r++) {
         const cellResi = String(values[r][resiCol] || '').trim().toUpperCase();
         if (cellResi && targetResiMap[cellResi]) {
-          const rowNumber = r + 1; // 1-indexed row number in Google Sheets
-          const rangeToColor = sheet.getRange(rowNumber, 1, 1, values[r].length);
+          const rowNumber = r + 1;
 
-          // 1. Update Background Color of Row
-          rangeToColor.setBackground(hexColor);
+          // HANYA MEWARNAI KOLOM C SAMPAI J (Kolom 3 sebanyak 8 kolom)
+          sheet.getRange(rowNumber, 3, 1, 8).setBackground(hexColor);
 
-          // 2. Update Status Text in trackingPosCol
           if (trackingPosCol >= 0) {
             sheet.getRange(rowNumber, trackingPosCol + 1).setValue(statusLabel);
           }
 
-          // 3. Update Note in keteranganCol if note provided
           if (keteranganCol >= 0 && note) {
             sheet.getRange(rowNumber, keteranganCol + 1).setValue(note);
           }
 
-          // 4. Update Escalation Date if provided
           if (fuPosDateCol >= 0 && escalationDate) {
             sheet.getRange(rowNumber, fuPosDateCol + 1).setValue(escalationDate);
           }
@@ -130,7 +342,7 @@ function doPost(e) {
 
     return ContentService.createTextOutput(JSON.stringify({
       status: 'success',
-      message: `Successfully updated ${updatedCount} resis to ${statusColor}`,
+      message: `Updated ${updatedCount} resis to ${statusColor}`,
       updated_count: updatedCount,
       updated_resis: updatedResis,
       color_code: statusColor,
@@ -148,6 +360,33 @@ function doPost(e) {
 function doGet(e) {
   return ContentService.createTextOutput(JSON.stringify({
     status: 'online',
-    message: 'Posindo Two-Way Sync Apps Script Webhook Endpoint is Running active!'
+    message: 'Posindo Two-Way Sync Running'
   })).setMimeType(ContentService.MimeType.JSON);
 }
+
+/**
+ * UTILITY PADA MENU EXTENSIONS
+ */
+function applyColorToSelection(colorHex) {
+  const sheet = SpreadsheetApp.getActiveSheet();
+  const range = sheet.getActiveRange();
+  if (!range) return;
+
+  const startRow = range.getRow();
+  const numRows = range.getNumRows();
+
+  for (let i = 0; i < numRows; i++) {
+    const rowNum = startRow + i;
+    if (rowNum > 1) {
+      // Mewarnai dari Kolom C (3) sampai J (8 kolom ke kanan)
+      sheet.getRange(rowNum, 3, 1, 8).setBackground(colorHex);
+    }
+  }
+}
+
+function colorSelectedBiru() { applyColorToSelection(COLOR_HEX_MAP['BIRU']); }
+function colorSelectedOrange() { applyColorToSelection(COLOR_HEX_MAP['ORANGE']); }
+function colorSelectedKuning() { applyColorToSelection(COLOR_HEX_MAP['KUNING']); }
+function colorSelectedHijau() { applyColorToSelection(COLOR_HEX_MAP['HIJAU']); }
+function colorSelectedBiruTua() { applyColorToSelection(COLOR_HEX_MAP['BIRU_TUA']); }
+function colorSelectedPutih() { applyColorToSelection(COLOR_HEX_MAP['PUTIH']); }

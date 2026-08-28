@@ -51,12 +51,12 @@ export const FU_META: Record<
   FuStatus,
   { label: string; bg: string; fg: string; short: string }
 > = {
-  PUTIH: { label: "BLM DI FU", bg: "#F3F4F6", fg: "#374151", short: "PUTIH" },
-  BIRU: { label: "PAKET SUKSES", bg: "#BAE6FD", fg: "#0369A1", short: "BIRU" },
-  ORANGE: { label: "PAKET RETUR", bg: "#FED7AA", fg: "#C2410C", short: "ORANGE" },
-  KUNING: { label: "SUDAH DI FU", bg: "#FEF08A", fg: "#854D0E", short: "KUNING" },
-  HIJAU: { label: "FU 2 KALI", bg: "#A7F3D0", fg: "#047857", short: "HIJAU" },
-  BIRU_TUA: { label: "FU POS", bg: "#1E40AF", fg: "#FFFFFF", short: "BIRU TUA" },
+  PUTIH: { label: "BLM DI FU", bg: "#FFFFFF", fg: "#1E293B", short: "PUTIH" },
+  BIRU: { label: "PAKET SUKSES", bg: "#46BDC6", fg: "#083344", short: "BIRU" },
+  ORANGE: { label: "PAKET RETUR", bg: "#FBBC04", fg: "#451A03", short: "ORANGE" },
+  KUNING: { label: "SUDAH DI FU", bg: "#FFFF00", fg: "#422006", short: "KUNING" },
+  HIJAU: { label: "FU 2 KALI", bg: "#93C47D", fg: "#14532D", short: "HIJAU" },
+  BIRU_TUA: { label: "FU POS", bg: "#1C4587", fg: "#FFFFFF", short: "BIRU TUA" },
 };
 
 export const FU_ORDER: FuStatus[] = ["BIRU", "ORANGE", "KUNING", "PUTIH", "HIJAU", "BIRU_TUA"];

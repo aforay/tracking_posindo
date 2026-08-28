@@ -57,6 +57,55 @@ export function TopBar({
   const [isUploading, setIsUploading] = useState(false);
   const [botState, setBotState] = useState<"idle" | "running" | "done">("idle");
   const [progress, setProgress] = useState(0);
+  const [syncData, setSyncData] = useState<{
+    is_syncing: boolean;
+    current_sheet: string;
+    current_sheet_index: number;
+    total_sheets: number;
+    processed_rows: number;
+    inserted_rows: number;
+    percentage: number;
+    message: string;
+  }>({
+    is_syncing: false,
+    current_sheet: "",
+    current_sheet_index: 0,
+    total_sheets: 0,
+    processed_rows: 0,
+    inserted_rows: 0,
+    percentage: 0,
+    message: "",
+  });
+
+  // Poll background sync progress
+  useEffect(() => {
+    let interval: ReturnType<typeof setInterval> | null = null;
+    const checkSyncProgress = async () => {
+      try {
+        const res = await fetch("/sync/progress");
+        if (res.ok) {
+          const data = await res.json();
+          setSyncData((prev) => {
+            if (prev.is_syncing && !data.is_syncing && data.percentage === 100) {
+              toast.success("Sinkronisasi Selesai!", {
+                description: `${nf(data.processed_rows || 0)} data berhasil disinkronkan. Halaman diperbarui.`,
+              });
+              router.reload({ preserveScroll: true });
+            }
+            return data;
+          });
+        }
+      } catch (e) {
+        // ignore network hiccups
+      }
+    };
+
+    checkSyncProgress();
+    interval = setInterval(checkSyncProgress, 2500);
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, []);
 
   // Sync bot status from backend trackingProgress if passed
   useEffect(() => {
@@ -236,6 +285,41 @@ export function TopBar({
           </Button>
         </div>
       </div>
+
+      <AnimatePresence>
+        {syncData.is_syncing && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="overflow-hidden border-t border-emerald-300 bg-emerald-50 px-5 py-3 shadow-inner"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <span className="relative flex h-3 w-3">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex h-3 w-3 rounded-full bg-emerald-600"></span>
+                </span>
+                <Loader2 className="h-4 w-4 animate-spin text-emerald-700" />
+                <div className="text-xs font-bold text-emerald-950">
+                  <span>{syncData.message || "Menyinkronkan data Google Sheets di background..."}</span>
+                  {syncData.total_sheets > 0 && (
+                    <span className="ml-2 font-mono text-[11px] text-emerald-700">
+                      [{syncData.current_sheet_index}/{syncData.total_sheets} Sheet]
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div className="flex items-center gap-3 w-full sm:w-auto flex-1 max-w-md">
+                <Progress value={syncData.percentage} className="h-2 flex-1 bg-emerald-200" />
+                <div className="font-mono text-xs font-extrabold text-emerald-800 shrink-0">
+                  {syncData.percentage}% {syncData.processed_rows > 0 && `(${nf(syncData.processed_rows)} baris)`}
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {botState !== "idle" && (
