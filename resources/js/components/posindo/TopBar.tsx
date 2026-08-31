@@ -107,44 +107,6 @@ export function TopBar({
     };
   }, []);
 
-  // Sync bot status from backend trackingProgress if passed
-  useEffect(() => {
-    if (trackingProgress?.is_running) {
-      setBotState("running");
-      setProgress(trackingProgress.percentage || 0);
-    } else if (trackingProgress && trackingProgress.percentage >= 100 && botState === "running") {
-      setBotState("done");
-      setProgress(100);
-    }
-  }, [trackingProgress]);
-
-  // Poll bot background tracking progress when running
-  useEffect(() => {
-    if (botState !== "running") return;
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch("/bot/progress");
-        if (res.ok) {
-          const data = await res.json();
-          setProgress(data.percentage || 0);
-          if (!data.is_running || data.pending === 0 || (data.percentage >= 100 && data.total > 0)) {
-            setBotState("done");
-            setProgress(100);
-            toast.success("Pelacakan Bot NIPos di Background Selesai!", {
-              description: `${nf(data.delivered || 0)} Sukses (DELIVERED), ${nf(data.retur || 0)} Retur. Data diperbarui.`,
-            });
-            clearInterval(interval);
-            router.reload({ preserveScroll: true });
-          }
-        }
-      } catch (e) {
-        // ignore network hiccups
-      }
-    }, 2500);
-
-    return () => clearInterval(interval);
-  }, [botState]);
-
   const getCsrfToken = () => {
     const meta = (document.querySelector('meta[name="csrf-token"]') as HTMLMetaElement)?.content;
     if (meta) return meta;
@@ -162,67 +124,78 @@ export function TopBar({
 
     try {
       const csrfToken = getCsrfToken();
+      let isDone = false;
+      let totalProcessed = 0;
+      let initialTotalPending = 0;
 
-      // Launch background tracking command
-      const startRes = await fetch("/bot/start-tracking", {
-        method: "POST",
-        headers: {
-          "Accept": "application/json",
-          "Content-Type": "application/json",
-          "X-CSRF-TOKEN": csrfToken,
-          "X-XSRF-TOKEN": csrfToken,
-        },
-        body: JSON.stringify({ force: false }),
-      });
+      while (!isDone) {
+        const res = await fetch("/bot/start-tracking", {
+          method: "POST",
+          headers: {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "X-CSRF-TOKEN": csrfToken,
+            "X-XSRF-TOKEN": csrfToken,
+          },
+          body: JSON.stringify({ limit: 100 }),
+        });
 
-      if (!startRes.ok) {
-        throw new Error(`Gagal memulai bot (HTTP ${startRes.status})`);
+        if (!res.ok) {
+          throw new Error(`Gagal melacak (HTTP ${res.status})`);
+        }
+
+        const data = await res.json();
+        if (!data.success) {
+          throw new Error(data.message || "Terjadi kesalahan pada bot");
+        }
+
+        const processedThisBatch = data.processed_count ?? 0;
+        const remainingPending = data.pending_count ?? 0;
+        totalProcessed += processedThisBatch;
+
+        if (initialTotalPending === 0) {
+          initialTotalPending = totalProcessed + remainingPending;
+        }
+
+        const effectiveTotal = Math.max(initialTotalPending, totalProcessed);
+        const currentPct = effectiveTotal > 0
+          ? Math.round((totalProcessed / effectiveTotal) * 100)
+          : 100;
+
+        setBotInfo({ current: totalProcessed, total: effectiveTotal });
+        setProgress(currentPct);
+
+        if (data.is_finished || remainingPending === 0 || processedThisBatch === 0 || processedThisBatch < 100) {
+          isDone = true;
+        }
       }
 
-      toast.info("Bot NIPOS Berjalan di Latar Belakang", {
-        description: "Anda dapat terus menggunakan web, bot akan memperbarui status secara otomatis.",
+      // Explicitly set 100% completion
+      setProgress(100);
+      setBotState("done");
+      if (totalProcessed > 0) {
+        setBotInfo({ current: totalProcessed, total: totalProcessed });
+      }
+
+      toast.success("Pelacakan Bot NIPos Selesai!", {
+        description: totalProcessed > 0
+          ? `${nf(totalProcessed)} data resi berhasil diperbarui dari NIPOS. Data tabel otomatis dimuat ulang.`
+          : "Semua data resi sudah berstatus SUKSES/RETUR.",
       });
 
-      // Poll progress every 2.5 seconds
-      let pollCount = 0;
-      const pollInterval = setInterval(async () => {
-        pollCount++;
-        try {
-          const res = await fetch("/bot/progress");
-          if (!res.ok) return;
-          const data = await res.json();
+      // Instantly reload page data so table reflects the new status immediately
+      router.reload({ preserveScroll: true });
 
-          const current = data.bot_current ?? 0;
-          const total = data.bot_total ?? 0;
-          const pct = data.percentage ?? 0;
-
-          if (total > 0) {
-            setBotInfo({ current, total });
-            setProgress(pct);
-          }
-
-          // Complete when not running and has processed or after some ticks if finished
-          if (!data.is_running && (pct >= 100 || (pollCount > 3 && current >= total && total > 0))) {
-            clearInterval(pollInterval);
-            setProgress(100);
-            setBotState("done");
-
-            toast.success("Pelacakan Bot NIPos Selesai!", {
-              description: `Seluruh data resi berhasil diperbarui dari NIPOS. Halaman diperbarui.`,
-            });
-
-            setTimeout(() => {
-              router.reload({ preserveScroll: true });
-            }, 1200);
-          }
-        } catch (e) {
-          console.error("Progress polling error", e);
-        }
+      setTimeout(() => {
+        setBotState("idle");
+        setProgress(0);
+        setBotInfo(null);
       }, 2500);
 
     } catch (err: unknown) {
       setBotState("idle");
       setProgress(0);
+      setBotInfo(null);
       toast.error("Gagal menjalankan tracking bot: " + String(err));
     }
   };
