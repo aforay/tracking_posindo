@@ -200,5 +200,58 @@ class TrackingTest extends TestCase
         $response->assertJson(['success' => true]);
         $this->assertEquals('KUNING', $shipment->fresh()->color_code);
     }
+
+    public function test_start_bot_tracking_directly_updates_pending_shipments(): void
+    {
+        $shipment = OutgoingShipment::create([
+            'nama_seller' => 'Mitra Aliqa',
+            'no_resi' => 'P2601020130943',
+            'status_pos' => 'inBag',
+            'status_kategori' => 'IN_PROCESS',
+            'color_code' => 'PUTIH',
+        ]);
+
+        $response = $this->postJson('/bot/start-tracking');
+
+        $response->assertStatus(200);
+        $response->assertJson(['success' => true]);
+        $this->assertNotNull($shipment->fresh()->last_tracked_at);
+    }
+
+    public function test_start_bot_tracking_with_queue_dispatches_jobs(): void
+    {
+        Queue::fake();
+
+        OutgoingShipment::create([
+            'nama_seller' => 'Mitra Aliqa',
+            'no_resi' => 'TEST_RESI_BOT_01',
+            'status_pos' => 'inBag',
+            'status_kategori' => 'IN_PROCESS',
+            'color_code' => 'PUTIH',
+        ]);
+
+        $response = $this->postJson('/bot/start-tracking', ['use_queue' => true]);
+
+        $response->assertStatus(200);
+        $response->assertJson(['success' => true]);
+        Queue::assertPushed(ProcessNiposTrackingJob::class);
+    }
+
+    public function test_bot_progress_endpoint_returns_live_metrics(): void
+    {
+        $response = $this->getJson('/bot/progress');
+
+        $response->assertStatus(200);
+        $response->assertJsonStructure([
+            'total',
+            'tracked',
+            'delivered',
+            'retur',
+            'pending',
+            'percentage',
+            'is_running',
+        ]);
+    }
 }
+
 

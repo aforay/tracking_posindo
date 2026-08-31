@@ -11,7 +11,14 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware) {
-        //
+        $middleware->validateCsrfTokens(except: [
+            'bot/*',
+            'shipments/*',
+            'sync/*',
+            'mock-nipos/*',
+            'process',
+            'settings/*',
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
         //

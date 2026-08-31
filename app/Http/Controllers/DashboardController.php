@@ -61,24 +61,28 @@ class DashboardController extends Controller
             'APRIL' => 4, 'APR' => 4,
             'MEI' => 5, 'MAY' => 5,
             'JUNI' => 6, 'JUN' => 6,
-            'JULI' => 7, 'JUL' => 7,
-            'AGUSTUS' => 8, 'AGT' => 8, 'AGUS' => 8,
+            'JULI' => 7, 'JUL' => 7, 'JULY' => 7,
+            'AGUSTUS' => 8, 'AGT' => 8, 'AGUS' => 8, 'AGU' => 8, 'AUGUST' => 8, 'AUG' => 8,
             'SEPTEMBER' => 9, 'SEP' => 9,
-            'OKTOBER' => 10, 'OKT' => 10,
+            'OKTOBER' => 10, 'OKT' => 10, 'OCT' => 10,
             'NOVEMBER' => 11, 'NOV' => 11,
-            'DESEMBER' => 12, 'DES' => 12,
+            'DESEMBER' => 12, 'DES' => 12, 'DEC' => 12,
         ];
 
+        $mNum = null;
         if ($selectedMonth !== 'ALL' && $selectedMonth !== null && $selectedMonth !== '') {
-            if (is_numeric($selectedMonth)) {
-                $mInt = (int)$selectedMonth;
-                $mNum = ($mInt >= 0 && $mInt <= 11) ? ($mInt + 1) : $mInt;
-                $query->whereMonth('tanggal_kirim', $mNum);
-            } else {
-                $mNum = $monthMap[strtoupper((string)$selectedMonth)] ?? null;
-                if ($mNum) {
-                    $query->whereMonth('tanggal_kirim', $mNum);
+            $monthStrUpper = strtoupper((string)$selectedMonth);
+            if (isset($monthMap[$monthStrUpper])) {
+                $mNum = $monthMap[$monthStrUpper];
+            } elseif (is_numeric($selectedMonth)) {
+                $val = (int)$selectedMonth;
+                if ($val >= 1 && $val <= 12) {
+                    $mNum = $val;
                 }
+            }
+
+            if ($mNum !== null) {
+                $query->whereMonth('tanggal_kirim', $mNum);
             }
         }
         if (!empty($selectedYear)) {
@@ -344,19 +348,31 @@ class DashboardController extends Controller
         $formattedDbSellers = array_map(fn($s) => str_starts_with($s, 'Mitra ') ? $s : 'Mitra ' . $s, $dbSellers);
         $sellersList = array_values(array_unique(array_merge($defaultSellers, $formattedDbSellers)));
 
+        $totalShipments = OutgoingShipment::count();
+        $pendingShipments = OutgoingShipment::whereNotIn('status_kategori', ['SUKSES', 'RETUR'])->count();
+        $trackedShipments = OutgoingShipment::whereNotNull('last_tracked_at')->count();
+        $progressPct = $totalShipments > 0 ? round((($totalShipments - $pendingShipments) / $totalShipments) * 100, 1) : 100;
+
         return Inertia::render('Dashboard', [
             'shipments' => $paginatedResult,
             'stats' => $stats,
             'monthCounts' => $monthCounts,
             'yearTotal' => $yearTotal,
             'sellersList' => array_values(array_unique($sellersList)),
+            'trackingProgress' => [
+                'total' => $totalShipments,
+                'tracked' => $trackedShipments,
+                'pending' => $pendingShipments,
+                'percentage' => $progressPct,
+                'is_running' => false,
+            ],
             'googleSheetUrl' => SystemSetting::get('google_sheet_url', 'https://docs.google.com/spreadsheets/d/1wUqPnU1_QOq6WocHwpxAhjhScjlb_ZhhSy8I2WqGQKw/edit'),
             'googleSheetId' => SystemSetting::get('google_sheet_id', '1wUqPnU1_QOq6WocHwpxAhjhScjlb_ZhhSy8I2WqGQKw'),
             'googleSheetWebhookUrl' => SystemSetting::get('google_sheet_webhook_url', env('GOOGLE_SHEET_WEBHOOK_URL', '')),
             'filters' => [
                 'seller' => $selectedSeller,
                 'kategori' => $selectedKategori,
-                'month' => $selectedMonth,
+                'month' => $mNum !== null ? $mNum : 'ALL',
                 'year' => $selectedYear,
                 'color' => $selectedColor,
                 'search' => $searchQuery,
@@ -370,14 +386,20 @@ class DashboardController extends Controller
     public function progress()
     {
         $total = OutgoingShipment::count();
+        $delivered = OutgoingShipment::where('status_kategori', 'SUKSES')->count();
+        $retur = OutgoingShipment::where('status_kategori', 'RETUR')->count();
         $tracked = OutgoingShipment::whereNotNull('last_tracked_at')->count();
-        $percentage = $total > 0 ? round(($tracked / $total) * 100, 1) : 0;
+        $pending = OutgoingShipment::whereNotIn('status_kategori', ['SUKSES', 'RETUR'])->count();
+        $percentage = $total > 0 ? round((($total - $pending) / $total) * 100, 1) : 100;
 
         return response()->json([
             'total' => $total,
             'tracked' => $tracked,
+            'delivered' => $delivered,
+            'retur' => $retur,
+            'pending' => $pending,
             'percentage' => $percentage,
-            'is_running' => $tracked < $total,
+            'is_running' => $pending > 0,
         ]);
     }
 
@@ -672,7 +694,7 @@ class DashboardController extends Controller
     }
 
     /**
-     * Trigger background Google Sheets sync job
+     * Trigger Google Sheets sync
      */
     public function syncGoogleSheets(Request $request)
     {
@@ -692,9 +714,13 @@ class DashboardController extends Controller
             SystemSetting::set('google_sheet_webhook_url', $webhookUrl);
         }
 
-        ProcessGoogleSheetSyncJob::dispatch($url ?: null, $seller);
-
-        return redirect()->back()->with('success', 'Sinkronisasi Google Sheets berhasil dikirim ke background Queue Worker!');
+        try {
+            $syncService = app(\App\Services\GoogleSheetsSyncService::class);
+            $summary = $syncService->sync($url ?: null, $seller);
+            return redirect()->back()->with('success', "Sinkronisasi Google Sheets Berhasil! {$summary['total_rows_processed']} baris diproses dari {$summary['total_sheets']} sheet.");
+        } catch (Throwable $e) {
+            return redirect()->back()->with('error', 'Gagal sinkronisasi Google Sheets: ' . $e->getMessage());
+        }
     }
 
     /**

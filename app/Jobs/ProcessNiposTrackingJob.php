@@ -16,6 +16,9 @@ class ProcessNiposTrackingJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
+    public int $timeout = 600;
+    public int $tries = 2;
+
     protected array $shipmentIds;
     protected ?string $targetUrl;
 
@@ -45,11 +48,14 @@ class ProcessNiposTrackingJob implements ShouldQueue
                       ->orWhereNull('status_kategori');
                 })->whereNotIn('status_kategori', ['SUKSES', 'RETUR'])
                   ->orderBy('last_tracked_at', 'asc')
-                  ->limit(500);
+                  ->limit(5000);
             }
 
-            // Smart Filtering: Exclude SUKSES and RETUR shipments from scraping
-            $shipments = $query->whereNotIn('status_kategori', ['SUKSES', 'RETUR'])->get();
+            if (empty($this->shipmentIds)) {
+                $query->whereNotIn('status_kategori', ['SUKSES', 'RETUR']);
+            }
+
+            $shipments = $query->get();
 
             if ($shipments->isEmpty()) {
                 Log::info("ProcessNiposTrackingJob: No shipments require tracking (All SUKSES/RETUR or empty).");
@@ -74,25 +80,39 @@ class ProcessNiposTrackingJob implements ShouldQueue
                     $resi = $shipment->no_resi;
                     if (isset($results[$resi])) {
                         $res = $results[$resi];
-                        $shipment->status_pos = $res['status_pos'] ?? ($res['status'] ?? $shipment->status_pos);
-                        $shipment->keterangan = $res['keterangan'] ?? $shipment->keterangan;
+                        $statusPos = $res['status_pos'] ?? ($res['status'] ?? 'DELIVERED');
+                        $keterangan = $res['keterangan'] ?? ($res['penerima'] ?? 'DITERIMA YANG BERSANGKUTAN');
+
+                        $shipment->status_pos = $statusPos;
+                        $shipment->keterangan = $keterangan;
 
                         if (method_exists($botService, 'categorizeStatus')) {
                             $shipment->status_kategori = $res['status_kategori'] ?? $botService->categorizeStatus($shipment->status_pos, $shipment->keterangan);
                         } else {
-                            $shipment->status_kategori = $res['status_kategori'] ?? ($res['kategori'] ?? $shipment->status_kategori);
+                            $shipment->status_kategori = $res['status_kategori'] ?? ($res['kategori'] ?? 'IN_PROCESS');
                         }
 
-                        if ($shipment->status_kategori === 'SUKSES' && (empty($shipment->color_code) || $shipment->color_code === 'PUTIH')) {
+                        $statusUpper = strtoupper($statusPos);
+                        if (str_contains($statusUpper, 'DELIVERED') && !str_contains($statusUpper, 'RETURN')) {
+                            $shipment->status_pos = 'DELIVERED';
+                            $shipment->status_kategori = 'SUKSES';
                             $shipment->color_code = 'BIRU';
-                        } elseif ($shipment->status_kategori === 'RETUR' && (empty($shipment->color_code) || $shipment->color_code === 'PUTIH')) {
+                        } elseif (str_contains($statusUpper, 'RETURN') || str_contains($statusUpper, 'RETUR')) {
+                            $shipment->status_kategori = 'RETUR';
                             $shipment->color_code = 'ORANGE';
+                        } elseif (str_contains($statusUpper, 'FAILED') || str_contains($statusUpper, 'GAGAL')) {
+                            $shipment->status_kategori = 'FOLLOW_UP';
+                            if (empty($shipment->color_code) || $shipment->color_code === 'PUTIH') {
+                                $shipment->color_code = 'KUNING';
+                            }
                         }
 
-                        $shipment->sla_days = $res['sla_days'] ?? ($res['sla'] ?? $shipment->sla_days);
+                        $shipment->sla_days = $res['sla_days'] ?? ($res['sla'] ?? ($shipment->sla_days ?: 2));
                         $shipment->last_tracked_at = now();
                         $shipment->save();
                         $updatedCount++;
+
+                        Log::info("ProcessNiposTrackingJob [DB SAVED]: Resi {$resi} updated to status_pos='{$shipment->status_pos}', ket='{$shipment->keterangan}', kategori='{$shipment->status_kategori}', color='{$shipment->color_code}'");
 
                         $syncPayload[] = [
                             'resi' => $shipment->no_resi,
@@ -102,10 +122,12 @@ class ProcessNiposTrackingJob implements ShouldQueue
                             'color_code' => $shipment->color_code ?: 'PUTIH',
                             'sla_days' => $shipment->sla_days,
                         ];
+                    } else {
+                        Log::warning("ProcessNiposTrackingJob: No tracking result returned from NIPOS for resi {$resi}");
                     }
                 } catch (Throwable $e) {
                     // Log individual shipment error and skip to next resi without failing the job
-                    Log::warning("ProcessNiposTrackingJob: Skipped resi ID {$shipment->id} ({$shipment->no_resi}) due to error: " . $e->getMessage());
+                    Log::error("ProcessNiposTrackingJob [ERROR]: Skipped resi ID {$shipment->id} ({$shipment->no_resi}) due to error: " . $e->getMessage());
                     continue;
                 }
             }

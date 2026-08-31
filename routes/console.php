@@ -8,6 +8,11 @@ Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
 })->purpose('Display an inspiring quote');
 
+Artisan::command('tracking', function () {
+    $this->comment('Menjalankan pelacakan NIPos untuk semua resi...');
+    $this->call('nipos:track', ['--all' => true]);
+})->purpose('Alias untuk nipos:track --all');
+
 /*
 |--------------------------------------------------------------------------
 | Console Schedule Tasks
@@ -21,3 +26,4 @@ Schedule::command('sheets:sync')
     ->everyFifteenMinutes()
     ->withoutOverlapping()
     ->appendOutputTo(storage_path('logs/sheets_sync_schedule.log'));
+

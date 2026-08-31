@@ -118,26 +118,113 @@ export function TopBar({
     }
   }, [trackingProgress]);
 
-  const runBot = () => {
-    setBotState("running");
-    setProgress(10);
-    router.post(
-      "/bot/start-tracking",
-      {},
-      {
-        onSuccess: () => {
-          setBotState("done");
-          setProgress(100);
-          toast.success("Tracking Bot NIPOS@MID Berhasil Dijalankan!", {
-            description: `${nf(total)} resi sedang di-tracking di background queue.`,
-          });
-        },
-        onError: (err) => {
-          setBotState("idle");
-          toast.error("Gagal menjalankan tracking bot: " + JSON.stringify(err));
-        },
+  // Poll bot background tracking progress when running
+  useEffect(() => {
+    if (botState !== "running") return;
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch("/bot/progress");
+        if (res.ok) {
+          const data = await res.json();
+          setProgress(data.percentage || 0);
+          if (!data.is_running || data.pending === 0 || (data.percentage >= 100 && data.total > 0)) {
+            setBotState("done");
+            setProgress(100);
+            toast.success("Pelacakan Bot NIPos di Background Selesai!", {
+              description: `${nf(data.delivered || 0)} Sukses (DELIVERED), ${nf(data.retur || 0)} Retur. Data diperbarui.`,
+            });
+            clearInterval(interval);
+            router.reload({ preserveScroll: true });
+          }
+        }
+      } catch (e) {
+        // ignore network hiccups
       }
-    );
+    }, 2500);
+
+    return () => clearInterval(interval);
+  }, [botState]);
+
+  const getCsrfToken = () => {
+    const meta = (document.querySelector('meta[name="csrf-token"]') as HTMLMetaElement)?.content;
+    if (meta) return meta;
+    const match = document.cookie.match(new RegExp('(^|;\\s*)XSRF-TOKEN=([^;]*)'));
+    return match ? decodeURIComponent(match[2]) : "";
+  };
+
+  const [botInfo, setBotInfo] = useState<{ current: number; total: number } | null>(null);
+
+  const runBot = async () => {
+    if (botState === "running") return;
+    setBotState("running");
+    setProgress(0);
+    setBotInfo(null);
+
+    try {
+      const csrfToken = getCsrfToken();
+
+      // Launch background tracking command
+      const startRes = await fetch("/bot/start-tracking", {
+        method: "POST",
+        headers: {
+          "Accept": "application/json",
+          "Content-Type": "application/json",
+          "X-CSRF-TOKEN": csrfToken,
+          "X-XSRF-TOKEN": csrfToken,
+        },
+        body: JSON.stringify({ force: false }),
+      });
+
+      if (!startRes.ok) {
+        throw new Error(`Gagal memulai bot (HTTP ${startRes.status})`);
+      }
+
+      toast.info("Bot NIPOS Berjalan di Latar Belakang", {
+        description: "Anda dapat terus menggunakan web, bot akan memperbarui status secara otomatis.",
+      });
+
+      // Poll progress every 2.5 seconds
+      let pollCount = 0;
+      const pollInterval = setInterval(async () => {
+        pollCount++;
+        try {
+          const res = await fetch("/bot/progress");
+          if (!res.ok) return;
+          const data = await res.json();
+
+          const current = data.bot_current ?? 0;
+          const total = data.bot_total ?? 0;
+          const pct = data.percentage ?? 0;
+
+          if (total > 0) {
+            setBotInfo({ current, total });
+            setProgress(pct);
+          }
+
+          // Complete when not running and has processed or after some ticks if finished
+          if (!data.is_running && (pct >= 100 || (pollCount > 3 && current >= total && total > 0))) {
+            clearInterval(pollInterval);
+            setProgress(100);
+            setBotState("done");
+
+            toast.success("Pelacakan Bot NIPos Selesai!", {
+              description: `Seluruh data resi berhasil diperbarui dari NIPOS. Halaman diperbarui.`,
+            });
+
+            setTimeout(() => {
+              router.reload({ preserveScroll: true });
+            }, 1200);
+          }
+        } catch (e) {
+          console.error("Progress polling error", e);
+        }
+      }, 2500);
+
+    } catch (err: unknown) {
+      setBotState("idle");
+      setProgress(0);
+      toast.error("Gagal menjalankan tracking bot: " + String(err));
+    }
   };
 
   const handleUploadSubmit = (e: React.FormEvent) => {
@@ -201,12 +288,16 @@ export function TopBar({
     );
   };
 
+  const pendingCount = trackingProgress?.pending ?? 0;
   const badge =
     botState === "idle"
-      ? { text: "Idle", cls: "bg-muted text-muted-foreground" }
+      ? {
+          text: pendingCount > 0 ? `${pendingCount} Pending` : "All Done",
+          cls: pendingCount > 0 ? "bg-amber-500 text-white" : "bg-emerald-500 text-white",
+        }
       : botState === "running"
-      ? { text: "Scraping NIPOS@MID", cls: "bg-pos-orange text-white" }
-      : { text: "Completed", cls: "bg-emerald-500 text-white" };
+      ? { text: "Scraping NIPOS@MID...", cls: "bg-pos-orange text-white animate-pulse" }
+      : { text: "Completed ✓", cls: "bg-emerald-500 text-white" };
 
   return (
     <div className="border-b border-border bg-card">
@@ -331,8 +422,8 @@ export function TopBar({
           >
             <div className="flex items-center gap-4 px-5 py-1">
               <Progress value={progress} className="h-2 flex-1" />
-              <div className="w-[230px] text-right font-mono text-xs font-bold text-[#1E40AF]">
-                {progress.toFixed(0)}% — {nf(Math.round((progress / 100) * total))} / {nf(total)} Resi
+              <div className="w-[280px] text-right font-mono text-xs font-bold text-[#1E40AF]">
+                {progress.toFixed(0)}% — {botInfo ? `${nf(botInfo.current)} / ${nf(botInfo.total)}` : `${nf(Math.round((progress / 100) * total))} / ${nf(total)}`} Resi
               </div>
             </div>
           </motion.div>

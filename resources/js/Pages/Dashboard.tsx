@@ -97,9 +97,12 @@ export default function Dashboard() {
 
   const [rows, setRows] = useState<Shipment[]>(shipmentList);
   const [seller, setSeller] = useState(props.filters?.seller || "Semua Seller");
-  const [month, setMonth] = useState<number | "all">(
-    props.filters?.month !== undefined ? (props.filters.month === "ALL" ? "all" : Number(props.filters.month)) : "all"
-  );
+  const [month, setMonth] = useState<number | "all">(() => {
+    const fMonth = props.filters?.month;
+    if (!fMonth || fMonth === "ALL" || fMonth === "all") return "all";
+    const n = Number(fMonth);
+    return !isNaN(n) && n >= 1 && n <= 12 ? n : "all";
+  });
   const [colorFilter, setColorFilter] = useState<FuStatus | null>(
     (props.filters?.color as FuStatus) || null
   );
@@ -327,16 +330,20 @@ export default function Dashboard() {
           googleSheetWebhookUrl={props.googleSheetWebhookUrl}
         />
         <div className="pos-scroll flex gap-1 overflow-x-auto border-b border-border bg-card/95 px-5 py-1.5 backdrop-blur">
-          {[{ label: "Semua (Setahun)", idx: "all" as const, n: props.yearTotal ?? totalCount }].concat(
-            MONTHS.map((m, i) => ({ label: m, idx: i as never, n: monthCounts[i] ?? 0 }))
+          {[{ label: "Semua (Setahun)", monthNum: "all" as const, n: props.yearTotal ?? totalCount }].concat(
+            MONTHS.map((m, i) => ({ label: m, monthNum: (i + 1) as never, n: monthCounts[i] ?? 0 }))
           ).map((t) => {
-            const active = month === t.idx;
+            const active = month === t.monthNum;
             return (
               <button
                 key={t.label}
                 onClick={() => {
-                  setMonth(t.idx);
-                  router.get("/shipments", { seller, month: t.idx === "all" ? "ALL" : t.idx, color: colorFilter, search: query }, { preserveState: true, preserveScroll: true });
+                  setMonth(t.monthNum);
+                  router.get(
+                    "/shipments",
+                    { seller, month: t.monthNum === "all" ? "ALL" : t.monthNum, color: colorFilter, search: query },
+                    { preserveState: true, preserveScroll: true }
+                  );
                 }}
                 className={`relative shrink-0 rounded-md px-3 py-1.5 text-xs font-semibold transition cursor-pointer ${
                   active

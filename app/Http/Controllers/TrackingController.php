@@ -3,11 +3,14 @@
 namespace App\Http\Controllers;
 
 use App\Models\Shipment;
+use App\Models\OutgoingShipment;
+use App\Jobs\ProcessNiposTrackingJob;
 use App\Jobs\UpdateSheetStatusJob;
 use App\Services\TrackingBotService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Log;
 use PhpOffice\PhpSpreadsheet\IOFactory;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Style\Fill;
@@ -339,15 +342,99 @@ class TrackingController extends Controller
     }
 
     /**
-     * Trigger background bot tracking manually
+     * Trigger bot tracking for pending OutgoingShipments (direct execution by default, queue optional)
      */
     public function startBotTracking(Request $request)
     {
-        if (class_exists(\App\Jobs\ProcessNiposTrackingJob::class)) {
-            \App\Jobs\ProcessNiposTrackingJob::dispatch();
+        @set_time_limit(0);
+        $shipmentIds = $request->input('shipment_ids', []);
+        $useQueue = $request->boolean('use_queue', false);
+        $force = $request->boolean('force', false);
+        $limit = (int)$request->input('limit', 50);
+
+        $pendingQuery = OutgoingShipment::query();
+        if (!empty($shipmentIds)) {
+            $pendingQuery->whereIn('id', (array)$shipmentIds);
+        } elseif ($force) {
+            $pendingQuery->where('status_pos', '!=', 'DELIVERED');
+        } else {
+            $pendingQuery->where(function ($q) {
+                $q->whereNotIn('status_kategori', ['SUKSES', 'RETUR'])
+                  ->orWhereNull('status_kategori')
+                  ->orWhere('status_pos', '!=', 'DELIVERED');
+            });
         }
 
-        return back()->with('success', 'Bot tracking NIPOS@MID berhasil dijalankan.');
+        $allPendingIds = $pendingQuery->orderBy('last_tracked_at', 'asc')->limit($limit)->pluck('id')->toArray();
+        $pendingCount = count($allPendingIds);
+
+        Log::info("TrackingController@startBotTracking: Processing tracking for {$pendingCount} shipments (Limit: {$limit}, Queue: " . ($useQueue ? 'YES' : 'NO') . ").");
+
+        if ($pendingCount === 0) {
+            $msg = 'Semua data resi sudah berstatus SUKSES atau RETUR.';
+            if ($request->ajax() || $request->wantsJson()) {
+                return response()->json([
+                    'success' => true,
+                    'message' => $msg,
+                    'processed_count' => 0,
+                    'pending_count' => 0,
+                    'total_pending' => 0,
+                    'is_finished' => true,
+                ]);
+            }
+            return back()->with('info', $msg);
+        }
+
+        if ($useQueue) {
+            // Asynchronous Queue chunked dispatch (100 resis per background job)
+            foreach (array_chunk($allPendingIds, 100) as $chunkIds) {
+                ProcessNiposTrackingJob::dispatch($chunkIds);
+            }
+            $msg = "Tracking Bot NIPOS berhasil dijalankan di background queue untuk {$pendingCount} resi.";
+            $updatedCount = $pendingCount;
+        } else {
+            // Pure asynchronous background CLI execution
+            cache()->put('bot_running', true, 3600);
+            cache()->put('bot_progress', ['current' => 0, 'total' => $pendingCount > 0 ? $pendingCount : 1], 3600);
+
+            if (app()->runningUnitTests()) {
+                $job = new ProcessNiposTrackingJob($allPendingIds);
+                $job->handle($this->botService);
+            } else {
+                $phpBinary = PHP_BINARY;
+                $artisanPath = base_path('artisan');
+                
+                if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
+                    $cmd = sprintf('start /B "" %s %s nipos:track --all > NUL 2>&1', escapeshellarg($phpBinary), escapeshellarg($artisanPath));
+                    pclose(popen($cmd, "r"));
+                } else {
+                    $cmd = sprintf('%s %s nipos:track --all > /dev/null 2>&1 &', escapeshellarg($phpBinary), escapeshellarg($artisanPath));
+                    exec($cmd);
+                }
+            }
+            $updatedCount = $pendingCount;
+            $msg = "Bot NIPOS sedang berjalan di latar belakang (Background Process).";
+        }
+
+        $remainingPending = OutgoingShipment::where(function ($q) {
+            $q->whereNotIn('status_kategori', ['SUKSES', 'RETUR'])
+              ->orWhereNull('status_kategori')
+              ->orWhere('status_pos', '!=', 'DELIVERED');
+        })->count();
+
+        if ($request->ajax() || $request->wantsJson()) {
+            return response()->json([
+                'success' => true,
+                'message' => $msg,
+                'processed_count' => $updatedCount,
+                'pending_count' => $remainingPending,
+                'total_pending' => $remainingPending,
+                'is_running' => true,
+                'is_finished' => false,
+            ]);
+        }
+
+        return back()->with('success', $msg);
     }
 
     /**
@@ -355,15 +442,35 @@ class TrackingController extends Controller
      */
     public function progress()
     {
-        $total = Shipment::count();
-        $tracked = Shipment::whereNotNull('last_scanned_at')->count();
-        $percentage = $total > 0 ? round(($tracked / $total) * 100, 1) : 0;
+        $botProgress = cache('bot_progress', ['current' => 0, 'total' => 0]);
+        $isRunning = cache('bot_running', false);
+
+        $total = OutgoingShipment::count();
+        $delivered = OutgoingShipment::where('status_kategori', 'SUKSES')->count();
+        $retur = OutgoingShipment::where('status_kategori', 'RETUR')->count();
+        $tracked = OutgoingShipment::whereNotNull('last_tracked_at')->count();
+        $pending = OutgoingShipment::where(function ($q) {
+            $q->whereNotIn('status_kategori', ['SUKSES', 'RETUR'])
+              ->orWhereNull('status_kategori')
+              ->orWhere('status_pos', '!=', 'DELIVERED');
+        })->count();
+        
+        $percentage = ($botProgress['total'] > 0)
+            ? round(($botProgress['current'] / $botProgress['total']) * 100, 1)
+            : ($isRunning ? 0 : 100);
 
         return response()->json([
+            'bot_current' => $botProgress['current'],
+            'bot_total' => $botProgress['total'],
+            'percentage' => $percentage,
+            'is_running' => (bool)$isRunning,
+            
+            // Database raw stats
             'total' => $total,
             'tracked' => $tracked,
-            'percentage' => $percentage,
-            'is_running' => $tracked < $total,
+            'delivered' => $delivered,
+            'retur' => $retur,
+            'pending' => $pending,
         ]);
     }
 

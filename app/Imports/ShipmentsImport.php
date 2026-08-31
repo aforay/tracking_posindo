@@ -558,12 +558,16 @@ class ShipmentsImport
                 $tanggalKirim = !empty($data['tanggal_kirim']) ? $data['tanggal_kirim'] : ($existing->tanggal_kirim ? (is_string($existing->tanggal_kirim) ? substr($existing->tanggal_kirim, 0, 10) : $existing->tanggal_kirim->format('Y-m-d')) : date('Y-m-d'));
 
                 // NIPos is Primary Source of Truth:
-                // If record has already been tracked via NIPos (last_tracked_at is set or status_pos exists), preserve NIPos status & keterangan
-                $hasNiposTracking = !empty($existing->last_tracked_at) || !empty($existing->status_pos);
+                // Strict Protection for DELIVERED & NIPos Tracked Data:
+                // Jangan pernah menimpa (overwrite) status_pos di database jika nilai status saat ini sudah 'DELIVERED'
+                $existingStatusUpper = strtoupper(trim((string)$existing->status_pos));
+                $isAlreadyDelivered = str_contains($existingStatusUpper, 'DELIVERED');
+                $hasNiposTracking = $isAlreadyDelivered || !empty($existing->last_tracked_at) || ($existing->status_kategori === 'SUKSES' || $existing->status_kategori === 'RETUR');
+
                 if ($hasNiposTracking) {
-                    $statusPos = $existing->status_pos ?: ($data['status_pos'] ?: 'ON PROCESS');
-                    $keterangan = $existing->keterangan ?: ($data['keterangan'] ?: 'PROSES PENGIRIMAN POS');
-                    $statusKategori = $existing->status_kategori ?: ($data['status_kategori'] ?: 'IN_PROCESS');
+                    $statusPos = $existing->status_pos ?: 'DELIVERED';
+                    $keterangan = $existing->keterangan ?: 'DITERIMA YANG BERSANGKUTAN';
+                    $statusKategori = $existing->status_kategori ?: ($isAlreadyDelivered ? 'SUKSES' : 'IN_PROCESS');
                     $slaDays = $existing->sla_days ?: $data['sla_days'];
                 } else {
                     $statusPos = !empty($data['status_pos']) ? $data['status_pos'] : 'ON PROCESS';
