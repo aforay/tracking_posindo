@@ -36,8 +36,6 @@ class ProcessExcelImportJob implements ShouldQueue
         @set_time_limit(0);
 
         $startMsg = "ProcessExcelImportJob started processing stored file: {$this->filePath}";
-        dump($startMsg);
-        echo $startMsg . "\n";
         Log::info($startMsg);
 
         try {
@@ -45,12 +43,8 @@ class ProcessExcelImportJob implements ShouldQueue
             $importer->importFile($this->filePath, $this->defaultSeller);
 
             $doneMsg = "ProcessExcelImportJob successfully completed streaming import for: {$this->filePath}";
-            dump($doneMsg);
-            echo $doneMsg . "\n";
             Log::info($doneMsg);
         } catch (Throwable $e) {
-            dump("ERROR IMPORT: " . $e->getMessage());
-            echo "ERROR IMPORT: " . $e->getMessage() . "\n";
             Log::error("ProcessExcelImportJob error processing file {$this->filePath}: " . $e->getMessage(), [
                 'trace' => $e->getTraceAsString(),
             ]);

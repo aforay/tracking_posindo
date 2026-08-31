@@ -34,14 +34,12 @@ class ShipmentsImport
 
         if (!file_exists($filePath)) {
             $msg = "ShipmentsImport: File not found at {$filePath}";
-            dump($msg);
             Log::error($msg);
             return;
         }
 
         $extension = strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
         $msg = "ShipmentsImport streaming start for {$filePath} [{$extension}]";
-        dump($msg);
         Log::info($msg);
 
         if (in_array($extension, ['xlsx', 'csv'])) {
@@ -78,8 +76,6 @@ class ShipmentsImport
             // Iterate through ALL sheets in the Excel file
             foreach ($reader->getSheetIterator() as $sheet) {
                 $sheetName = $sheet->getName();
-                dump("Membaca Sheet: " . $sheetName);
-                echo "Membaca Sheet: " . $sheetName . "\n";
                 Log::info("ShipmentsImport: Reading Sheet -> {$sheetName}");
 
                 // RESET header detection at the start of EVERY sheet
@@ -122,8 +118,6 @@ class ShipmentsImport
                             $headerMap = $possibleMap;
                             $headerFound = true;
                             $detectedHeaders = $rowArray;
-                            dump("Header terdeteksi pada Sheet [{$sheetName}]: ", $detectedHeaders);
-                            echo "Header terdeteksi pada Sheet [{$sheetName}]: " . json_encode($detectedHeaders) . "\n";
                             Log::info("ShipmentsImport: Detected header map on sheet {$sheetName}: " . json_encode($headerMap));
                             continue;
                         }
@@ -158,21 +152,13 @@ class ShipmentsImport
 
             $reader->close();
 
-            dump("Total baris terproses dari seluruh sheet: " . $totalProcessedRows);
-            echo "Total baris terproses dari seluruh sheet: " . $totalProcessedRows . "\n";
-            dump("Total data tersimpan di DB: " . $totalInsertedRows);
-            echo "Total data tersimpan di DB: " . $totalInsertedRows . "\n";
-
             if ($totalInsertedRows === 0) {
                 $msg = "Excel Import Failed: No valid rows found in any sheet. Headers detected: " . json_encode($detectedHeaders) . " | Sample row: " . json_encode($sampleRow);
-                dump($msg);
                 Log::error($msg);
             } else {
                 Log::info("ShipmentsImport streaming finished. Processed {$totalProcessedRows} rows from all sheets, saved {$totalInsertedRows} rows into outgoing_shipments.");
             }
         } catch (Throwable $e) {
-            dump("ERROR IMPORT: " . $e->getMessage());
-            echo "ERROR IMPORT: " . $e->getMessage() . "\n";
             Log::error("OpenSpout streaming error: " . $e->getMessage() . " - fallback to chunking.");
             $this->streamWithPhpSpreadsheetChunking($filePath);
         }
@@ -201,8 +187,7 @@ class ShipmentsImport
 
             foreach ($spreadsheet->getAllSheets() as $sheet) {
                 $sheetName = $sheet->getTitle();
-                dump("Membaca Sheet (PhpSpreadsheet): " . $sheetName);
-                echo "Membaca Sheet: " . $sheetName . "\n";
+                Log::info("ShipmentsImport: Reading Sheet (PhpSpreadsheet) -> {$sheetName}");
 
                 $headerMap = [];
                 $headerFound = false;
@@ -227,8 +212,7 @@ class ShipmentsImport
                             $headerMap = $possibleMap;
                             $headerFound = true;
                             $detectedHeaders = $rowArray;
-                            dump("Header terdeteksi: ", $detectedHeaders);
-                            echo "Header terdeteksi: " . json_encode($detectedHeaders) . "\n";
+                            Log::info("ShipmentsImport: Detected header on sheet {$sheetName}: " . json_encode($detectedHeaders));
                             continue;
                         }
                     }
@@ -261,19 +245,13 @@ class ShipmentsImport
             $spreadsheet->disconnectWorksheets();
             unset($spreadsheet);
 
-            dump("Total baris terproses: " . $totalProcessedRows);
-            echo "Total baris terproses: " . $totalProcessedRows . "\n";
-
             if ($totalInsertedRows === 0) {
                 $msg = "Excel Import Failed: No valid rows found. Headers detected: " . json_encode($detectedHeaders) . " | Sample row: " . json_encode($sampleRow);
-                dump($msg);
                 Log::error($msg);
             } else {
                 Log::info("ShipmentsImport PhpSpreadsheet chunking finished. Processed {$totalProcessedRows} rows, saved {$totalInsertedRows} rows.");
             }
         } catch (Throwable $e) {
-            dump("ERROR IMPORT: " . $e->getMessage());
-            echo "ERROR IMPORT: " . $e->getMessage() . "\n";
             Log::error("PhpSpreadsheet chunking error: " . $e->getMessage());
         }
     }
@@ -449,14 +427,18 @@ class ShipmentsImport
         // Categorize status
         $statusUpper = strtoupper($statusPos . ' ' . $keterangan);
         $kategori = 'IN_PROCESS';
-        if (str_contains($statusUpper, 'DITERIMA') || str_contains($statusUpper, 'DELIVERED')) {
-            if (str_contains($statusUpper, 'RETUR') || str_contains($statusUpper, 'RETURN')) {
-                $kategori = 'RETUR';
-            } else {
-                $kategori = 'SUKSES';
-            }
-        } elseif (str_contains($statusUpper, 'RETUR') || str_contains($statusUpper, 'RETURN')) {
+
+        // RETUR detection: DELIVERED (RETURN DELIVERY), or DITERIMA PENGIRIM/MITRA (returned to sender), or explicit RETUR/RETURN keyword
+        $isReturn = str_contains($statusUpper, 'RETURN DELIVERY')
+            || str_contains($statusUpper, 'RETURN')
+            || str_contains($statusUpper, 'RETUR')
+            || str_contains($statusUpper, 'DITERIMA PENGIRIM')
+            || str_contains($statusUpper, 'DITERIMA MITRA');
+
+        if ($isReturn) {
             $kategori = 'RETUR';
+        } elseif (str_contains($statusUpper, 'DITERIMA') || str_contains($statusUpper, 'DELIVERED')) {
+            $kategori = 'SUKSES';
         } elseif (str_contains($statusUpper, 'FAILED') || str_contains($statusUpper, 'GAGAL') || str_contains($statusUpper, 'KENDALA') || str_contains($statusUpper, 'FOLLOW UP')) {
             $kategori = 'FOLLOW_UP';
         }
@@ -493,7 +475,17 @@ class ShipmentsImport
                     return sprintf('%04d-%02d-%02d', $m[3], $m[2], $m[1]);
                 }
 
-                return Carbon::parse($str)->format('Y-m-d');
+                // Translate Indonesian month names to English before Carbon parsing
+                $indoToEng = [
+                    'januari' => 'January', 'februari' => 'February', 'maret' => 'March',
+                    'april' => 'April', 'mei' => 'May', 'juni' => 'June',
+                    'juli' => 'July', 'agustus' => 'August', 'september' => 'September',
+                    'oktober' => 'October', 'november' => 'November', 'desember' => 'December',
+                    'agt' => 'Aug', 'agu' => 'Aug', 'okt' => 'Oct', 'des' => 'Dec',
+                ];
+                $engStr = str_ireplace(array_keys($indoToEng), array_values($indoToEng), $str);
+
+                return Carbon::parse($engStr)->format('Y-m-d');
             } catch (Throwable $e) {
                 // Fallback below
             }
@@ -561,14 +553,33 @@ class ShipmentsImport
                 // Strict Protection for DELIVERED & NIPos Tracked Data:
                 // Jangan pernah menimpa (overwrite) status_pos di database jika nilai status saat ini sudah 'DELIVERED'
                 $existingStatusUpper = strtoupper(trim((string)$existing->status_pos));
+                $incomingStatusUpper = strtoupper(trim((string)($data['status_pos'] ?? '')));
                 $isAlreadyDelivered = str_contains($existingStatusUpper, 'DELIVERED');
-                $hasNiposTracking = $isAlreadyDelivered || !empty($existing->last_tracked_at) || ($existing->status_kategori === 'SUKSES' || $existing->status_kategori === 'RETUR');
+
+                // Exception: If incoming data explicitly says RETUR (DELIVERED RETURN DELIVERY),
+                // it must override even if existing record says DELIVERED — because a return is
+                // fundamentally different from a successful delivery.
+                $incomingIsReturn = str_contains($incomingStatusUpper, 'RETURN DELIVERY')
+                    || str_contains($incomingStatusUpper, 'RETURN')
+                    || $data['status_kategori'] === 'RETUR';
+                $existingIsReturn = str_contains($existingStatusUpper, 'RETURN DELIVERY')
+                    || $existing->status_kategori === 'RETUR';
+
+                $hasNiposTracking = ($isAlreadyDelivered && !$incomingIsReturn)
+                    || (!empty($existing->last_tracked_at) && !$incomingIsReturn)
+                    || (($existing->status_kategori === 'SUKSES' || $existing->status_kategori === 'RETUR') && !$incomingIsReturn);
 
                 if ($hasNiposTracking) {
                     $statusPos = $existing->status_pos ?: 'DELIVERED';
                     $keterangan = $existing->keterangan ?: 'DITERIMA YANG BERSANGKUTAN';
                     $statusKategori = $existing->status_kategori ?: ($isAlreadyDelivered ? 'SUKSES' : 'IN_PROCESS');
                     $slaDays = $existing->sla_days ?: $data['sla_days'];
+                } elseif ($incomingIsReturn) {
+                    // Sheet explicitly marks as RETUR — always respect this
+                    $statusPos = $data['status_pos'] ?: 'DELIVERED (RETURN DELIVERY)';
+                    $keterangan = $data['keterangan'] ?: 'DITERIMA PENGIRIM';
+                    $statusKategori = 'RETUR';
+                    $slaDays = $data['sla_days'] ?: $existing->sla_days;
                 } else {
                     $statusPos = !empty($data['status_pos']) ? $data['status_pos'] : 'ON PROCESS';
                     $keterangan = !empty($data['keterangan']) ? $data['keterangan'] : 'PROSES PENGIRIMAN POS';
@@ -576,8 +587,12 @@ class ShipmentsImport
                     $slaDays = $data['sla_days'];
                 }
 
-                // Always preserve existing CS manual overrides, colors, and tracking timestamps
-                $colorCode = $existing->color_code ?: ($statusKategori === 'SUKSES' ? 'BIRU' : ($statusKategori === 'RETUR' ? 'ORANGE' : ($statusKategori === 'FOLLOW_UP' ? 'KUNING' : 'PUTIH')));
+                // Color: if RETUR override happened, force ORANGE. Otherwise preserve existing color or derive from new status.
+                if ($incomingIsReturn && !$existingIsReturn) {
+                    $colorCode = 'ORANGE';
+                } else {
+                    $colorCode = $existing->color_code ?: ($statusKategori === 'SUKSES' ? 'BIRU' : ($statusKategori === 'RETUR' ? 'ORANGE' : ($statusKategori === 'FOLLOW_UP' ? 'KUNING' : 'PUTIH')));
+                }
                 $fuPosDate = $existing->fu_pos_date;
                 $noted = $existing->noted;
                 $lastTrackedAt = $existing->last_tracked_at;
@@ -637,13 +652,9 @@ class ShipmentsImport
             }
             DB::commit();
 
-            dump("Inserted/Synced {$insertedCount} rows to DB");
-            echo "Inserted/Synced {$insertedCount} rows to DB\n";
             Log::info("ShipmentsImport: Inserted/Synced {$insertedCount} rows to DB");
         } catch (Throwable $e) {
             DB::rollBack();
-            dump("ERROR IMPORT: " . $e->getMessage());
-            echo "ERROR IMPORT: " . $e->getMessage() . "\n";
             Log::error("ERROR IMPORT: " . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
             return 0;
         }

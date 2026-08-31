@@ -53,6 +53,23 @@ export function TopBar({
   );
   const [webhookUrlInput, setWebhookUrlInput] = useState(googleSheetWebhookUrl || "");
   const [isSyncing, setIsSyncing] = useState(false);
+  const [sheetSyncState, setSheetSyncState] = useState<"idle" | "syncing" | "done">("idle");
+  const [sheetSyncProgress, setSheetSyncProgress] = useState(0);
+  const [sheetSyncInfo, setSheetSyncInfo] = useState<{
+    current_sheet: string;
+    current_sheet_index: number;
+    total_sheets: number;
+    processed_rows: number;
+    inserted_rows: number;
+    message: string;
+  }>({
+    current_sheet: "",
+    current_sheet_index: 0,
+    total_sheets: 0,
+    processed_rows: 0,
+    inserted_rows: 0,
+    message: "",
+  });
   const [file, setFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [botState, setBotState] = useState<"idle" | "running" | "done">("idle");
@@ -232,33 +249,123 @@ export function TopBar({
     });
   };
 
-  const handleSyncSubmit = (e: React.FormEvent) => {
+  const handleSyncSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!sheetUrlInput.trim()) {
       toast.error("Silakan masukkan URL / ID Google Spreadsheet.");
       return;
     }
+
+    setSheetSyncOpen(false);
     setIsSyncing(true);
-    router.post(
-      "/shipments/sync-google-sheets",
-      {
-        url: sheetUrlInput,
-        seller: seller === "Semua Seller" ? "Aliqa" : seller,
-      },
-      {
-        onSuccess: () => {
-          setIsSyncing(false);
-          setSheetSyncOpen(false);
-          toast.success("Sinkronisasi Google Sheets Berhasil Dikirim!", {
-            description: "Proses membaca tab (Januari - Agustus) berjalan di background queue.",
-          });
+    setSheetSyncState("syncing");
+    setSheetSyncProgress(0);
+    setSheetSyncInfo({
+      current_sheet: "Menghubungkan...",
+      current_sheet_index: 0,
+      total_sheets: 0,
+      processed_rows: 0,
+      inserted_rows: 0,
+      message: "Menghubungkan ke Google Sheets...",
+    });
+
+    try {
+      const csrfToken = getCsrfToken();
+      
+      // 1. Discover Sheet Names
+      const discoverRes = await fetch("/sync/discover", {
+        method: "POST",
+        headers: {
+          "Accept": "application/json",
+          "Content-Type": "application/json",
+          "X-CSRF-TOKEN": csrfToken,
         },
-        onError: () => {
-          setIsSyncing(false);
-          toast.error("Gagal mengirim sinkronisasi Google Sheets.");
-        },
+        body: JSON.stringify({
+          url: sheetUrlInput,
+          webhook_url: webhookUrlInput,
+        }),
+      });
+
+      if (!discoverRes.ok) {
+        const errData = await discoverRes.json();
+        throw new Error(errData.message || "Gagal menghubungi Google Sheets");
       }
-    );
+
+      const discoverData = await discoverRes.json();
+      if (!discoverData.success || !discoverData.sheet_names || discoverData.sheet_names.length === 0) {
+        throw new Error(discoverData.message || "Tidak ada sheet yang ditemukan.");
+      }
+
+      const sheetNames = discoverData.sheet_names;
+      const totalSheets = sheetNames.length;
+      const spreadsheetId = discoverData.spreadsheet_id;
+
+      let totalProcessed = 0;
+      let totalInserted = 0;
+
+      // 2. Loop Sheet-by-sheet
+      for (let i = 0; i < totalSheets; i++) {
+        const sheetName = sheetNames[i];
+        
+        setSheetSyncInfo({
+          current_sheet: sheetName,
+          current_sheet_index: i + 1,
+          total_sheets: totalSheets,
+          processed_rows: totalProcessed,
+          inserted_rows: totalInserted,
+          message: `Membaca sheet: ${sheetName} (Tab ${i + 1}/${totalSheets})...`,
+        });
+
+        const syncRes = await fetch("/sync/sheet", {
+          method: "POST",
+          headers: {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "X-CSRF-TOKEN": csrfToken,
+          },
+          body: JSON.stringify({
+            spreadsheet_id: spreadsheetId,
+            sheet_name: sheetName,
+            seller: seller === "Semua Seller" ? "Aliqa" : seller,
+          }),
+        });
+
+        if (!syncRes.ok) {
+          toast.warning(`Gagal sinkronisasi sheet ${sheetName}, melanjutkan ke sheet berikutnya...`);
+          continue;
+        }
+
+        const syncResult = await syncRes.json();
+        if (syncResult.success) {
+          totalProcessed += syncResult.processed ?? 0;
+          totalInserted += syncResult.inserted ?? 0;
+        }
+
+        const currentPct = Math.round(((i + 1) / totalSheets) * 100);
+        setSheetSyncProgress(currentPct);
+      }
+
+      setSheetSyncProgress(100);
+      setSheetSyncState("done");
+      
+      toast.success("Sinkronisasi Selesai!", {
+        description: `${nf(totalProcessed)} data berhasil disinkronkan. Halaman diperbarui.`,
+      });
+
+      router.reload({ preserveScroll: true });
+
+      setTimeout(() => {
+        setSheetSyncState("idle");
+        setSheetSyncProgress(0);
+        setIsSyncing(false);
+      }, 2500);
+
+    } catch (err: unknown) {
+      setSheetSyncState("idle");
+      setSheetSyncProgress(0);
+      setIsSyncing(false);
+      toast.error("Gagal sinkronisasi Google Sheets: " + String(err));
+    }
   };
 
   const pendingCount = trackingProgress?.pending ?? 0;
@@ -349,6 +456,41 @@ export function TopBar({
           </Button>
         </div>
       </div>
+
+      <AnimatePresence>
+        {sheetSyncState !== "idle" && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="overflow-hidden border-t border-emerald-300 bg-emerald-50 px-5 py-3 shadow-inner"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <span className="relative flex h-3 w-3">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex h-3 w-3 rounded-full bg-emerald-600"></span>
+                </span>
+                <Loader2 className="h-4 w-4 animate-spin text-emerald-700" />
+                <div className="text-xs font-bold text-emerald-950">
+                  <span>{sheetSyncInfo.message || "Menyinkronkan data Google Sheets..."}</span>
+                  {sheetSyncInfo.total_sheets > 0 && (
+                    <span className="ml-2 font-mono text-[11px] text-emerald-700">
+                      [{sheetSyncInfo.current_sheet_index}/{sheetSyncInfo.total_sheets} Sheet]
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div className="flex items-center gap-3 w-full sm:w-auto flex-1 max-w-md">
+                <Progress value={sheetSyncProgress} className="h-2 flex-1 bg-emerald-200" />
+                <div className="font-mono text-xs font-extrabold text-emerald-800 shrink-0">
+                  {sheetSyncProgress}% {sheetSyncInfo.processed_rows > 0 && `(${nf(sheetSyncInfo.processed_rows)} baris)`}
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {syncData.is_syncing && (

@@ -41,8 +41,6 @@ class UpdateSheetStatusJob implements ShouldQueue
         }
 
         $startMsg = "UpdateSheetStatusJob: Starting Google Sheets status update for " . count($this->resiList) . " resis → {$this->statusColor}";
-        dump($startMsg);
-        echo $startMsg . "\n";
         Log::info($startMsg);
 
         try {
@@ -54,12 +52,8 @@ class UpdateSheetStatusJob implements ShouldQueue
             );
 
             $doneMsg = "UpdateSheetStatusJob completed successfully for " . count($this->resiList) . " resis.";
-            dump($doneMsg);
-            echo $doneMsg . "\n";
             Log::info($doneMsg, $summary);
         } catch (Throwable $e) {
-            dump("ERROR GOOGLE SHEETS TWO-WAY SYNC: " . $e->getMessage());
-            echo "ERROR GOOGLE SHEETS TWO-WAY SYNC: " . $e->getMessage() . "\n";
             Log::error("UpdateSheetStatusJob error: " . $e->getMessage(), [
                 'trace' => $e->getTraceAsString(),
             ]);

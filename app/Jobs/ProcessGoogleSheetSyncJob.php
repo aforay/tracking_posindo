@@ -36,19 +36,13 @@ class ProcessGoogleSheetSyncJob implements ShouldQueue
         @set_time_limit(0);
 
         $startMsg = "ProcessGoogleSheetSyncJob started for Spreadsheet ID/URL: " . ($this->spreadsheetIdOrUrl ?: 'DEFAULT_SETTING');
-        dump($startMsg);
-        echo $startMsg . "\n";
         Log::info($startMsg);
 
         try {
             $summary = $syncService->sync($this->spreadsheetIdOrUrl, $this->defaultSeller);
             $doneMsg = "ProcessGoogleSheetSyncJob completed successfully: Processed {$summary['total_rows_processed']} rows across {$summary['total_sheets']} sheets, saved {$summary['total_rows_inserted']} rows.";
-            dump($doneMsg);
-            echo $doneMsg . "\n";
             Log::info($doneMsg);
         } catch (Throwable $e) {
-            dump("ERROR GOOGLE SHEETS SYNC: " . $e->getMessage());
-            echo "ERROR GOOGLE SHEETS SYNC: " . $e->getMessage() . "\n";
             Log::error("ProcessGoogleSheetSyncJob error: " . $e->getMessage(), [
                 'trace' => $e->getTraceAsString(),
             ]);

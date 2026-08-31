@@ -168,17 +168,8 @@ class DashboardController extends Controller
 
         // Summary Statistics Cards (calculated respecting seller/month/year/search filters, but independent of color filter so all card counters reflect the full breakdown)
         $statsBaseQuery = OutgoingShipment::query();
-        if ($selectedMonth !== 'ALL' && $selectedMonth !== null && $selectedMonth !== '') {
-            if (is_numeric($selectedMonth)) {
-                $mInt = (int)$selectedMonth;
-                $mNum = ($mInt >= 0 && $mInt <= 11) ? ($mInt + 1) : $mInt;
-                $statsBaseQuery->whereMonth('tanggal_kirim', $mNum);
-            } else {
-                $mNum = $monthMap[strtoupper((string)$selectedMonth)] ?? null;
-                if ($mNum) {
-                    $statsBaseQuery->whereMonth('tanggal_kirim', $mNum);
-                }
-            }
+        if ($mNum !== null) {
+            $statsBaseQuery->whereMonth('tanggal_kirim', $mNum);
         }
         if (!empty($selectedYear)) {
             $statsBaseQuery->whereYear('tanggal_kirim', (int)$selectedYear);
@@ -736,5 +727,69 @@ class DashboardController extends Controller
         SyncSheetFilterJob::dispatch($seller, $month, $color, $search);
 
         return back()->with('success', 'Filter berhasil disinkronkan ke Google Spreadsheet!');
+    }
+
+    /**
+     * Discover sheet names for AJAX sync
+     */
+    public function syncDiscover(Request $request)
+    {
+        $url = trim($request->input('url', ''));
+        $webhookUrl = trim($request->input('webhook_url', ''));
+
+        if (empty($url)) {
+            $url = SystemSetting::get('google_sheet_url', 'https://docs.google.com/spreadsheets/d/1wUqPnU1_QOq6WocHwpxAhjhScjlb_ZhhSy8I2WqGQKw/edit');
+        }
+
+        $spreadsheetId = SystemSetting::extractSpreadsheetId($url);
+        if (!$spreadsheetId) {
+            return response()->json(['success' => false, 'message' => 'URL Google Spreadsheet tidak valid.'], 400);
+        }
+
+        // Save URL & ID
+        SystemSetting::set('google_sheet_url', $url);
+        SystemSetting::set('google_sheet_id', $spreadsheetId);
+
+        if (!empty($webhookUrl)) {
+            SystemSetting::set('google_sheet_webhook_url', $webhookUrl);
+        }
+
+        try {
+            $syncService = app(\App\Services\GoogleSheetsSyncService::class);
+            $sheetNames = $syncService->discoverSheetNames($spreadsheetId);
+            return response()->json([
+                'success' => true,
+                'spreadsheet_id' => $spreadsheetId,
+                'sheet_names' => $sheetNames
+            ]);
+        } catch (Throwable $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * Sync a single sheet tab for AJAX sync
+     */
+    public function syncSingleSheet(Request $request)
+    {
+        $spreadsheetId = $request->input('spreadsheet_id');
+        $sheetName = $request->input('sheet_name');
+        $seller = $request->input('seller', 'Aliqa');
+
+        if (empty($spreadsheetId) || empty($sheetName)) {
+            return response()->json(['success' => false, 'message' => 'Parameter spreadsheet_id atau sheet_name kurang.'], 400);
+        }
+
+        try {
+            $syncService = app(\App\Services\GoogleSheetsSyncService::class);
+            $metrics = $syncService->syncSingleSheet($spreadsheetId, $sheetName, $seller);
+            return response()->json([
+                'success' => true,
+                'processed' => $metrics['processed'] ?? 0,
+                'inserted' => $metrics['inserted'] ?? 0,
+            ]);
+        } catch (Throwable $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+        }
     }
 }

@@ -48,18 +48,15 @@ class ReverseSyncGoogleSheetsJob implements ShouldQueue
 
         $count = count($this->trackingItems);
         $startMsg = "ReverseSyncGoogleSheetsJob: Auto-updating {$count} NIPos tracking statuses back to Google Sheets in background...";
-        dump($startMsg);
         Log::info($startMsg);
 
         try {
             $summary = $syncService->reverseSyncNiposTracking($this->trackingItems);
 
             $doneMsg = "ReverseSyncGoogleSheetsJob: Completed reverse sync for {$count} items. Webhook Success: " . ($summary['webhook_success'] ? 'YES' : 'NO');
-            dump($doneMsg);
             Log::info($doneMsg, $summary);
         } catch (Throwable $e) {
             $errMsg = "ReverseSyncGoogleSheetsJob error: " . $e->getMessage();
-            dump("ERROR REVERSE SYNC: " . $errMsg);
             Log::error($errMsg, [
                 'trace' => $e->getTraceAsString(),
             ]);

@@ -42,14 +42,10 @@ class GoogleSheetsSyncService
         }
 
         $startMsg = "GoogleSheetsSyncService: Starting sync for Spreadsheet ID [{$spreadsheetId}]";
-        dump($startMsg);
-        echo $startMsg . "\n";
         Log::info($startMsg);
 
         // 2. Discover Sheet Names (Januari - Agustus)
         $sheetNames = $this->discoverSheetNames($spreadsheetId);
-        dump("Discovered " . count($sheetNames) . " sheets to sync: ", $sheetNames);
-        echo "Discovered " . count($sheetNames) . " sheets to sync: " . json_encode($sheetNames) . "\n";
         Log::info("Discovered " . count($sheetNames) . " sheets: " . json_encode($sheetNames));
 
         \Illuminate\Support\Facades\Cache::put('sync_progress', [
@@ -91,10 +87,7 @@ class GoogleSheetsSyncService
                 'updated_at' => now()->toDateTimeString(),
             ], 3600);
 
-            $msg = "Membaca Google Sheet: {$sheetName} (Seller: {$sheetSeller})";
-            dump($msg);
-            echo $msg . "\n";
-            Log::info("GoogleSheetsSyncService: Fetching CSV for sheet -> {$sheetName}");
+            Log::info("GoogleSheetsSyncService: Fetching CSV for sheet -> {$sheetName} (Seller: {$sheetSeller})");
 
             try {
                 $csvUrl = "https://docs.google.com/spreadsheets/d/{$spreadsheetId}/gviz/tq?tqx=out:csv&sheet=" . urlencode($sheetName);
@@ -123,13 +116,10 @@ class GoogleSheetsSyncService
                     $processedSheets[] = $sheetName;
 
                     $sheetDoneMsg = "Sheet [{$sheetName}] finished: {$metrics['processed']} rows processed, {$metrics['inserted']} rows inserted/updated.";
-                    dump($sheetDoneMsg);
-                    echo $sheetDoneMsg . "\n";
+                    Log::info($sheetDoneMsg);
                 }
             } catch (Throwable $e) {
                 $errMsg = "Error syncing sheet [{$sheetName}]: " . $e->getMessage();
-                dump("ERROR IMPORT: " . $errMsg);
-                echo "ERROR IMPORT: " . $errMsg . "\n";
                 Log::error($errMsg);
             }
         }
@@ -155,16 +145,46 @@ class GoogleSheetsSyncService
             'updated_at' => now()->toDateTimeString(),
         ], 3600);
 
-        dump("GoogleSheetsSyncService COMPLETED: ", $doneSummary);
         Log::info("GoogleSheetsSyncService finished: " . json_encode($doneSummary));
 
         return $doneSummary;
     }
 
     /**
+     * Sync a single Google Sheet tab
+     */
+    public function syncSingleSheet(string $spreadsheetId, string $sheetName, string $defaultSeller = 'Aliqa'): array
+    {
+        $sheetSeller = $defaultSeller;
+        if (str_contains(strtoupper($sheetName), 'ZAHERBA')) {
+            $sheetSeller = 'Mitra Zaherba';
+        } elseif (str_contains(strtoupper($sheetName), 'ALIQA')) {
+            $sheetSeller = 'Mitra Aliqa';
+        }
+
+        $csvUrl = "https://docs.google.com/spreadsheets/d/{$spreadsheetId}/gviz/tq?tqx=out:csv&sheet=" . urlencode($sheetName);
+
+        $response = Http::timeout(30)
+            ->retry(2, 500)
+            ->withHeaders([
+                'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept' => 'text/csv,text/plain,*/*',
+            ])
+            ->get($csvUrl);
+
+        if ($response->failed() || empty(trim((string)$response->body()))) {
+            Log::warning("GoogleSheetsSyncService: Sheet [{$sheetName}] empty or not accessible.");
+            return ['processed' => 0, 'inserted' => 0];
+        }
+
+        $csvBody = (string)$response->body();
+        return $this->parseCsvContent($csvBody, $sheetName, $sheetSeller);
+    }
+
+    /**
      * Discover sheet tab names from Google Sheet HTML page or fallback list
      */
-    protected function discoverSheetNames(string $spreadsheetId): array
+    public function discoverSheetNames(string $spreadsheetId): array
     {
         $discovered = [];
 
@@ -193,13 +213,11 @@ class GoogleSheetsSyncService
             return array_values(array_unique($discovered));
         }
 
-        // Standard monthly sheet names fallback list (only if discovery returned nothing)
+        // Standard monthly sheet names fallback list (only if HTML discovery returned nothing)
         $defaultMonthSheets = [
             'JANUARI (ZAHERBA)', 'FEBRUARI (ZAHERBA)', 'MARET (ZAHERBA)', 'APRIL (ZAHERBA)',
             'MEI (ZAHERBA)', 'JUNI (ZAHERBA)', 'JULI (ZAHERBA)', 'AGUSTUS (ZAHERBA)',
-            'SEPTEMBER (ZAHERBA)', 'OKTOBER (ZAHERBA)', 'NOVEMBER (ZAHERBA)', 'DESEMBER (ZAHERBA)',
-            'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember',
-            'Sheet1', 'Master Data'
+            'SEPTEMBER (ZAHERBA)', 'OKTOBER (ZAHERBA)', 'NOVEMBER (ZAHERBA)', 'DESEMBER (ZAHERBA)'
         ];
 
         return $defaultMonthSheets;
@@ -234,7 +252,7 @@ class GoogleSheetsSyncService
                 if (!empty($possibleMap)) {
                     $headerMap = $possibleMap;
                     $headerFound = true;
-                    dump("Header terdeteksi pada Sheet [{$sheetName}]: ", $rowArray);
+                    Log::info("GoogleSheetsSyncService: Header detected on sheet [{$sheetName}]: " . json_encode($rowArray));
                     continue;
                 }
             }
@@ -289,7 +307,6 @@ class GoogleSheetsSyncService
         $webhookUrl = $customWebhookUrl !== null ? $customWebhookUrl : (SystemSetting::get('google_sheet_webhook_url') ?: env('GOOGLE_SHEET_WEBHOOK_URL'));
 
         $logMsg = "GoogleSheetsSyncService: Reverse Syncing " . count($trackingItems) . " NIPos tracking updates back to Google Sheet [{$spreadsheetId}]";
-        dump($logMsg);
         Log::info($logMsg);
 
         $webhookSuccess = false;
@@ -371,7 +388,6 @@ class GoogleSheetsSyncService
         $statusLabel = $statusLabelMap[$statusColor] ?? $statusColor;
 
         $logMsg = "GoogleSheetsSyncService Two-Way Sync: Updating " . count($resiList) . " resis → {$statusColor} ({$statusLabel}) on Spreadsheet [{$spreadsheetId}]";
-        dump($logMsg);
         Log::info($logMsg);
 
         $webhookSuccess = false;

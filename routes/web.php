@@ -14,6 +14,8 @@ Route::post('/settings/google-sheets', [DashboardController::class, 'updateGoogl
 Route::post('/shipments/sync-google-sheets', [DashboardController::class, 'syncGoogleSheets'])->name('shipments.sync_google_sheets');
 Route::post('/shipments/sync-filter', [DashboardController::class, 'syncFilter'])->name('shipments.sync_filter');
 Route::get('/sync/progress', [DashboardController::class, 'syncProgress'])->name('sync.progress');
+Route::post('/sync/discover', [DashboardController::class, 'syncDiscover'])->name('sync.discover');
+Route::post('/sync/sheet', [DashboardController::class, 'syncSingleSheet'])->name('sync.sheet');
 Route::post('/bot/start-tracking', [TrackingController::class, 'startBotTracking'])->name('bot.start_tracking');
 Route::get('/bot/progress', [TrackingController::class, 'progress'])->name('bot.progress');
 

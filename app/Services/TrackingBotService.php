@@ -183,15 +183,17 @@ class TrackingBotService
     {
         $combined = strtoupper(($statusPos ?? '') . ' ' . ($keterangan ?? ''));
 
-        if (str_contains($combined, 'DITERIMA') || str_contains($combined, 'DELIVERED')) {
-            if (str_contains($combined, 'RETUR') || str_contains($combined, 'RETURN')) {
-                return 'RETUR';
-            }
-            return 'SUKSES';
+        // RETUR detection: RETURN DELIVERY, RETUR, RETURN, DITERIMA PENGIRIM, DITERIMA MITRA
+        if (str_contains($combined, 'RETURN DELIVERY') ||
+            str_contains($combined, 'RETURN') ||
+            str_contains($combined, 'RETUR') ||
+            str_contains($combined, 'DITERIMA PENGIRIM') ||
+            str_contains($combined, 'DITERIMA MITRA')) {
+            return 'RETUR';
         }
 
-        if (str_contains($combined, 'RETUR') || str_contains($combined, 'RETURN')) {
-            return 'RETUR';
+        if (str_contains($combined, 'DITERIMA') || str_contains($combined, 'DELIVERED')) {
+            return 'SUKSES';
         }
 
         if (str_contains($combined, 'FAILED') || str_contains($combined, 'GAGAL') || str_contains($combined, 'KENDALA') || str_contains($combined, 'FOLLOW UP')) {
