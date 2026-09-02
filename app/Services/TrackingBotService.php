@@ -178,29 +178,91 @@ class TrackingBotService
 
     /**
      * Categorize status_kategori (SUKSES, RETUR, FOLLOW_UP, IN_PROCESS)
+     * Rule: RETUR MUST BE CHECKED FIRST BEFORE DELIVERED!
      */
     public function categorizeStatus(?string $statusPos, ?string $keterangan): string
     {
-        $combined = strtoupper(($statusPos ?? '') . ' ' . ($keterangan ?? ''));
+        $statusUpper = strtoupper(trim($statusPos ?? ''));
+        $ketUpper = strtoupper(trim($keterangan ?? ''));
+        $combined = $statusUpper . ' ' . $ketUpper;
 
-        // RETUR detection: RETURN DELIVERY, RETUR, RETURN, DITERIMA PENGIRIM, DITERIMA MITRA
-        if (str_contains($combined, 'RETURN DELIVERY') ||
-            str_contains($combined, 'RETURN') ||
+        // 1. RETUR Priority (MUST BE CHECKED FIRST before DELIVERED)
+        if (str_contains($combined, 'RETURN') ||
             str_contains($combined, 'RETUR') ||
+            str_contains($combined, 'RTS') ||
+            str_contains($combined, 'TIDAK TERKIRIM') ||
+            str_contains($combined, 'GAGAL ANTAR') ||
+            str_contains($combined, 'ALAMAT TIDAK DITEMUKAN') ||
+            str_contains($combined, 'RUMAH KOSONG') ||
+            str_contains($combined, 'BA KEMBALI') ||
+            str_contains($combined, 'PENGATURAN KEMBALI') ||
             str_contains($combined, 'DITERIMA PENGIRIM') ||
             str_contains($combined, 'DITERIMA MITRA')) {
             return 'RETUR';
         }
 
-        if (str_contains($combined, 'DITERIMA') || str_contains($combined, 'DELIVERED')) {
+        // 2. DELIVERED / SUKSES (Only if status is explicitly DELIVERED or received by recipient)
+        if (($statusUpper === 'DELIVERED' || str_contains($statusUpper, 'DELIVERED')) && !str_contains($statusUpper, 'RETURN')) {
             return 'SUKSES';
         }
 
-        if (str_contains($combined, 'FAILED') || str_contains($combined, 'GAGAL') || str_contains($combined, 'KENDALA') || str_contains($combined, 'FOLLOW UP')) {
+        if (str_contains($combined, 'DITERIMA YANG BERSANGKUTAN') ||
+            str_contains($combined, 'DITERIMA ORANG SERUMAH') ||
+            str_contains($combined, 'DITERIMA SATPAM') ||
+            str_contains($combined, 'DITERIMA KELUARGA') ||
+            str_contains($combined, 'SERAH TERIMA') ||
+            (str_contains($combined, 'SELESAI') && !str_contains($combined, 'BELUM')) ||
+            (str_contains($combined, 'DITERIMA') && !str_contains($combined, 'BELUM') && !str_contains($combined, 'PENGIRIM') && !str_contains($combined, 'MITRA'))) {
+            return 'SUKSES';
+        }
+
+        // 3. FOLLOW_UP (Explicit CS Follow-Up markers)
+        if (str_contains($combined, 'FAILEDTODELIVERED') ||
+            str_contains($combined, 'GAGAL') ||
+            str_contains($combined, 'KENDALA') ||
+            str_contains($combined, 'FOLLOW UP CS')) {
             return 'FOLLOW_UP';
         }
 
+        // 4. IN_PROCESS (Everything else that is not DELIVERED and not RETUR)
         return 'IN_PROCESS';
+    }
+
+    /**
+     * Helper to format running SLA string e.g. "H+2 (JALAN)" for IN_PROCESS resis
+     */
+    public function formatRunningSla(?string $tanggalKirim, string $category = 'IN_PROCESS', ?int $defaultSla = 2): string
+    {
+        if (in_array(strtoupper($category), ['SUKSES', 'RETUR'])) {
+            return (string)($defaultSla ?: 2);
+        }
+
+        if (empty($tanggalKirim)) {
+            return "H+1 (JALAN)";
+        }
+
+        try {
+            $tgl = \Illuminate\Support\Carbon::parse($tanggalKirim);
+            $diffHours = abs(now()->diffInHours($tgl));
+            $days = (int)ceil($diffHours / 24);
+            $days = max(1, $days);
+            return "H+{$days} (JALAN)";
+        } catch (\Throwable $e) {
+            return "H+1 (JALAN)";
+        }
+    }
+
+    /**
+     * Determine badge/card color code based on category
+     */
+    public function determineColorCode(string $kategori): string
+    {
+        return match (strtoupper($kategori)) {
+            'RETUR' => 'ORANGE',
+            'SUKSES' => 'BIRU',
+            'FOLLOW_UP' => 'KUNING',
+            default => 'PUTIH',
+        };
     }
 
     /**

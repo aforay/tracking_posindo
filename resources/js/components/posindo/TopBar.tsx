@@ -1,7 +1,7 @@
 import { useMemo, useEffect, useState } from "react";
 import { router } from "@inertiajs/react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Truck, Upload, Bot, Loader2, CheckCircle2, FileUp, Zap, RefreshCw } from "lucide-react";
+import { Truck, Upload, Bot, Loader2, CheckCircle2, FileUp, Zap, RefreshCw, Send } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -46,6 +46,19 @@ export function TopBar({
     }
     return Array.from(list);
   }, [sellersList]);
+  const normalizedSeller = useMemo(() => {
+    if (!seller || seller === "ALL" || seller === "all" || seller === "Semua Seller") {
+      return "Semua Seller";
+    }
+    if (seller.includes("Aliqa") || seller === "Aliqa") {
+      return "Mitra Aliqa";
+    }
+    if (seller.includes("Zaherba") || seller === "Zaherba") {
+      return "Mitra Zaherba";
+    }
+    return seller;
+  }, [seller]);
+  const [selectedSyncMonth, setSelectedSyncMonth] = useState<string>("current");
   const [uploadOpen, setUploadOpen] = useState(false);
   const [sheetSyncOpen, setSheetSyncOpen] = useState(false);
   const [sheetUrlInput, setSheetUrlInput] = useState(
@@ -53,7 +66,40 @@ export function TopBar({
   );
   const [webhookUrlInput, setWebhookUrlInput] = useState(googleSheetWebhookUrl || "");
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isPushing, setIsPushing] = useState(false);
   const [sheetSyncState, setSheetSyncState] = useState<"idle" | "syncing" | "done">("idle");
+
+  const handlePushUpdates = async () => {
+    if (isPushing) return;
+    setIsPushing(true);
+    try {
+      const csrfToken = getCsrfToken();
+      const targetMonth = selectedSyncMonth === "current" ? "" : selectedSyncMonth;
+      const res = await fetch("/shipments/push-updates", {
+        method: "POST",
+        headers: {
+          "Accept": "application/json",
+          "Content-Type": "application/json",
+          "X-CSRF-TOKEN": csrfToken,
+        },
+        body: JSON.stringify({
+          month: targetMonth,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        toast.success("Memulai Reverse Sync ke Google Sheets!", {
+          description: data.message || "Status terbaru dikirim ke Google Sheets via Webhook di latar belakang.",
+        });
+      } else {
+        toast.error(data.message || "Gagal melakukan push status ke Google Sheets.");
+      }
+    } catch (err) {
+      toast.error("Gagal melakukan push status: " + String(err));
+    } finally {
+      setIsPushing(false);
+    }
+  };
   const [sheetSyncProgress, setSheetSyncProgress] = useState(0);
   const [sheetSyncInfo, setSheetSyncInfo] = useState<{
     current_sheet: string;
@@ -283,6 +329,7 @@ export function TopBar({
         body: JSON.stringify({
           url: sheetUrlInput,
           webhook_url: webhookUrlInput,
+          month: selectedSyncMonth === "current" ? "" : selectedSyncMonth,
         }),
       });
 
@@ -390,70 +437,106 @@ export function TopBar({
             </span>
           </div>
           <div>
-            <h1 className="text-[15px] leading-tight font-bold tracking-tight text-foreground">
-              Posindo Tracking &amp; CS Follow-Up System
-            </h1>
-            <p className="text-xs text-muted-foreground">
-              Outgoing Shipments Monitoring &amp; Seller Reporting Dashboard (Cilacap Region)
+            <div className="flex items-center gap-2">
+              <h1 className="text-lg leading-none font-extrabold tracking-wider text-[#1E40AF]">
+                TRACKO
+              </h1>
+              <span className="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-bold text-blue-800 border border-blue-200">SYSTEM</span>
+            </div>
+            <p className="mt-0.5 text-xs text-muted-foreground font-medium">
+              Posindo Outgoing Shipments Monitoring &amp; CS Follow-Up (Cilacap Region)
             </p>
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="inline-flex items-center gap-1.5 rounded-full border border-emerald-300 bg-emerald-50/90 px-3 py-1 text-xs font-bold text-emerald-800 shadow-sm transition-all hover:bg-emerald-100">
-            <span className="relative flex h-2.5 w-2.5">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
-              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500"></span>
-            </span>
-            <span>Auto-Sync Active</span>
-            <span className="rounded bg-emerald-200/80 px-1.5 py-0.5 text-[10px] font-extrabold text-emerald-900">
-              Every 15m
-            </span>
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Grup 1: Sinkronisasi Sheets */}
+          <div className="flex flex-wrap items-center gap-1.5 rounded-xl bg-slate-100/90 p-1 border border-slate-200/90 shadow-sm">
+            <Select value={selectedSyncMonth} onValueChange={setSelectedSyncMonth}>
+              <SelectTrigger className="w-[160px] h-9 text-xs bg-white border border-slate-300 font-semibold cursor-pointer shadow-none focus:ring-1 focus:ring-emerald-500">
+                <SelectValue placeholder="Pilih Tab / Bulan" />
+              </SelectTrigger>
+              <SelectContent className="bg-white border border-slate-200 shadow-xl rounded-xl">
+                <SelectItem value="current" className="font-semibold cursor-pointer text-xs">Bulan Berjalan (Default)</SelectItem>
+                <SelectItem value="1" className="font-semibold cursor-pointer text-xs">Januari</SelectItem>
+                <SelectItem value="2" className="font-semibold cursor-pointer text-xs">Februari</SelectItem>
+                <SelectItem value="3" className="font-semibold cursor-pointer text-xs">Maret</SelectItem>
+                <SelectItem value="4" className="font-semibold cursor-pointer text-xs">April</SelectItem>
+                <SelectItem value="5" className="font-semibold cursor-pointer text-xs">Mei</SelectItem>
+                <SelectItem value="6" className="font-semibold cursor-pointer text-xs">Juni</SelectItem>
+                <SelectItem value="7" className="font-semibold cursor-pointer text-xs">Juli</SelectItem>
+                <SelectItem value="8" className="font-semibold cursor-pointer text-xs">Agustus</SelectItem>
+                <SelectItem value="9" className="font-semibold cursor-pointer text-xs">September</SelectItem>
+                <SelectItem value="10" className="font-semibold cursor-pointer text-xs">Oktober</SelectItem>
+                <SelectItem value="11" className="font-semibold cursor-pointer text-xs">November</SelectItem>
+                <SelectItem value="12" className="font-semibold cursor-pointer text-xs">Desember</SelectItem>
+                <SelectItem value="ALL" className="font-semibold cursor-pointer text-xs">Semua Bulan (ALL)</SelectItem>
+              </SelectContent>
+            </Select>
+
+            <Button
+              variant="outline"
+              className="gap-1.5 border-emerald-600 bg-emerald-50 text-emerald-900 hover:bg-emerald-100 cursor-pointer font-semibold text-xs h-9 shadow-none"
+              onClick={() => setSheetSyncOpen(true)}
+            >
+              <RefreshCw className="h-3.5 w-3.5 text-emerald-600" /> Sync Sheets
+            </Button>
+
+            <Button
+              variant="outline"
+              disabled={isPushing}
+              className="gap-1.5 border-blue-600 bg-blue-50 text-blue-900 hover:bg-blue-100 cursor-pointer font-semibold text-xs h-9 shadow-none"
+              onClick={handlePushUpdates}
+            >
+              {isPushing ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-600" />
+              ) : (
+                <Send className="h-3.5 w-3.5 text-blue-600" />
+              )}
+              Push Status
+            </Button>
           </div>
 
-          <Button
-            variant="outline"
-            className="gap-2 border-emerald-600 bg-emerald-50 text-emerald-900 hover:bg-emerald-100 cursor-pointer font-semibold text-xs"
-            onClick={() => setSheetSyncOpen(true)}
-          >
-            <RefreshCw className="h-3.5 w-3.5 text-emerald-600" /> Sync Google Sheets
-          </Button>
+          {/* Grup 2: Impor Data & Seller */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Button variant="outline" className="gap-1.5 text-xs h-9 font-semibold border-slate-300 bg-white hover:bg-slate-50 cursor-pointer shadow-sm" onClick={() => setUploadOpen(true)}>
+              <Upload className="h-3.5 w-3.5 text-[#F97316]" /> Upload Excel
+            </Button>
 
-          <Button variant="outline" className="gap-2 text-xs" onClick={() => setUploadOpen(true)}>
-            <Upload className="h-3.5 w-3.5 text-[#F97316]" /> Upload Excel
-          </Button>
+            <Select value={normalizedSeller} onValueChange={onSeller}>
+              <SelectTrigger className="w-[160px] h-9 text-xs bg-white border border-slate-300 font-semibold cursor-pointer shadow-sm focus:ring-1 focus:ring-emerald-500">
+                <SelectValue placeholder="Pilih Seller">
+                  {normalizedSeller === "Semua Seller" ? "Pilih Seller" : normalizedSeller}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent className="bg-white border border-slate-200 shadow-xl rounded-xl">
+                <SelectItem value="Semua Seller" className="font-semibold cursor-pointer text-xs">Pilih Seller (Semua)</SelectItem>
+                <SelectItem value="Mitra Aliqa" className="font-semibold cursor-pointer text-xs">Mitra Aliqa</SelectItem>
+                <SelectItem value="Mitra Zaherba" className="font-semibold cursor-pointer text-xs">Mitra Zaherba</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
 
-          <Select value={seller} onValueChange={onSeller}>
-            <SelectTrigger className="w-[180px] text-xs bg-white border border-slate-300 font-semibold cursor-pointer shadow-sm">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent className="bg-white border border-slate-200 shadow-xl rounded-xl">
-              <SelectItem value="Semua Seller" className="font-semibold cursor-pointer">Semua Seller</SelectItem>
-              {sellerOptions.map((s) => (
-                <SelectItem key={s} value={s} className="font-semibold cursor-pointer">
-                  {s}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-
-          <Button
-            onClick={runBot}
-            disabled={botState === "running"}
-            className="gap-2 bg-[#1E40AF] text-white hover:bg-blue-900 cursor-pointer text-xs"
-          >
-            {botState === "running" ? (
-              <Loader2 className="h-4 w-4 animate-spin text-[#F97316]" />
-            ) : botState === "done" ? (
-              <CheckCircle2 className="h-4 w-4 text-emerald-400" />
-            ) : (
-              <Bot className="h-4 w-4 text-[#F97316]" />
-            )}
-            Run Bot NIPOS
-            <span className={`ml-1 rounded-full px-2 py-0.5 text-[10px] font-bold ${badge.cls}`}>
-              {badge.text}
-            </span>
-          </Button>
+          {/* Grup 3: Bot NIPOS */}
+          <div className="flex items-center gap-1.5">
+            <Button
+              onClick={runBot}
+              disabled={botState === "running"}
+              className="gap-2 bg-[#1E40AF] text-white hover:bg-blue-900 cursor-pointer text-xs h-9 font-bold shadow-md shadow-blue-900/10"
+            >
+              {botState === "running" ? (
+                <Loader2 className="h-4 w-4 animate-spin text-[#F97316]" />
+              ) : botState === "done" ? (
+                <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+              ) : (
+                <Bot className="h-4 w-4 text-[#F97316]" />
+              )}
+              Run Bot NIPOS
+              <span className={`ml-1 rounded-full px-2 py-0.5 text-[10px] font-bold ${badge.cls}`}>
+                {badge.text}
+              </span>
+            </Button>
+          </div>
         </div>
       </div>
 

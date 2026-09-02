@@ -5,7 +5,7 @@ import { createRoot } from 'react-dom/client';
 import { createInertiaApp } from '@inertiajs/react';
 import { resolvePageComponent } from 'laravel-vite-plugin/inertia-helpers';
 
-const appName = 'Posindo Tracking & CS Follow-Up System';
+const appName = 'TRACKO - Posindo Outgoing Shipments Monitoring & CS Follow-Up';
 
 createInertiaApp({
     title: (title) => title ? `${title} - ${appName}` : appName,

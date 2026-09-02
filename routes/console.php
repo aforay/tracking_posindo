@@ -27,3 +27,13 @@ Schedule::command('sheets:sync')
     ->withoutOverlapping()
     ->appendOutputTo(storage_path('logs/sheets_sync_schedule.log'));
 
+Schedule::command('nipos:track-all')
+    ->everyFifteenMinutes()
+    ->withoutOverlapping()
+    ->appendOutputTo(storage_path('logs/nipos_track_schedule.log'));
+
+Schedule::command('sheets:push-updates')
+    ->everyFifteenMinutes()
+    ->withoutOverlapping()
+    ->appendOutputTo(storage_path('logs/sheets_push_schedule.log'));
+

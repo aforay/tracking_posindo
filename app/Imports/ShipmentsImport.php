@@ -283,17 +283,17 @@ class ShipmentsImport
                 $foundCount++;
             }
             // Tanggal Kirim Column
-            elseif (in_array($clean, ['tglkirim', 'tanggalkirim', 'tgl', 'tanggal', 'tglkirimpos', 'tanggalkirimpos'])) {
+            elseif (in_array($clean, ['aliqatanggal', 'tglkirim', 'tanggalkirim', 'tgl', 'tanggal', 'tglkirimpos', 'tanggalkirimpos'])) {
                 $map['tanggal_kirim'] = $colIdx;
                 $foundCount++;
             }
             // Penerima Column
-            elseif (in_array($clean, ['penerima', 'namapenerima', 'namakonsumen', 'konsumen', 'penerimabarang', 'namatujuan'])) {
+            elseif (in_array($clean, ['namadepan', 'penerima', 'namapenerima', 'namakonsumen', 'konsumen', 'penerimabarang', 'namatujuan'])) {
                 $map['penerima'] = $colIdx;
                 $foundCount++;
             }
             // No HP / Telepon Column
-            elseif (in_array($clean, ['nohp', 'hp', 'telepon', 'notelpon', 'phone', 'contact', 'nohppenerima'])) {
+            elseif (in_array($clean, ['teleponalamat', 'telepon', 'nohp', 'hp', 'notelpon', 'phone', 'contact', 'nohppenerima'])) {
                 $map['no_hp'] = $colIdx;
                 $foundCount++;
             }
@@ -303,12 +303,12 @@ class ShipmentsImport
                 $foundCount++;
             }
             // Status POS Column
-            elseif (in_array($clean, ['statuspos', 'status', 'trackingpos', 'statusnipos', 'statusniposl', 'nipos', 'statusakhir'])) {
+            elseif (in_array($clean, ['tracking', 'trackingpos', 'statuspos', 'status', 'statusnipos', 'statusniposl', 'nipos', 'statusakhir'])) {
                 $map['status_pos'] = $colIdx;
                 $foundCount++;
             }
             // Keterangan Column
-            elseif (in_array($clean, ['keterangan', 'penerimaketerangank', 'keterangank', 'alasan', 'note', 'penerimaantaran'])) {
+            elseif (in_array($clean, ['posketerangan', 'keterangan', 'penerimaketerangank', 'keterangank', 'alasan', 'note', 'penerimaantaran'])) {
                 $map['keterangan'] = $colIdx;
                 $foundCount++;
             }
@@ -331,6 +331,8 @@ class ShipmentsImport
             return null;
         }
 
+        $isAliqaSheet = ($sheetName && str_contains(strtoupper($sheetName), 'ALIQA')) || str_contains(strtoupper($this->defaultSeller), 'ALIQA');
+
         // 1. Extract Resi Number (Header Map -> Named Keys -> Positional Index Fallback -> Regex Scan)
         $resi = null;
         if (isset($headerMap['resi']) && isset($rowArray[$headerMap['resi']])) {
@@ -343,9 +345,11 @@ class ShipmentsImport
             $resi = $rowArray['barcode'];
         }
 
-        // Index Fallback if resi is still empty: Check Index 0 (A), 4 (E), 1 (B), 3 (D), 2 (C)
+        // Index Fallback if resi is still empty:
+        // For Aliqa: Check Index 2 (C) first, then 0 (A), 4 (E), 1 (B), 3 (D)
+        // For Zaherba / general: Check Index 0 (A), 4 (E), 1 (B), 3 (D), 2 (C)
         if (empty($resi)) {
-            $candidateIndexes = [0, 4, 1, 3, 2];
+            $candidateIndexes = $isAliqaSheet ? [2, 0, 4, 1, 3] : [0, 4, 1, 3, 2];
             foreach ($candidateIndexes as $idx) {
                 if (isset($rowArray[$idx])) {
                     $strVal = trim((string)$rowArray[$idx]);
@@ -377,71 +381,84 @@ class ShipmentsImport
         }
 
         $resi = trim((string)$resi);
-        if (empty($resi) || in_array(strtoupper($resi), ['RESI', 'NO RESI', 'BARCODE', 'TRACKING POS', 'FORM PEMANTAUAN', 'NO', 'NO. RESI', 'BARCODE ITEM'])) {
+        if (empty($resi)) {
             return null;
         }
 
-        // 2. Extract Seller (Header Map -> Named -> Index 2 / Index 0 Fallback)
-        $sellerRaw = isset($headerMap['seller']) ? ($rowArray[$headerMap['seller']] ?? null) : ($rowArray['nama_seller'] ?? $rowArray['seller'] ?? ($rowArray[2] ?? null));
-        $seller = trim((string)($sellerRaw ?: $this->defaultSeller));
-        if (empty($seller) || strtoupper($seller) === 'NAMA CS' || str_starts_with(strtoupper($seller), 'CS ') || strtoupper($seller) === 'SELLER' || is_numeric($seller)) {
-            $seller = $this->defaultSeller;
+        // Resi MUST be valid alphanumeric (length 8-35)
+        if (!preg_match('/^[A-Za-z0-9]{8,35}$/', $resi)) {
+            return null;
         }
 
-        // 3. Extract Penerima (Header Map -> Named -> Index 2 / Index 3 Fallback)
-        $penerimaRaw = isset($headerMap['penerima']) ? ($rowArray[$headerMap['penerima']] ?? null) : ($rowArray['nama_penerima'] ?? $rowArray['penerima'] ?? $rowArray['nama_konsumen'] ?? ($rowArray[2] ?? ($rowArray[3] ?? null)));
+        $resiUpper = strtoupper($resi);
+        $headerWords = [
+            'RESI', 'NO RESI', 'BARCODE', 'TRACKING POS', 'FORM PEMANTAUAN', 'NO', 'NO RESI',
+            'BARCODE ITEM', 'INVOICE', 'TELEPON', 'PRODUK', 'JUMLAH COD', 'SLA', 'KETERANGAN',
+            'TANGGAL', 'PENERIMA', 'NAMA CS', 'SELLER', 'KONSUMEN', 'ALAMAT', 'STATUS', 'STATUS POS', 'TRACKING'
+        ];
+        if (in_array($resiUpper, $headerWords) || str_starts_with($resiUpper, 'FORM') || str_starts_with($resiUpper, 'PEM')) {
+            return null;
+        }
+
+        if (is_numeric($resi) && strlen($resi) < 8) {
+            return null; // Skip pure numeric row indexes (1, 2, 3...)
+        }
+
+        // 2. Extract Seller
+        if ($isAliqaSheet) {
+            $seller = 'Mitra Aliqa';
+        } else {
+            $sellerRaw = isset($headerMap['seller']) ? ($rowArray[$headerMap['seller']] ?? null) : ($rowArray['nama_seller'] ?? $rowArray['seller'] ?? ($rowArray[2] ?? null));
+            $seller = trim((string)($sellerRaw ?: $this->defaultSeller));
+            if (empty($seller) || strtoupper($seller) === 'NAMA CS' || str_starts_with(strtoupper($seller), 'CS ') || strtoupper($seller) === 'SELLER' || is_numeric($seller)) {
+                $seller = $this->defaultSeller;
+            }
+            if ($seller === 'Aliqa') {
+                $seller = 'Mitra Aliqa';
+            } elseif ($seller === 'Zaherba') {
+                $seller = 'Mitra Zaherba';
+            }
+        }
+
+        // 3. Extract Penerima (Aliqa: Kolom D / Index 3)
+        $penerimaRaw = isset($headerMap['penerima']) ? ($rowArray[$headerMap['penerima']] ?? null) : ($rowArray['nama_penerima'] ?? $rowArray['penerima'] ?? $rowArray['nama_konsumen'] ?? ($isAliqaSheet ? ($rowArray[3] ?? null) : ($rowArray[2] ?? ($rowArray[3] ?? null))));
         $penerima = trim((string)($penerimaRaw ?: ''));
-        if (in_array(strtoupper($penerima), ['NAMA KONSUMEN', 'PENERIMA', 'NAMA PENERIMA', 'PENERIMA BARANG'])) {
+        if (in_array(strtoupper($penerima), ['NAMA KONSUMEN', 'PENERIMA', 'NAMA PENERIMA', 'PENERIMA BARANG', 'NAMA DEPAN'])) {
             return null; // Skip header row if caught
         }
 
-        // 4. Extract No HP (Header Map -> Index 6 / 8 Fallback)
-        $noHpRaw = isset($headerMap['no_hp']) ? ($rowArray[$headerMap['no_hp']] ?? null) : ($rowArray['no_hp'] ?? $rowArray['hp'] ?? $rowArray['telepon'] ?? ($rowArray[8] ?? ($rowArray[6] ?? null)));
+        // 4. Extract No HP (Aliqa: Kolom O / Index 14)
+        $noHpRaw = isset($headerMap['no_hp']) ? ($rowArray[$headerMap['no_hp']] ?? null) : ($rowArray['no_hp'] ?? $rowArray['hp'] ?? $rowArray['telepon'] ?? ($isAliqaSheet ? ($rowArray[14] ?? null) : ($rowArray[8] ?? ($rowArray[6] ?? null))));
         $noHp = trim((string)($noHpRaw ?: ''));
 
-        // 5. Extract Alamat (Header Map -> Index 3 / 5 Fallback)
-        $alamatRaw = isset($headerMap['alamat']) ? ($rowArray[$headerMap['alamat']] ?? null) : ($rowArray['alamat'] ?? ($rowArray[5] ?? ($rowArray[3] ?? null)));
+        // 5. Extract Alamat (Aliqa: Kolom N / Index 13)
+        $alamatRaw = isset($headerMap['alamat']) ? ($rowArray[$headerMap['alamat']] ?? null) : ($rowArray['alamat'] ?? ($isAliqaSheet ? ($rowArray[13] ?? null) : ($rowArray[5] ?? ($rowArray[3] ?? null))));
         $alamat = trim((string)($alamatRaw ?: ''));
 
         // 6. Extract Tanggal Kirim (Header Map -> Index 1 / Index 0 -> Sheet Name Fallback)
         $tanggalRaw = isset($headerMap['tanggal_kirim']) ? ($rowArray[$headerMap['tanggal_kirim']] ?? null) : ($rowArray['tanggal_kirim'] ?? $rowArray['tanggal'] ?? ($rowArray[1] ?? ($rowArray[0] ?? null)));
         $tanggalKirim = $this->parseDateValue($tanggalRaw, $sheetName);
 
-        // 7. Extract Status POS & Keterangan
-        $statusPosRaw = isset($headerMap['status_pos']) ? ($rowArray[$headerMap['status_pos']] ?? null) : ($rowArray['status_pos'] ?? $rowArray['tracking_pos'] ?? $rowArray['status'] ?? ($rowArray[11] ?? null));
+        // 7. Extract Status POS & Keterangan (Aliqa: Keterangan = Kolom P / Index 15, Status POS = Kolom Q / Index 16)
+        $statusPosRaw = isset($headerMap['status_pos']) ? ($rowArray[$headerMap['status_pos']] ?? null) : ($rowArray['status_pos'] ?? $rowArray['tracking_pos'] ?? $rowArray['status'] ?? ($isAliqaSheet ? ($rowArray[16] ?? null) : ($rowArray[11] ?? null)));
         $statusPos = trim((string)($statusPosRaw ?: ''));
-        if (in_array(strtoupper($statusPos), ['TRACKING POS', 'STATUS', 'STATUS POS'])) {
+        if (in_array(strtoupper($statusPos), ['TRACKING POS', 'STATUS', 'STATUS POS', 'TRACKING'])) {
             $statusPos = '';
         }
 
-        $ketRaw = isset($headerMap['keterangan']) ? ($rowArray[$headerMap['keterangan']] ?? null) : ($rowArray['keterangan'] ?? ($rowArray[10] ?? null));
+        $ketRaw = isset($headerMap['keterangan']) ? ($rowArray[$headerMap['keterangan']] ?? null) : ($rowArray['keterangan'] ?? ($isAliqaSheet ? ($rowArray[15] ?? null) : ($rowArray[10] ?? null)));
         $keterangan = trim((string)($ketRaw ?: ''));
-        if (in_array(strtoupper($keterangan), ['KETERANGAN', 'PENERIMA & KETERANGAN'])) {
+        if (in_array(strtoupper($keterangan), ['KETERANGAN', 'PENERIMA & KETERANGAN', 'POS KETERANGAN'])) {
             $keterangan = '';
         }
 
-        // 8. Extract SLA
-        $slaRaw = isset($headerMap['sla_days']) ? ($rowArray[$headerMap['sla_days']] ?? null) : ($rowArray['sla_days'] ?? $rowArray['sla'] ?? null);
+        // 8. Extract SLA (Aliqa: SLA = Kolom R / Index 17)
+        $slaRaw = isset($headerMap['sla_days']) ? ($rowArray[$headerMap['sla_days']] ?? null) : ($rowArray['sla_days'] ?? $rowArray['sla'] ?? ($isAliqaSheet ? ($rowArray[17] ?? null) : null));
         $slaDays = is_numeric($slaRaw) ? (int)$slaRaw : null;
 
-        // Categorize status
-        $statusUpper = strtoupper($statusPos . ' ' . $keterangan);
-        $kategori = 'IN_PROCESS';
-
-        // RETUR detection: DELIVERED (RETURN DELIVERY), or DITERIMA PENGIRIM/MITRA (returned to sender), or explicit RETUR/RETURN keyword
-        $isReturn = str_contains($statusUpper, 'RETURN DELIVERY')
-            || str_contains($statusUpper, 'RETURN')
-            || str_contains($statusUpper, 'RETUR')
-            || str_contains($statusUpper, 'DITERIMA PENGIRIM')
-            || str_contains($statusUpper, 'DITERIMA MITRA');
-
-        if ($isReturn) {
-            $kategori = 'RETUR';
-        } elseif (str_contains($statusUpper, 'DITERIMA') || str_contains($statusUpper, 'DELIVERED')) {
-            $kategori = 'SUKSES';
-        } elseif (str_contains($statusUpper, 'FAILED') || str_contains($statusUpper, 'GAGAL') || str_contains($statusUpper, 'KENDALA') || str_contains($statusUpper, 'FOLLOW UP')) {
-            $kategori = 'FOLLOW_UP';
-        }
+        // Categorize status with RETUR priority checked FIRST
+        $botService = new \App\Services\TrackingBotService();
+        $kategori = $botService->categorizeStatus($statusPos, $keterangan);
 
         return [
             'nama_seller' => $seller,
@@ -529,6 +546,16 @@ class ShipmentsImport
             return 0;
         }
 
+        // Deduplicate buffer batch by no_resi to ensure clean unique key upserting
+        $uniqueMap = [];
+        foreach ($batchBuffer as $item) {
+            $uniqueMap[$item['no_resi']] = $item;
+        }
+        $batchBuffer = array_values($uniqueMap);
+        $resisInBuffer = array_keys($uniqueMap);
+
+        $botService = new \App\Services\TrackingBotService();
+
         // 1. Fetch existing database records to preserve established statuses & manual CS updates
         $existingMap = OutgoingShipment::whereIn('no_resi', $resisInBuffer)
             ->get()
@@ -549,50 +576,35 @@ class ShipmentsImport
                 $alamat = !empty($data['alamat']) ? $data['alamat'] : $existing->alamat;
                 $tanggalKirim = !empty($data['tanggal_kirim']) ? $data['tanggal_kirim'] : ($existing->tanggal_kirim ? (is_string($existing->tanggal_kirim) ? substr($existing->tanggal_kirim, 0, 10) : $existing->tanggal_kirim->format('Y-m-d')) : date('Y-m-d'));
 
-                // NIPos is Primary Source of Truth:
-                // Strict Protection for DELIVERED & NIPos Tracked Data:
-                // Jangan pernah menimpa (overwrite) status_pos di database jika nilai status saat ini sudah 'DELIVERED'
-                $existingStatusUpper = strtoupper(trim((string)$existing->status_pos));
-                $incomingStatusUpper = strtoupper(trim((string)($data['status_pos'] ?? '')));
-                $isAlreadyDelivered = str_contains($existingStatusUpper, 'DELIVERED');
+                $incomingStatus = $data['status_pos'] ?? '';
+                $incomingKet = $data['keterangan'] ?? '';
+                $incomingCategory = $botService->categorizeStatus($incomingStatus, $incomingKet);
 
-                // Exception: If incoming data explicitly says RETUR (DELIVERED RETURN DELIVERY),
-                // it must override even if existing record says DELIVERED — because a return is
-                // fundamentally different from a successful delivery.
-                $incomingIsReturn = str_contains($incomingStatusUpper, 'RETURN DELIVERY')
-                    || str_contains($incomingStatusUpper, 'RETURN')
-                    || $data['status_kategori'] === 'RETUR';
-                $existingIsReturn = str_contains($existingStatusUpper, 'RETURN DELIVERY')
-                    || $existing->status_kategori === 'RETUR';
+                $existingStatus = $existing->status_pos ?? '';
+                $existingKet = $existing->keterangan ?? '';
+                $existingCategory = $botService->categorizeStatus($existingStatus, $existingKet);
 
-                $hasNiposTracking = ($isAlreadyDelivered && !$incomingIsReturn)
-                    || (!empty($existing->last_tracked_at) && !$incomingIsReturn)
-                    || (($existing->status_kategori === 'SUKSES' || $existing->status_kategori === 'RETUR') && !$incomingIsReturn);
-
-                if ($hasNiposTracking) {
-                    $statusPos = $existing->status_pos ?: 'DELIVERED';
-                    $keterangan = $existing->keterangan ?: 'DITERIMA YANG BERSANGKUTAN';
-                    $statusKategori = $existing->status_kategori ?: ($isAlreadyDelivered ? 'SUKSES' : 'IN_PROCESS');
-                    $slaDays = $existing->sla_days ?: $data['sla_days'];
-                } elseif ($incomingIsReturn) {
-                    // Sheet explicitly marks as RETUR — always respect this
-                    $statusPos = $data['status_pos'] ?: 'DELIVERED (RETURN DELIVERY)';
-                    $keterangan = $data['keterangan'] ?: 'DITERIMA PENGIRIM';
+                // Priority Check: RETUR -> SUKSES -> IN_PROCESS / FOLLOW_UP
+                if ($incomingCategory === 'RETUR' || $existingCategory === 'RETUR') {
+                    $statusPos = !empty($data['status_pos']) ? $data['status_pos'] : ($existing->status_pos ?: 'DELIVERED (RETURN DELIVERY)');
+                    $keterangan = !empty($data['keterangan']) ? $data['keterangan'] : ($existing->keterangan ?: 'DITERIMA PENGIRIM');
                     $statusKategori = 'RETUR';
+                    $colorCode = 'ORANGE';
+                    $slaDays = $data['sla_days'] ?: $existing->sla_days;
+                } elseif ($incomingCategory === 'SUKSES' || $existingCategory === 'SUKSES') {
+                    $statusPos = !empty($data['status_pos']) ? $data['status_pos'] : ($existing->status_pos ?: 'DELIVERED');
+                    $keterangan = !empty($data['keterangan']) ? $data['keterangan'] : ($existing->keterangan ?: 'DITERIMA YANG BERSANGKUTAN');
+                    $statusKategori = 'SUKSES';
+                    $colorCode = 'BIRU';
                     $slaDays = $data['sla_days'] ?: $existing->sla_days;
                 } else {
-                    $statusPos = !empty($data['status_pos']) ? $data['status_pos'] : 'ON PROCESS';
-                    $keterangan = !empty($data['keterangan']) ? $data['keterangan'] : 'PROSES PENGIRIMAN POS';
-                    $statusKategori = !empty($data['status_kategori']) ? $data['status_kategori'] : 'IN_PROCESS';
-                    $slaDays = $data['sla_days'];
+                    $statusPos = !empty($data['status_pos']) ? $data['status_pos'] : ($existing->status_pos ?: 'ON PROCESS');
+                    $keterangan = !empty($data['keterangan']) ? $data['keterangan'] : ($existing->keterangan ?: 'PROSES PENGIRIMAN POS');
+                    $statusKategori = $incomingCategory ?: 'IN_PROCESS';
+                    $colorCode = (!empty($existing->color_code) && $existing->color_code !== 'BIRU' && $existing->color_code !== 'ORANGE') ? $existing->color_code : $botService->determineColorCode($statusKategori);
+                    $slaDays = $data['sla_days'] ?: $existing->sla_days;
                 }
 
-                // Color: if RETUR override happened, force ORANGE. Otherwise preserve existing color or derive from new status.
-                if ($incomingIsReturn && !$existingIsReturn) {
-                    $colorCode = 'ORANGE';
-                } else {
-                    $colorCode = $existing->color_code ?: ($statusKategori === 'SUKSES' ? 'BIRU' : ($statusKategori === 'RETUR' ? 'ORANGE' : ($statusKategori === 'FOLLOW_UP' ? 'KUNING' : 'PUTIH')));
-                }
                 $fuPosDate = $existing->fu_pos_date;
                 $noted = $existing->noted;
                 $lastTrackedAt = $existing->last_tracked_at;
@@ -617,6 +629,9 @@ class ShipmentsImport
                 ];
             } else {
                 // NEW SHIPMENT: Use defaults
+                $cat = $botService->categorizeStatus($data['status_pos'] ?? '', $data['keterangan'] ?? '');
+                $color = $botService->determineColorCode($cat);
+
                 $mergedBatch[] = [
                     'nama_seller' => $data['nama_seller'] ?: $this->defaultSeller,
                     'no_resi' => $resiKey,
@@ -626,8 +641,8 @@ class ShipmentsImport
                     'tanggal_kirim' => $data['tanggal_kirim'] ?: date('Y-m-d'),
                     'status_pos' => $data['status_pos'] ?: 'ON PROCESS',
                     'keterangan' => $data['keterangan'] ?: 'PROSES PENGIRIMAN POS',
-                    'status_kategori' => $data['status_kategori'] ?: 'IN_PROCESS',
-                    'color_code' => ($data['status_kategori'] === 'SUKSES' ? 'BIRU' : ($data['status_kategori'] === 'RETUR' ? 'ORANGE' : null)),
+                    'status_kategori' => $cat,
+                    'color_code' => $color,
                     'fu_pos_date' => null,
                     'noted' => null,
                     'sla_days' => $data['sla_days'],

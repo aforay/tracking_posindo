@@ -16,6 +16,7 @@ Route::post('/shipments/sync-filter', [DashboardController::class, 'syncFilter']
 Route::get('/sync/progress', [DashboardController::class, 'syncProgress'])->name('sync.progress');
 Route::post('/sync/discover', [DashboardController::class, 'syncDiscover'])->name('sync.discover');
 Route::post('/sync/sheet', [DashboardController::class, 'syncSingleSheet'])->name('sync.sheet');
+Route::post('/shipments/push-updates', [DashboardController::class, 'pushUpdatesToSheets'])->name('shipments.push_updates');
 Route::post('/bot/start-tracking', [TrackingController::class, 'startBotTracking'])->name('bot.start_tracking');
 Route::get('/bot/progress', [TrackingController::class, 'progress'])->name('bot.progress');
 

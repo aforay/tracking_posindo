@@ -28,18 +28,21 @@ export function ExportPanel({
 }) {
   const [scope, setScope] = useState<"all" | "fu">("all");
 
+  const safeRows = useMemo(() => (Array.isArray(rows) ? rows : []), [rows]);
+  const safeSeller = seller || "Semua Seller";
+
   const data = useMemo(
     () =>
       scope === "all"
-        ? rows
-        : rows.filter((r) => ["KUNING", "HIJAU", "BIRU_TUA", "PUTIH"].includes(r.fu)),
-    [rows, scope],
+        ? safeRows
+        : safeRows.filter((r) => r && ["KUNING", "HIJAU", "BIRU_TUA", "PUTIH"].includes(r.fu)),
+    [safeRows, scope],
   );
 
   const summary = useMemo(() => {
-    const c = (f: string) => data.filter((r) => r.fu === f).length;
+    const c = (f: string) => (data || []).filter((r) => r?.fu === f).length;
     return {
-      total: data.length,
+      total: data?.length || 0,
       sukses: c("BIRU"),
       retur: c("ORANGE"),
       fu: c("KUNING") + c("HIJAU") + c("BIRU_TUA"),

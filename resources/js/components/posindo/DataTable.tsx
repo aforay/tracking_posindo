@@ -95,13 +95,15 @@ export function DataTable({
           </thead>
           <tbody>
             <AnimatePresence initial={false}>
-              {rows.map((row, i) => {
+              {(Array.isArray(rows) ? rows : []).map((row, i) => {
+                if (!row) return null;
                 const meta = FU_META[row.fu] || FU_META["PUTIH"];
                 const dark = row.fu === "BIRU_TUA";
-                const overdue = row.sla > 3 && row.nipos !== "DELIVERED";
+                const overdue = (row.sla || 0) > 3 && row.nipos !== "DELIVERED";
+                const isChecked = Boolean(selected && typeof selected.has === "function" && selected.has(row.id));
                 return (
                   <motion.tr
-                    key={row.id}
+                    key={row.id || `row-${i}`}
                     layout
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
@@ -112,8 +114,8 @@ export function DataTable({
                   >
                     <td className="px-3 py-2">
                       <Checkbox
-                        checked={selected.has(row.id)}
-                        onCheckedChange={() => onToggle(row.id)}
+                        checked={isChecked}
+                        onCheckedChange={() => row.id && onToggle(row.id)}
                       />
                     </td>
                     <td className="px-3 py-2 tabular-nums opacity-70">{startIndex + i + 1}</td>
@@ -289,7 +291,7 @@ export function DataTable({
                 );
               })}
             </AnimatePresence>
-            {rows.length === 0 && (
+            {(!rows || !Array.isArray(rows) || rows.length === 0) && (
               <tr>
                 <td colSpan={10} className="px-4 py-16 text-center text-sm text-muted-foreground">
                   Tidak ada resi yang cocok dengan filter saat ini.

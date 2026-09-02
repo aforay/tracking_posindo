@@ -6,6 +6,7 @@ use App\Jobs\ReverseSyncGoogleSheetsJob;
 use App\Models\OutgoingShipment;
 use App\Services\TrackingBotService;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
@@ -98,26 +99,9 @@ class TrackNiposCommand extends Command
                         $shipment->status_pos = $statusPos;
                         $shipment->keterangan = $keterangan;
 
-                        if (method_exists($botService, 'categorizeStatus')) {
-                            $shipment->status_kategori = $res['status_kategori'] ?? $botService->categorizeStatus($shipment->status_pos, $shipment->keterangan);
-                        } else {
-                            $shipment->status_kategori = $res['status_kategori'] ?? 'IN_PROCESS';
-                        }
-
-                        $statusUpper = strtoupper($statusPos);
-                        if (str_contains($statusUpper, 'DELIVERED') && !str_contains($statusUpper, 'RETURN')) {
-                            $shipment->status_pos = 'DELIVERED';
-                            $shipment->status_kategori = 'SUKSES';
-                            $shipment->color_code = 'BIRU';
-                        } elseif (str_contains($statusUpper, 'RETURN') || str_contains($statusUpper, 'RETUR')) {
-                            $shipment->status_kategori = 'RETUR';
-                            $shipment->color_code = 'ORANGE';
-                        } elseif (str_contains($statusUpper, 'FAILED') || str_contains($statusUpper, 'GAGAL')) {
-                            $shipment->status_kategori = 'FOLLOW_UP';
-                            if (empty($shipment->color_code) || $shipment->color_code === 'PUTIH') {
-                                $shipment->color_code = 'KUNING';
-                            }
-                        }
+                        $category = $botService->categorizeStatus($shipment->status_pos, $shipment->keterangan);
+                        $shipment->status_kategori = $category;
+                        $shipment->color_code = $botService->determineColorCode($category);
 
                         $shipment->sla_days = $res['sla_days'] ?? ($res['sla'] ?? ($shipment->sla_days ?: 2));
                         $shipment->last_tracked_at = $now;

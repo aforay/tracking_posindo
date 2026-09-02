@@ -71,22 +71,24 @@ function doPost(e) {
         const values = dataRange.getValues();
         const backgrounds = dataRange.getBackgrounds();
 
-        const headers = values[0].map(function(h) {
-          return String(h).trim().toLowerCase().replace(/[^a-z0-9]/g, '');
-        });
-
         let sellerCol = -1;
         let resiCol = -1;
         let statusCol = -1;
 
-        headers.forEach(function(h, idx) {
-          if (['seller', 'mitra', 'namaseller', 'cs', 'namacs'].indexOf(h) !== -1 && sellerCol === -1) sellerCol = idx;
-          if (['resi', 'noresi', 'barcode', 'awb'].indexOf(h) !== -1 && resiCol === -1) resiCol = idx;
-          if (['trackingpos', 'statuspos', 'status'].indexOf(h) !== -1 && statusCol === -1) statusCol = idx;
-        });
+        for (let hRow = 0; hRow < Math.min(3, values.length); hRow++) {
+          const headers = values[hRow].map(function(h) {
+            return String(h).trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+          });
+
+          headers.forEach(function(h, idx) {
+            if (['seller', 'mitra', 'namaseller', 'cs', 'namacs'].indexOf(h) !== -1 && sellerCol === -1) sellerCol = idx;
+            if (['resi', 'noresi', 'barcode', 'awb', 'barcodeitem'].indexOf(h) !== -1 && resiCol === -1) resiCol = idx;
+            if (['trackingpos', 'statuspos', 'status'].indexOf(h) !== -1 && statusCol === -1) statusCol = idx;
+          });
+        }
 
         if (sellerCol === -1) sellerCol = 6;
-        if (resiCol === -1) resiCol = 3;
+        if (resiCol === -1) resiCol = 4;
         if (statusCol === -1) statusCol = 11;
 
         const targetHex = COLOR_HEX_MAP[targetColor] || null;
@@ -104,7 +106,7 @@ function doPost(e) {
           }
 
           if (match && targetColor !== 'ALL') {
-            const rowBg = String(backgrounds[r][2] || backgrounds[r][0] || '').toUpperCase(); // Cek warna Kolom C
+            const rowBg = String(backgrounds[r][2] || backgrounds[r][0] || '').toUpperCase();
             const rowStatus = String(values[r][statusCol] || '').toUpperCase();
 
             let colorMatch = false;
@@ -148,7 +150,7 @@ function doPost(e) {
       })).setMimeType(ContentService.MimeType.JSON);
     }
 
-    // ACTION 2: REVERSE SYNC NIPOS (AUTO-UPDATE STATUS NIPOS & KETERANGAN TO GOOGLE SHEETS)
+    // ACTION 2: REVERSE SYNC NIPOS (AUTO-UPDATE STATUS NIPOS, KETERANGAN & SLA TO GOOGLE SHEETS)
     if (action === 'reverse_sync_nipos' || action === 'sync_nipos_status' || action === 'reverse_sync') {
       const items = Array.isArray(data.items) ? data.items : [];
       const itemMap = {};
@@ -160,7 +162,6 @@ function doPost(e) {
       });
 
       if (Object.keys(itemMap).length === 0 && data.resis) {
-        // Fallback for flat resis list
         (data.resis || []).forEach(function(r) {
           if (r) {
             itemMap[String(r).trim().toUpperCase()] = {
@@ -189,34 +190,54 @@ function doPost(e) {
         const values = dataRange.getValues();
         if (values.length < 2) return;
 
-        const headers = values[0].map(function(h) {
-          return String(h).trim().toLowerCase().replace(/[^a-z0-9]/g, '');
-        });
+        const sheetNameUpper = sheet.getName().toUpperCase();
+        const isAliqaSheet = sheetNameUpper.indexOf('ALIQA') !== -1 || String(data.seller || '').toUpperCase().indexOf('ALIQA') !== -1;
 
         let resiCol = -1;
         let trackingPosCol = -1;
         let keteranganCol = -1;
         let slaCol = -1;
 
-        headers.forEach(function(h, idx) {
-          if (['resi', 'noresi', 'barcode', 'awb', 'barcodeitem'].indexOf(h) !== -1 && resiCol === -1) {
-            resiCol = idx;
-          } else if (['trackingpos', 'statuspos', 'status', 'nipos', 'statusnipos', 'statusniposl', 'statusakhir'].indexOf(h) !== -1 && trackingPosCol === -1) {
-            trackingPosCol = idx;
-          } else if (['keterangan', 'note', 'alasan', 'penerimaketerangank', 'penerima', 'penerimaketerangan'].indexOf(h) !== -1 && keteranganCol === -1) {
-            keteranganCol = idx;
-          } else if (['sla', 'slamasatahan', 'sladays'].indexOf(h) !== -1 && slaCol === -1) {
-            slaCol = idx;
-          }
-        });
+        // Scan first 3 rows to locate header columns
+        for (let hRow = 0; hRow < Math.min(3, values.length); hRow++) {
+          const headers = values[hRow].map(function(h) {
+            return String(h).trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+          });
 
-        if (resiCol === -1) resiCol = 3;       // Default Kolom D
-        if (keteranganCol === -1) keteranganCol = 10; // Default Kolom K
-        if (trackingPosCol === -1) trackingPosCol = 11; // Default Kolom L
-        if (slaCol === -1) slaCol = 12;         // Default Kolom M
+          headers.forEach(function(h, idx) {
+            if (['resi', 'noresi', 'barcode', 'awb', 'barcodeitem'].indexOf(h) !== -1 && resiCol === -1) {
+              resiCol = idx;
+            } else if (['trackingpos', 'statuspos', 'status', 'nipos', 'statusnipos', 'statusniposl', 'statusakhir', 'tracking'].indexOf(h) !== -1 && trackingPosCol === -1) {
+              trackingPosCol = idx;
+            } else if (['keterangan', 'note', 'alasan', 'penerimaketerangank', 'penerima', 'penerimaketerangan', 'posketerangan'].indexOf(h) !== -1 && keteranganCol === -1) {
+              keteranganCol = idx;
+            } else if (['sla', 'slamasatahan', 'sladays'].indexOf(h) !== -1 && slaCol === -1) {
+              slaCol = idx;
+            }
+          });
+        }
+
+        if (isAliqaSheet) {
+          if (resiCol === -1) resiCol = 2;              // Kolom C (Resi, index 2)
+          if (keteranganCol === -1) keteranganCol = 15; // Kolom P (Keterangan, index 15)
+          if (trackingPosCol === -1) trackingPosCol = 16; // Kolom Q (Tracking POS, index 16)
+          if (slaCol === -1) slaCol = 17;                // Kolom R (SLA, index 17)
+        } else {
+          if (resiCol === -1) resiCol = 4;              // Default Kolom E (Resi, index 4)
+          if (keteranganCol === -1) keteranganCol = 10; // Default Kolom K (Keterangan, index 10)
+          if (trackingPosCol === -1) trackingPosCol = 11; // Default Kolom L (Tracking POS, index 11)
+          if (slaCol === -1) slaCol = 12;                // Default Kolom M (SLA, index 12)
+        }
 
         for (let r = 1; r < values.length; r++) {
-          const cellResi = String(values[r][resiCol] || '').trim().toUpperCase();
+          let cellResi = String(values[r][resiCol] || '').trim().toUpperCase();
+          if ((!cellResi || !itemMap[cellResi]) && values[r][2]) {
+            cellResi = String(values[r][2]).trim().toUpperCase();
+          }
+          if ((!cellResi || !itemMap[cellResi]) && values[r][4]) {
+            cellResi = String(values[r][4]).trim().toUpperCase();
+          }
+
           if (cellResi && itemMap[cellResi]) {
             const item = itemMap[cellResi];
             const rowNumber = r + 1;
@@ -224,25 +245,30 @@ function doPost(e) {
             const colorCode = String(item.color_code || item.status_color || 'PUTIH').toUpperCase();
             const hexColor = COLOR_HEX_MAP[colorCode] || '#FFFFFF';
 
-            // 1. Mewarnai Kolom C sampai J (Kolom 3 sebanyak 8 kolom)
-            sheet.getRange(rowNumber, 3, 1, 8).setBackground(hexColor);
+            // 1. Mewarnai Baris (Aliqa: Kolom C-R 16 kolom; Zaherba: Kolom C-J 8 kolom)
+            if (isAliqaSheet) {
+              sheet.getRange(rowNumber, 3, 1, 16).setBackground(hexColor);
+            } else {
+              sheet.getRange(rowNumber, 3, 1, 8).setBackground(hexColor);
+            }
 
-            // 2. Update Sel Kolom 'Status NIPOS' (Kolom L / Tracking POS)
+            // 2. Update Sel Kolom 'Status NIPOS' (Aliqa: Q / Zaherba: L)
             const statusPos = item.status_pos || item.status_nipos || item.status;
             if (trackingPosCol >= 0 && statusPos) {
               sheet.getRange(rowNumber, trackingPosCol + 1).setValue(String(statusPos));
             }
 
-            // 3. Update Sel Kolom 'Keterangan' (Kolom K / Penerima & Keterangan)
+            // 3. Update Sel Kolom 'Keterangan' (Aliqa: P / Zaherba: K)
             const keterangan = item.keterangan || item.note;
             if (keteranganCol >= 0 && keterangan) {
               sheet.getRange(rowNumber, keteranganCol + 1).setValue(String(keterangan));
             }
 
-            // 4. Update Sel Kolom 'SLA' (Kolom M) jika tersedia
+            // 4. Update Sel Kolom 'SLA' (Aliqa: R / Zaherba: M)
             const slaVal = item.sla_days || item.sla;
-            if (slaCol >= 0 && slaVal) {
-              sheet.getRange(rowNumber, slaCol + 1).setValue(slaVal);
+            if (slaCol >= 0 && slaVal !== undefined && slaVal !== null) {
+              const formattedSla = (typeof slaVal === 'number' || !isNaN(slaVal)) ? (Math.round(Number(slaVal))) : String(slaVal);
+              sheet.getRange(rowNumber, slaCol + 1).setValue(formattedSla);
             }
 
             updatedCount++;
@@ -289,38 +315,59 @@ function doPost(e) {
 
       if (values.length < 2) return;
 
-      const headers = values[0].map(function(h) {
-        return String(h).trim().toLowerCase().replace(/[^a-z0-9]/g, '');
-      });
+      const sheetNameUpper = sheet.getName().toUpperCase();
+      const isAliqaSheet = sheetNameUpper.indexOf('ALIQA') !== -1 || String(data.seller || '').toUpperCase().indexOf('ALIQA') !== -1;
 
       let resiCol = -1;
       let trackingPosCol = -1;
       let keteranganCol = -1;
       let fuPosDateCol = -1;
 
-      headers.forEach(function(h, idx) {
-        if (['resi', 'noresi', 'barcode', 'awb', 'barcodeitem'].indexOf(h) !== -1 && resiCol === -1) {
-          resiCol = idx;
-        } else if (['trackingpos', 'statuspos', 'status', 'nipos', 'statusnipos', 'statusniposl', 'statusakhir'].indexOf(h) !== -1 && trackingPosCol === -1) {
-          trackingPosCol = idx;
-        } else if (['keterangan', 'note', 'alasan', 'penerimaketerangank', 'penerima', 'penerimaketerangan'].indexOf(h) !== -1 && keteranganCol === -1) {
-          keteranganCol = idx;
-        } else if (['fubycs', 'fuposdate', 'tglfu', 'escalationdate'].indexOf(h) !== -1 && fuPosDateCol === -1) {
-          fuPosDateCol = idx;
-        }
-      });
+      for (let hRow = 0; hRow < Math.min(3, values.length); hRow++) {
+        const headers = values[hRow].map(function(h) {
+          return String(h).trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+        });
 
-      if (resiCol === -1) resiCol = 3; // Kolom D (Resi)
-      if (keteranganCol === -1) keteranganCol = 10; // Kolom K (Keterangan)
-      if (trackingPosCol === -1) trackingPosCol = 11; // Kolom L (Tracking POS)
+        headers.forEach(function(h, idx) {
+          if (['resi', 'noresi', 'barcode', 'awb', 'barcodeitem'].indexOf(h) !== -1 && resiCol === -1) {
+            resiCol = idx;
+          } else if (['trackingpos', 'statuspos', 'status', 'nipos', 'statusnipos', 'statusniposl', 'statusakhir', 'tracking'].indexOf(h) !== -1 && trackingPosCol === -1) {
+            trackingPosCol = idx;
+          } else if (['keterangan', 'note', 'alasan', 'penerimaketerangank', 'penerima', 'penerimaketerangan', 'posketerangan'].indexOf(h) !== -1 && keteranganCol === -1) {
+            keteranganCol = idx;
+          } else if (['fubycs', 'fuposdate', 'tglfu', 'escalationdate'].indexOf(h) !== -1 && fuPosDateCol === -1) {
+            fuPosDateCol = idx;
+          }
+        });
+      }
+
+      if (isAliqaSheet) {
+        if (resiCol === -1) resiCol = 2; // Kolom C (Resi, index 2)
+        if (keteranganCol === -1) keteranganCol = 15; // Kolom P (Keterangan, index 15)
+        if (trackingPosCol === -1) trackingPosCol = 16; // Kolom Q (Tracking POS, index 16)
+      } else {
+        if (resiCol === -1) resiCol = 4; // Kolom E (Resi, index 4)
+        if (keteranganCol === -1) keteranganCol = 10; // Kolom K (Keterangan, index 10)
+        if (trackingPosCol === -1) trackingPosCol = 11; // Kolom L (Tracking POS, index 11)
+      }
 
       for (let r = 1; r < values.length; r++) {
-        const cellResi = String(values[r][resiCol] || '').trim().toUpperCase();
+        let cellResi = String(values[r][resiCol] || '').trim().toUpperCase();
+        if ((!cellResi || !targetResiMap[cellResi]) && values[r][2]) {
+          cellResi = String(values[r][2]).trim().toUpperCase();
+        }
+        if ((!cellResi || !targetResiMap[cellResi]) && values[r][4]) {
+          cellResi = String(values[r][4]).trim().toUpperCase();
+        }
+
         if (cellResi && targetResiMap[cellResi]) {
           const rowNumber = r + 1;
 
-          // HANYA MEWARNAI KOLOM C SAMPAI J (Kolom 3 sebanyak 8 kolom)
-          sheet.getRange(rowNumber, 3, 1, 8).setBackground(hexColor);
+          if (isAliqaSheet) {
+            sheet.getRange(rowNumber, 3, 1, 16).setBackground(hexColor);
+          } else {
+            sheet.getRange(rowNumber, 3, 1, 8).setBackground(hexColor);
+          }
 
           if (trackingPosCol >= 0) {
             sheet.getRange(rowNumber, trackingPosCol + 1).setValue(statusLabel);
@@ -337,6 +384,7 @@ function doPost(e) {
           updatedCount++;
           updatedResis.push(cellResi);
         }
+      }
       }
     });
 
@@ -364,9 +412,6 @@ function doGet(e) {
   })).setMimeType(ContentService.MimeType.JSON);
 }
 
-/**
- * UTILITY PADA MENU EXTENSIONS
- */
 function applyColorToSelection(colorHex) {
   const sheet = SpreadsheetApp.getActiveSheet();
   const range = sheet.getActiveRange();
@@ -378,7 +423,6 @@ function applyColorToSelection(colorHex) {
   for (let i = 0; i < numRows; i++) {
     const rowNum = startRow + i;
     if (rowNum > 1) {
-      // Mewarnai dari Kolom C (3) sampai J (8 kolom ke kanan)
       sheet.getRange(rowNum, 3, 1, 8).setBackground(colorHex);
     }
   }

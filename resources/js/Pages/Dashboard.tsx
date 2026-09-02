@@ -84,29 +84,35 @@ export interface PageProps {
 const DUMMY_SEED = generateShipments();
 
 export default function Dashboard() {
-  const { props } = usePage<PageProps>();
+  const pageProps = (usePage<PageProps>()?.props || {}) as PageProps;
 
   // 1. Extract shipmentList array safely from props.shipments or fallback
   const shipmentList = useMemo<Shipment[]>(() => {
-    if (!props.shipments) return [];
-    if (Array.isArray(props.shipments)) return props.shipments;
-    return Array.isArray((props.shipments as PaginatedData<Shipment>).data)
-      ? (props.shipments as PaginatedData<Shipment>).data
-      : [];
-  }, [props.shipments]);
+    const s = pageProps?.shipments;
+    if (!s) return [];
+    if (Array.isArray(s)) return s;
+    if (s && typeof s === "object" && "data" in s && Array.isArray((s as PaginatedData<Shipment>).data)) {
+      return (s as PaginatedData<Shipment>).data || [];
+    }
+    return [];
+  }, [pageProps?.shipments]);
 
   const [rows, setRows] = useState<Shipment[]>(shipmentList);
-  const [seller, setSeller] = useState(props.filters?.seller || "Semua Seller");
+  const [seller, setSeller] = useState(() => {
+    const s = pageProps?.filters?.seller;
+    if (!s || s === "ALL" || s === "all" || s === "Semua Seller") return "Semua Seller";
+    return String(s);
+  });
   const [month, setMonth] = useState<number | "all">(() => {
-    const fMonth = props.filters?.month;
+    const fMonth = pageProps?.filters?.month;
     if (!fMonth || fMonth === "ALL" || fMonth === "all") return "all";
     const n = Number(fMonth);
     return !isNaN(n) && n >= 1 && n <= 12 ? n : "all";
   });
   const [colorFilter, setColorFilter] = useState<FuStatus | null>(
-    (props.filters?.color as FuStatus) || null
+    (pageProps?.filters?.color as FuStatus) || null
   );
-  const [query, setQuery] = useState(props.filters?.search || "");
+  const [query, setQuery] = useState(pageProps?.filters?.search || "");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [exportOpen, setExportOpen] = useState(false);
 
@@ -115,27 +121,32 @@ export default function Dashboard() {
   }, [shipmentList]);
 
   // Extract pagination info safely
-  const isPaginated = props.shipments && !Array.isArray(props.shipments);
-  const paginatedObj = isPaginated ? (props.shipments as PaginatedData<Shipment>) : null;
+  const isPaginated = Boolean(
+    pageProps?.shipments &&
+      !Array.isArray(pageProps.shipments) &&
+      typeof pageProps.shipments === "object" &&
+      "data" in pageProps.shipments
+  );
+  const paginatedObj = isPaginated ? (pageProps.shipments as PaginatedData<Shipment>) : null;
 
-  const totalCount = paginatedObj?.total ?? rows.length;
+  const totalCount = paginatedObj?.total ?? rows?.length ?? 0;
   const currentPage = paginatedObj?.current_page ?? 1;
   const lastPage = paginatedObj?.last_page ?? 1;
-  const fromItem = paginatedObj?.from ?? (rows.length > 0 ? 1 : 0);
-  const toItem = paginatedObj?.to ?? rows.length;
+  const fromItem = paginatedObj?.from ?? ((rows?.length || 0) > 0 ? 1 : 0);
+  const toItem = paginatedObj?.to ?? rows?.length ?? 0;
 
   const bySeller = useMemo(
-    () => (seller === "Semua Seller" ? rows : rows.filter((r) => r.seller === seller)),
+    () => (!seller || seller === "Semua Seller" || seller === "ALL" ? (rows || []) : (rows || []).filter((r) => r?.seller === seller)),
     [rows, seller]
   );
 
   const monthCounts = useMemo(() => {
-    if (props.monthCounts && Array.isArray(props.monthCounts) && props.monthCounts.length === 12) {
-      return props.monthCounts;
+    if (pageProps?.monthCounts && Array.isArray(pageProps.monthCounts) && pageProps.monthCounts.length === 12) {
+      return pageProps.monthCounts;
     }
     const c = new Array(12).fill(0) as number[];
-    bySeller.forEach((r) => {
-      if (r.tanggalKirim) {
+    (bySeller || []).forEach((r) => {
+      if (r?.tanggalKirim && typeof r.tanggalKirim === "string") {
         const idx = Number(r.tanggalKirim.slice(5, 7)) - 1;
         if (idx >= 0 && idx < 12) {
           c[idx] = (c[idx] ?? 0) + 1;
@@ -143,24 +154,25 @@ export default function Dashboard() {
       }
     });
     return c;
-  }, [props.monthCounts, bySeller]);
+  }, [pageProps?.monthCounts, bySeller]);
 
   const kpi = useMemo(() => {
-    if (props.stats) {
+    if (pageProps?.stats) {
       return {
-        total: props.stats.total ?? 0,
-        sukses: props.stats.sukses ?? 0,
-        retur: props.stats.retur ?? 0,
-        belum: props.stats.belum ?? 0,
-        sudahFu: props.stats.sudah_fu ?? 0,
-        fu2Kali: props.stats.fu_2_kali ?? 0,
-        fuPos: props.stats.fu_pos ?? 0,
-        perluFu: props.stats.follow_up ?? props.stats.perluFu ?? 0,
+        total: pageProps.stats.total ?? 0,
+        sukses: pageProps.stats.sukses ?? 0,
+        retur: pageProps.stats.retur ?? 0,
+        belum: pageProps.stats.belum ?? 0,
+        sudahFu: pageProps.stats.sudah_fu ?? 0,
+        fu2Kali: pageProps.stats.fu_2_kali ?? 0,
+        fuPos: pageProps.stats.fu_pos ?? 0,
+        perluFu: pageProps.stats.follow_up ?? pageProps.stats.perluFu ?? 0,
       };
     }
-    const c = (f: FuStatus) => rows.filter((r) => r.fu === f).length;
+    const rList = rows || [];
+    const c = (f: FuStatus) => rList.filter((r) => r?.fu === f).length;
     return {
-      total: rows.length,
+      total: rList.length,
       sukses: c("BIRU"),
       retur: c("ORANGE"),
       belum: c("PUTIH"),
@@ -169,7 +181,7 @@ export default function Dashboard() {
       fuPos: c("BIRU_TUA"),
       perluFu: c("KUNING") + c("HIJAU") + c("BIRU_TUA"),
     };
-  }, [props.stats, rows]);
+  }, [pageProps?.stats, rows]);
 
   // Send update-status request to Laravel backend via Inertia router
   const setStatus = (ids: string[], fu: FuStatus, escalationDate?: string) => {
@@ -318,19 +330,19 @@ export default function Dashboard() {
       <header className="sticky top-0 z-30 shadow-sm">
         <TopBar
           seller={seller}
-          sellersList={props.sellersList}
+          sellersList={pageProps?.sellersList || []}
           onSeller={(s) => {
             setSeller(s);
             router.get("/shipments", { seller: s, month, color: colorFilter, search: query }, { preserveState: true, preserveScroll: true });
           }}
           total={totalCount}
-          trackingProgress={props.trackingProgress}
-          googleSheetUrl={props.googleSheetUrl}
-          googleSheetId={props.googleSheetId}
-          googleSheetWebhookUrl={props.googleSheetWebhookUrl}
+          trackingProgress={pageProps?.trackingProgress}
+          googleSheetUrl={pageProps?.googleSheetUrl}
+          googleSheetId={pageProps?.googleSheetId}
+          googleSheetWebhookUrl={pageProps?.googleSheetWebhookUrl}
         />
         <div className="pos-scroll flex gap-1 overflow-x-auto border-b border-border bg-card/95 px-5 py-1.5 backdrop-blur">
-          {[{ label: "Semua (Setahun)", monthNum: "all" as const, n: props.yearTotal ?? totalCount }].concat(
+          {[{ label: "Semua (Setahun)", monthNum: "all" as const, n: pageProps?.yearTotal ?? totalCount }].concat(
             MONTHS.map((m, i) => ({ label: m, monthNum: (i + 1) as never, n: monthCounts[i] ?? 0 }))
           ).map((t) => {
             const active = month === t.monthNum;
@@ -455,7 +467,7 @@ export default function Dashboard() {
               className="gap-2 bg-[#1E40AF] text-white hover:bg-blue-900 cursor-pointer font-bold shadow-sm text-xs px-4"
             >
               <FileSpreadsheet className="h-4 w-4 text-[#F97316]" />
-              Export Laporan Seller {seller === "Semua Seller" ? "ALL" : seller.replace("Mitra ", "")} (.XLSX)
+              Export Laporan Seller {!seller || seller === "Semua Seller" || seller === "ALL" ? "ALL" : String(seller).replace("Mitra ", "")} (.XLSX)
             </Button>
           </div>
         </section>

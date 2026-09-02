@@ -86,26 +86,9 @@ class ProcessNiposTrackingJob implements ShouldQueue
                         $shipment->status_pos = $statusPos;
                         $shipment->keterangan = $keterangan;
 
-                        if (method_exists($botService, 'categorizeStatus')) {
-                            $shipment->status_kategori = $res['status_kategori'] ?? $botService->categorizeStatus($shipment->status_pos, $shipment->keterangan);
-                        } else {
-                            $shipment->status_kategori = $res['status_kategori'] ?? ($res['kategori'] ?? 'IN_PROCESS');
-                        }
-
-                        $statusUpper = strtoupper($statusPos);
-                        if (str_contains($statusUpper, 'DELIVERED') && !str_contains($statusUpper, 'RETURN')) {
-                            $shipment->status_pos = 'DELIVERED';
-                            $shipment->status_kategori = 'SUKSES';
-                            $shipment->color_code = 'BIRU';
-                        } elseif (str_contains($statusUpper, 'RETURN') || str_contains($statusUpper, 'RETUR')) {
-                            $shipment->status_kategori = 'RETUR';
-                            $shipment->color_code = 'ORANGE';
-                        } elseif (str_contains($statusUpper, 'FAILED') || str_contains($statusUpper, 'GAGAL')) {
-                            $shipment->status_kategori = 'FOLLOW_UP';
-                            if (empty($shipment->color_code) || $shipment->color_code === 'PUTIH') {
-                                $shipment->color_code = 'KUNING';
-                            }
-                        }
+                        $category = $botService->categorizeStatus($shipment->status_pos, $shipment->keterangan);
+                        $shipment->status_kategori = $category;
+                        $shipment->color_code = $botService->determineColorCode($category);
 
                         $shipment->sla_days = $res['sla_days'] ?? ($res['sla'] ?? ($shipment->sla_days ?: 2));
                         $shipment->last_tracked_at = now();
@@ -114,13 +97,18 @@ class ProcessNiposTrackingJob implements ShouldQueue
 
                         Log::info("ProcessNiposTrackingJob [DB SAVED]: Resi {$resi} updated to status_pos='{$shipment->status_pos}', ket='{$shipment->keterangan}', kategori='{$shipment->status_kategori}', color='{$shipment->color_code}'");
 
+                        $isInProc = $shipment->status_kategori === 'IN_PROCESS';
+                        $slaStr = $botService->formatRunningSla($shipment->tanggal_kirim, $shipment->status_kategori, $shipment->sla_days);
+
                         $syncPayload[] = [
                             'resi' => $shipment->no_resi,
-                            'status_pos' => $shipment->status_pos,
+                            'status_pos' => $isInProc ? 'IN PROSES' : $shipment->status_pos,
                             'keterangan' => $shipment->keterangan,
                             'status_kategori' => $shipment->status_kategori,
                             'color_code' => $shipment->color_code ?: 'PUTIH',
-                            'sla_days' => $shipment->sla_days,
+                            'sla' => $slaStr,
+                            'sla_days' => $slaStr,
+                            'prevent_overwrite_delivered_retur' => true,
                         ];
                     } else {
                         Log::warning("ProcessNiposTrackingJob: No tracking result returned from NIPOS for resi {$resi}");

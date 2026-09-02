@@ -12,14 +12,18 @@ class SyncGoogleSheetsCommand extends Command
      *
      * @var string
      */
-    protected $signature = 'sheets:sync {spreadsheet_id? : Optional Google Spreadsheet ID or URL} {--seller=Aliqa : Default seller name}';
+    protected $signature = 'sheets:sync
+                            {spreadsheet_id? : Optional Google Spreadsheet ID or URL}
+                            {--sheet= : Specific sheet tab name (e.g. "AGUSTUS (ZAHERBA)")}
+                            {--month= : Specific month number (1-12) or ALL}
+                            {--seller=Aliqa : Default seller name}';
 
     /**
      * The console command description.
      *
      * @var string
      */
-    protected $description = 'Synchronize Outgoing Shipments from dynamic Google Spreadsheet (Januari - Agustus)';
+    protected $description = 'Synchronize Outgoing Shipments from dynamic Google Spreadsheet (Support --sheet and --month filtering)';
 
     /**
      * Execute the console command.
@@ -28,9 +32,18 @@ class SyncGoogleSheetsCommand extends Command
     {
         $spreadsheetId = $this->argument('spreadsheet_id');
         $seller = $this->option('seller');
+        $targetSheet = $this->option('sheet');
+        $targetMonth = $this->option('month');
 
-        $this->info("Starting Google Sheets synchronization...");
-        $summary = $syncService->sync($spreadsheetId, $seller);
+        // Default to current running month if neither --sheet nor --month is provided
+        if (empty($targetSheet) && (empty($targetMonth) && $targetMonth !== '0')) {
+            $targetMonth = (int)date('n');
+        }
+
+        $sheetLabel = $targetSheet ? "Sheet: {$targetSheet}" : ($targetMonth && strtoupper((string)$targetMonth) !== 'ALL' ? "Bulan: {$targetMonth}" : "Seluruh Sheet (ALL)");
+
+        $this->info("Starting Google Sheets synchronization for {$sheetLabel}...");
+        $summary = $syncService->sync($spreadsheetId, $seller, $targetSheet, $targetMonth);
 
         $this->info("=========================================");
         $this->info("Google Sheets Sync Completed Successfully!");

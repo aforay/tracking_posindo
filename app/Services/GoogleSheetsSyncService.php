@@ -22,15 +22,25 @@ class GoogleSheetsSyncService
      *
      * @param string|null $spreadsheetIdOrUrl Custom Google Sheet URL or ID
      * @param string $defaultSeller Default seller name if blank
+     * @param string|null $targetSheet Target specific sheet name (e.g. "AGUSTUS (ZAHERBA)")
+     * @param int|string|null $targetMonth Target specific month number (1-12) or ALL
      * @return array Sync metrics summary
      */
-    public function sync(?string $spreadsheetIdOrUrl = null, string $defaultSeller = 'Aliqa'): array
+    public function sync(?string $spreadsheetIdOrUrl = null, string $defaultSeller = 'Aliqa', ?string $targetSheet = null, $targetMonth = null): array
     {
         @ini_set('memory_limit', '2048M');
         @set_time_limit(0);
 
+        $isAliqaSeller = str_contains(strtoupper($defaultSeller), 'ALIQA') || str_contains(strtoupper((string)$spreadsheetIdOrUrl), 'ALIQA') || str_contains(strtoupper((string)$targetSheet), 'ALIQA');
+
         // 1. Resolve Spreadsheet ID
         $spreadsheetId = SystemSetting::extractSpreadsheetId($spreadsheetIdOrUrl);
+        if (empty($spreadsheetId) && (empty($spreadsheetIdOrUrl) || str_contains(strtoupper((string)$spreadsheetIdOrUrl), 'ALIQA') || str_contains(strtoupper((string)$spreadsheetIdOrUrl), 'ZAHERBA'))) {
+            $spreadsheetId = $isAliqaSeller
+                ? env('GOOGLE_SHEET_ID_ALIQA', '1EeckOBzI5EPNTT1bHsqu6kar9asKD6Ifar2CpTkSnBg')
+                : env('GOOGLE_SHEET_ID_ZAHERBA', '1wUqPnU1_QOq6WocHwpxAhjhScjlb_ZhhSy8I2WqGQKw');
+        }
+
         if (empty($spreadsheetId)) {
             $savedUrl = SystemSetting::get('google_sheet_url') ?: SystemSetting::get('google_sheet_id');
             $spreadsheetId = SystemSetting::extractSpreadsheetId($savedUrl);
@@ -38,15 +48,50 @@ class GoogleSheetsSyncService
 
         // Fallback default sample Google Sheet ID if not configured
         if (empty($spreadsheetId)) {
-            $spreadsheetId = '1wUqPnU1_QOq6WocHwpxAhjhScjlb_ZhhSy8I2WqGQKw';
+            $spreadsheetId = $isAliqaSeller
+                ? env('GOOGLE_SHEET_ID_ALIQA', '1EeckOBzI5EPNTT1bHsqu6kar9asKD6Ifar2CpTkSnBg')
+                : env('GOOGLE_SHEET_ID_ZAHERBA', '1wUqPnU1_QOq6WocHwpxAhjhScjlb_ZhhSy8I2WqGQKw');
         }
 
-        $startMsg = "GoogleSheetsSyncService: Starting sync for Spreadsheet ID [{$spreadsheetId}]";
+        $startMsg = "GoogleSheetsSyncService: Starting sync for Spreadsheet ID [{$spreadsheetId}] (Seller: {$defaultSeller})";
         Log::info($startMsg);
 
-        // 2. Discover Sheet Names (Januari - Agustus)
-        $sheetNames = $this->discoverSheetNames($spreadsheetId);
-        Log::info("Discovered " . count($sheetNames) . " sheets: " . json_encode($sheetNames));
+        // 2. Discover Sheet Names (Januari - Desember)
+        $sheetNames = $this->discoverSheetNames($spreadsheetId, $defaultSeller);
+
+        // Filter sheetNames if targetSheet or targetMonth is specified
+        if (!empty($targetSheet) && strtoupper((string)$targetSheet) !== 'ALL') {
+            $tSheetUpper = strtoupper(trim($targetSheet));
+            $filtered = array_filter($sheetNames, function ($sName) use ($tSheetUpper) {
+                return str_contains(strtoupper($sName), $tSheetUpper) || strtoupper($sName) === $tSheetUpper;
+            });
+            if (!empty($filtered)) {
+                $sheetNames = array_values($filtered);
+            }
+        } elseif (!empty($targetMonth) && (string)$targetMonth !== 'ALL' && (string)$targetMonth !== '0') {
+            $mNum = (int)$targetMonth;
+            if ($mNum >= 1 && $mNum <= 12) {
+                $monthKeywords = [
+                    1 => ['JAN', 'JANUARI'], 2 => ['FEB', 'FEBRUARI'], 3 => ['MAR', 'MARET'],
+                    4 => ['APR', 'APRIL'], 5 => ['MEI', 'MAY'], 6 => ['JUN', 'JUNI'],
+                    7 => ['JUL', 'JULI'], 8 => ['AGT', 'AGUS', 'AGUSTUS', 'AUG'], 9 => ['SEP', 'SEPTEMBER'],
+                    10 => ['OKT', 'OKTOBER', 'OCT'], 11 => ['NOV', 'NOVEMBER'], 12 => ['DES', 'DESEMBER', 'DEC'],
+                ];
+                $keywords = $monthKeywords[$mNum] ?? [];
+                $filtered = array_filter($sheetNames, function ($sName) use ($keywords) {
+                    $sUpper = strtoupper($sName);
+                    foreach ($keywords as $kw) {
+                        if (str_contains($sUpper, $kw)) return true;
+                    }
+                    return false;
+                });
+                if (!empty($filtered)) {
+                    $sheetNames = array_values($filtered);
+                }
+            }
+        }
+
+        Log::info("Filtered sheet list (" . count($sheetNames) . " sheets): " . json_encode($sheetNames));
 
         \Illuminate\Support\Facades\Cache::put('sync_progress', [
             'is_syncing' => true,
@@ -90,17 +135,33 @@ class GoogleSheetsSyncService
             Log::info("GoogleSheetsSyncService: Fetching CSV for sheet -> {$sheetName} (Seller: {$sheetSeller})");
 
             try {
+                $response = null;
                 $csvUrl = "https://docs.google.com/spreadsheets/d/{$spreadsheetId}/gviz/tq?tqx=out:csv&sheet=" . urlencode($sheetName);
                 
-                $response = Http::timeout(30)
-                    ->retry(2, 500)
-                    ->withHeaders([
-                        'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                        'Accept' => 'text/csv,text/plain,*/*',
-                    ])
-                    ->get($csvUrl);
+                try {
+                    $response = Http::timeout(20)
+                        ->withHeaders([
+                            'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                            'Accept' => 'text/csv,text/plain,*/*',
+                        ])
+                        ->get($csvUrl);
+                } catch (Throwable $e) {
+                    Log::warning("GoogleSheetsSyncService: Primary fetch failed for ID [{$spreadsheetId}]: " . $e->getMessage());
+                }
 
-                if ($response->failed() || empty(trim((string)$response->body()))) {
+                if ((!$response || $response->failed() || empty(trim((string)$response->body()))) && ($spreadsheetId === '1EeckOBzI5EPNTT1bHsqu6kar9asKD6Ifar2CpTkSnBg' || $isAliqaSeller)) {
+                    $fallbackId = '1wKS0ZklbpTeLHN0APu2aIh7DBka3g4O15KNSJ0Wcdac';
+                    Log::warning("GoogleSheetsSyncService: Primary Sheet ID [{$spreadsheetId}] inaccessible. Trying fallback ID [{$fallbackId}] for sheet [{$sheetName}]...");
+                    $csvUrl = "https://docs.google.com/spreadsheets/d/{$fallbackId}/gviz/tq?tqx=out:csv&sheet=" . urlencode($sheetName);
+                    $response = Http::timeout(20)
+                        ->withHeaders([
+                            'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                            'Accept' => 'text/csv,text/plain,*/*',
+                        ])
+                        ->get($csvUrl);
+                }
+
+                if (!$response || $response->failed() || empty(trim((string)$response->body()))) {
                     Log::warning("GoogleSheetsSyncService: Sheet [{$sheetName}] empty or not accessible via CSV export.");
                     continue;
                 }
@@ -184,43 +245,55 @@ class GoogleSheetsSyncService
     /**
      * Discover sheet tab names from Google Sheet HTML page or fallback list
      */
-    public function discoverSheetNames(string $spreadsheetId): array
+    public function discoverSheetNames(string $spreadsheetId, string $defaultSeller = 'Aliqa'): array
     {
         $discovered = [];
+        $targetIds = [$spreadsheetId];
+        if ($spreadsheetId === '1EeckOBzI5EPNTT1bHsqu6kar9asKD6Ifar2CpTkSnBg' || str_contains(strtoupper($defaultSeller), 'ALIQA')) {
+            $targetIds[] = '1wKS0ZklbpTeLHN0APu2aIh7DBka3g4O15KNSJ0Wcdac';
+        }
 
-        try {
-            $htmlUrl = "https://docs.google.com/spreadsheets/d/{$spreadsheetId}/htmlview";
-            $response = Http::timeout(15)->get($htmlUrl);
+        foreach (array_unique($targetIds) as $sId) {
+            try {
+                $htmlUrl = "https://docs.google.com/spreadsheets/d/{$sId}/htmlview";
+                $response = Http::timeout(15)->get($htmlUrl);
 
-            if ($response->successful()) {
-                $html = (string)$response->body();
+                if ($response->successful()) {
+                    $html = (string)$response->body();
 
-                // Match sheet name JSON patterns in Google Sheets HTML (supports {name: "..."} and {"name": "..."})
-                if (preg_match_all('/(?:"?name"?|"?sheetName"?)\s*:\s*"([^"]+)"/i', $html, $matches)) {
-                    foreach ($matches[1] as $name) {
-                        $cleanName = trim(strip_tags($name));
-                        if (!empty($cleanName) && !in_array($cleanName, $discovered)) {
-                            $discovered[] = $cleanName;
+                    // Match sheet name JSON patterns in Google Sheets HTML (supports {name: "..."} and {"name": "..."})
+                    if (preg_match_all('/(?:"?name"?|"?sheetName"?)\s*:\s*"([^"]+)"/i', $html, $matches)) {
+                        foreach ($matches[1] as $name) {
+                            $cleanName = trim(strip_tags($name));
+                            if (!empty($cleanName) && !in_array($cleanName, $discovered)) {
+                                $discovered[] = $cleanName;
+                            }
                         }
                     }
                 }
+            } catch (Throwable $e) {
+                Log::warning("GoogleSheetsSyncService: HTML sheet discovery failed for {$sId}: " . $e->getMessage());
             }
-        } catch (Throwable $e) {
-            Log::warning("GoogleSheetsSyncService: HTML sheet discovery failed: " . $e->getMessage());
-        }
 
-        if (!empty($discovered)) {
-            return array_values(array_unique($discovered));
+            if (!empty($discovered)) {
+                return array_values(array_unique($discovered));
+            }
         }
 
         // Standard monthly sheet names fallback list (only if HTML discovery returned nothing)
-        $defaultMonthSheets = [
+        if (str_contains(strtoupper($defaultSeller), 'ALIQA')) {
+            return [
+                'JANUARI 2026 (FP ALIQA)', 'FEBRUARI 2026 (FP ALIQA)', 'MARET 2026 (FP ALIQA)', 'APRIL 2026 (FP ALIQA)',
+                'MEI 2026 (FP ALIQA)', 'JUNI 2026 (FP ALIQA).', 'JULI 2026 (FP ALIQA)', 'AGUSTUS 2026 (FP ALIQA)',
+                'SEPTEMBER 2026 (FP ALIQA)', 'OKTOBER 2026 (FP ALIQA)', 'NOVEMBER 2026 (FP ALIQA)', 'DESEMBER 2026 (FP ALIQA)'
+            ];
+        }
+
+        return [
             'JANUARI (ZAHERBA)', 'FEBRUARI (ZAHERBA)', 'MARET (ZAHERBA)', 'APRIL (ZAHERBA)',
             'MEI (ZAHERBA)', 'JUNI (ZAHERBA)', 'JULI (ZAHERBA)', 'AGUSTUS (ZAHERBA)',
             'SEPTEMBER (ZAHERBA)', 'OKTOBER (ZAHERBA)', 'NOVEMBER (ZAHERBA)', 'DESEMBER (ZAHERBA)'
         ];
-
-        return $defaultMonthSheets;
     }
 
     /**
@@ -260,7 +333,11 @@ class GoogleSheetsSyncService
             $processedCount++;
             $parsed = $this->callProtectedMethod($this->importer, 'parseRowArray', [$rowArray, $headerMap, $now, $sheetName]);
             if ($parsed !== null) {
-                if (!empty($defaultSeller) && $defaultSeller !== 'Aliqa') {
+                if (str_contains(strtoupper($defaultSeller), 'ALIQA') || str_contains(strtoupper($sheetName), 'ALIQA')) {
+                    $parsed['nama_seller'] = 'Mitra Aliqa';
+                } elseif (str_contains(strtoupper($defaultSeller), 'ZAHERBA') || str_contains(strtoupper($sheetName), 'ZAHERBA')) {
+                    $parsed['nama_seller'] = 'Mitra Zaherba';
+                } elseif (!empty($defaultSeller)) {
                     $parsed['nama_seller'] = $defaultSeller;
                 }
                 $batchBuffer[] = $parsed;
@@ -383,7 +460,7 @@ class GoogleSheetsSyncService
             'KUNING' => 'SUDAH DI FU',
             'HIJAU' => 'FU 2 KALI',
             'BIRU_TUA' => 'FU POS',
-            'PUTIH' => 'BLM DI FU (IN TRANSIT)',
+            'PUTIH' => 'IN PROSES',
         ];
         $statusLabel = $statusLabelMap[$statusColor] ?? $statusColor;
 

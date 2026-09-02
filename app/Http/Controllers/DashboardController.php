@@ -7,6 +7,7 @@ use App\Imports\ShipmentsImport;
 use App\Jobs\ProcessExcelImportJob;
 use App\Jobs\ProcessGoogleSheetSyncJob;
 use App\Jobs\ProcessNiposTrackingJob;
+use App\Jobs\ReverseSyncGoogleSheetsJob;
 use App\Jobs\SyncSheetFilterJob;
 use App\Jobs\UpdateSheetStatusJob;
 use App\Models\OutgoingShipment;
@@ -730,12 +731,14 @@ class DashboardController extends Controller
     }
 
     /**
-     * Discover sheet names for AJAX sync
+     * Discover sheet names for AJAX sync with optional month/sheet filtering
      */
     public function syncDiscover(Request $request)
     {
         $url = trim($request->input('url', ''));
         $webhookUrl = trim($request->input('webhook_url', ''));
+        $targetMonth = $request->input('month');
+        $targetSheet = $request->input('sheet');
 
         if (empty($url)) {
             $url = SystemSetting::get('google_sheet_url', 'https://docs.google.com/spreadsheets/d/1wUqPnU1_QOq6WocHwpxAhjhScjlb_ZhhSy8I2WqGQKw/edit');
@@ -757,10 +760,41 @@ class DashboardController extends Controller
         try {
             $syncService = app(\App\Services\GoogleSheetsSyncService::class);
             $sheetNames = $syncService->discoverSheetNames($spreadsheetId);
+
+            // Filter sheetNames if targetSheet or targetMonth is passed
+            if (!empty($targetSheet) && strtoupper((string)$targetSheet) !== 'ALL') {
+                $tUpper = strtoupper(trim($targetSheet));
+                $filtered = array_filter($sheetNames, fn($s) => str_contains(strtoupper($s), $tUpper) || strtoupper($s) === $tUpper);
+                if (!empty($filtered)) {
+                    $sheetNames = array_values($filtered);
+                }
+            } elseif (!empty($targetMonth) && strtoupper((string)$targetMonth) !== 'ALL' && (string)$targetMonth !== '0') {
+                $mNum = (int)$targetMonth;
+                if ($mNum >= 1 && $mNum <= 12) {
+                    $monthKeywords = [
+                        1 => ['JAN', 'JANUARI'], 2 => ['FEB', 'FEBRUARI'], 3 => ['MAR', 'MARET'],
+                        4 => ['APR', 'APRIL'], 5 => ['MEI', 'MAY'], 6 => ['JUN', 'JUNI'],
+                        7 => ['JUL', 'JULI'], 8 => ['AGT', 'AGUS', 'AGUSTUS', 'AUG'], 9 => ['SEP', 'SEPTEMBER'],
+                        10 => ['OKT', 'OKTOBER', 'OCT'], 11 => ['NOV', 'NOVEMBER'], 12 => ['DES', 'DESEMBER', 'DEC'],
+                    ];
+                    $keywords = $monthKeywords[$mNum] ?? [];
+                    $filtered = array_filter($sheetNames, function ($sName) use ($keywords) {
+                        $sUpper = strtoupper($sName);
+                        foreach ($keywords as $kw) {
+                            if (str_contains($sUpper, $kw)) return true;
+                        }
+                        return false;
+                    });
+                    if (!empty($filtered)) {
+                        $sheetNames = array_values($filtered);
+                    }
+                }
+            }
+
             return response()->json([
                 'success' => true,
                 'spreadsheet_id' => $spreadsheetId,
-                'sheet_names' => $sheetNames
+                'sheet_names' => array_values($sheetNames)
             ]);
         } catch (Throwable $e) {
             return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
@@ -787,6 +821,96 @@ class DashboardController extends Controller
                 'success' => true,
                 'processed' => $metrics['processed'] ?? 0,
                 'inserted' => $metrics['inserted'] ?? 0,
+            ]);
+        } catch (Throwable $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * Trigger background Reverse Sync (Push DB -> Google Sheets)
+     */
+    public function pushUpdatesToSheets(Request $request)
+    {
+        try {
+            $month = $request->input('month');
+            $sheet = $request->input('sheet');
+            $query = OutgoingShipment::query();
+
+            $targetMonth = null;
+            if (!empty($sheet)) {
+                $monthNames = [
+                    1 => 'JANUARI', 2 => 'FEBRUARI', 3 => 'MARET', 4 => 'APRIL',
+                    5 => 'MEI', 6 => 'JUNI', 7 => 'JULI', 8 => 'AGUSTUS',
+                    9 => 'SEPTEMBER', 10 => 'OKTOBER', 11 => 'NOVEMBER', 12 => 'DESEMBER',
+                ];
+                $sUpper = strtoupper($sheet);
+                foreach ($monthNames as $mNum => $mName) {
+                    if (str_contains($sUpper, $mName) || str_contains($sUpper, substr($mName, 0, 3))) {
+                        $targetMonth = $mNum;
+                        break;
+                    }
+                }
+            }
+
+            if ($targetMonth === null && !empty($month) && strtoupper((string)$month) !== 'ALL' && (string)$month !== '0') {
+                $targetMonth = (int)$month;
+            }
+
+            if ($targetMonth !== null && $targetMonth >= 1 && $targetMonth <= 12) {
+                $query->whereMonth('tanggal_kirim', $targetMonth);
+            } elseif (empty($sheet) && (empty($month) || (string)$month === '0' || (string)$month === 'current')) {
+                // Default to current running month if no specific month or ALL specified
+                $query->whereMonth('tanggal_kirim', (int)date('n'));
+            }
+
+            $query->where(function ($q) {
+                $q->whereNotNull('last_tracked_at')
+                  ->orWhereIn('status_kategori', ['SUKSES', 'RETUR', 'FOLLOW_UP', 'IN_PROCESS']);
+            });
+
+            $shipments = $query->get();
+
+            $totalCount = $shipments->count();
+            if ($totalCount === 0) {
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Tidak ada status resi yang perlu di-push ke Google Sheets untuk bulan/tab tersebut.',
+                    'count' => 0
+                ]);
+            }
+
+            $payload = [];
+            $botService = app(\App\Services\TrackingBotService::class);
+            foreach ($shipments as $shipment) {
+                $isDelivered = $shipment->status_kategori === 'SUKSES';
+                $isRetur = $shipment->status_kategori === 'RETUR';
+                $isInProcess = !$isDelivered && !$isRetur;
+
+                $statusPosText = $isInProcess ? 'IN PROSES' : ($isRetur ? ($shipment->status_pos ?: 'DELIVERED (RETURN DELIVERY)') : 'DELIVERED');
+                $slaStr = $botService->formatRunningSla($shipment->tanggal_kirim, $shipment->status_kategori ?: 'IN_PROCESS', $shipment->sla_days ?: 2);
+
+                $payload[] = [
+                    'resi' => $shipment->no_resi,
+                    'status_pos' => $statusPosText,
+                    'keterangan' => $shipment->keterangan ?: ($isInProcess ? 'PROSES PENGIRIMAN POS' : ($isRetur ? 'DITERIMA PENGIRIM (MITRA)' : 'DITERIMA YANG BERSANGKUTAN')),
+                    'status_kategori' => $shipment->status_kategori ?: ($isInProcess ? 'IN_PROCESS' : ($isRetur ? 'RETUR' : 'SUKSES')),
+                    'color_code' => $shipment->color_code ?: ($isInProcess ? 'PUTIH' : ($isRetur ? 'ORANGE' : 'BIRU')),
+                    'sla' => $slaStr,
+                    'sla_days' => $slaStr,
+                    'prevent_overwrite_delivered_retur' => true,
+                ];
+            }
+
+            // Dispatch chunked batch per 300 resis to background queue job
+            foreach (array_chunk($payload, 300) as $chunk) {
+                ReverseSyncGoogleSheetsJob::dispatch($chunk);
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => "Reverse Sync berhasil dipicu untuk {$totalCount} resi di latar belakang (Queue Worker).",
+                'count' => $totalCount
             ]);
         } catch (Throwable $e) {
             return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
