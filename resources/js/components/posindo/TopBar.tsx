@@ -1,7 +1,7 @@
 import { useMemo, useEffect, useState } from "react";
 import { router } from "@inertiajs/react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Truck, Upload, Bot, Loader2, CheckCircle2, FileUp, Zap, RefreshCw, Send } from "lucide-react";
+import { Truck, Upload, Bot, Loader2, CheckCircle2, FileUp, Zap, RefreshCw, Send, Building2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,6 +25,7 @@ export function TopBar({
   googleSheetUrl,
   googleSheetId,
   googleSheetWebhookUrl,
+  onOpenPostOffices,
 }: {
   seller: string;
   sellersList?: string[];
@@ -34,6 +35,7 @@ export function TopBar({
   googleSheetUrl?: string;
   googleSheetId?: string;
   googleSheetWebhookUrl?: string;
+  onOpenPostOffices?: () => void;
 }) {
   const sellerOptions = useMemo(() => {
     const list = new Set<string>(SELLERS);
@@ -499,8 +501,13 @@ export function TopBar({
 
           {/* Grup 2: Impor Data & Seller */}
           <div className="flex flex-wrap items-center gap-1.5">
-            <Button variant="outline" className="gap-1.5 text-xs h-9 font-semibold border-slate-300 bg-white hover:bg-slate-50 cursor-pointer shadow-sm" onClick={() => setUploadOpen(true)}>
-              <Upload className="h-3.5 w-3.5 text-[#F97316]" /> Upload Excel
+            <Button
+              variant="outline"
+              className="gap-1.5 text-xs h-9 font-semibold border-slate-300 bg-white hover:bg-slate-50 cursor-pointer shadow-sm text-blue-900"
+              onClick={onOpenPostOffices}
+              title="Buka Database Kontak WhatsApp KC/KCP Pos Indonesia"
+            >
+              <Building2 className="h-3.5 w-3.5 text-blue-600" /> Kontak KC Pos
             </Button>
 
             <Select value={normalizedSeller} onValueChange={onSeller}>

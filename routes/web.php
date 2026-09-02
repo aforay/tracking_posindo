@@ -31,5 +31,14 @@ Route::post('/shipments/bulk-action', [DashboardController::class, 'bulkAction']
 Route::post('/shipments/{id}/color', [DashboardController::class, 'updateColor'])->name('shipments.color');
 Route::post('/shipments/{id}/update-color', [DashboardController::class, 'updateColor'])->name('shipments.update_color');
 
+use App\Http\Controllers\PostOfficeController;
+
+// Post Office (KC Pos Indonesia) Contacts Management
+Route::get('/post-offices', [PostOfficeController::class, 'index'])->name('post_offices.index');
+Route::post('/post-offices', [PostOfficeController::class, 'store'])->name('post_offices.store');
+Route::put('/post-offices/{id}', [PostOfficeController::class, 'update'])->name('post_offices.update');
+Route::delete('/post-offices/{id}', [PostOfficeController::class, 'destroy'])->name('post_offices.destroy');
+Route::post('/post-offices/import', [PostOfficeController::class, 'bulkImport'])->name('post_offices.import');
+
 // NIPOS Simulation / Endpoint
 Route::match(['get', 'post'], '/mock-nipos/lacak_item_banyakzaref.php', [TrackingController::class, 'mockNipos'])->name('mock.nipos');

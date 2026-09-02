@@ -92,10 +92,25 @@ class ProcessNiposTrackingJob implements ShouldQueue
 
                         $shipment->sla_days = $res['sla_days'] ?? ($res['sla'] ?? ($shipment->sla_days ?: 2));
                         $shipment->last_tracked_at = now();
+
+                        // Detect and link Kantor Pos Tujuan
+                        $kantorTujuan = $res['kantor_tujuan'] ?? $shipment->kantor_tujuan;
+                        $matchedOffice = \App\Models\PostOffice::matchByDestinationOrAddress($kantorTujuan, $shipment->alamat);
+                        if ($matchedOffice) {
+                            $shipment->kantor_tujuan = $kantorTujuan ?: $matchedOffice->name;
+                            $shipment->kantor_pos_id = $matchedOffice->id;
+                        } elseif (!empty($kantorTujuan)) {
+                            $shipment->kantor_tujuan = $kantorTujuan;
+                        }
+
+                        if (!empty($res['last_location'])) {
+                            $shipment->last_location = $res['last_location'];
+                        }
+
                         $shipment->save();
                         $updatedCount++;
 
-                        Log::info("ProcessNiposTrackingJob [DB SAVED]: Resi {$resi} updated to status_pos='{$shipment->status_pos}', ket='{$shipment->keterangan}', kategori='{$shipment->status_kategori}', color='{$shipment->color_code}'");
+                        Log::info("ProcessNiposTrackingJob [DB SAVED]: Resi {$resi} updated to status_pos='{$shipment->status_pos}', ket='{$shipment->keterangan}', kantor='{$shipment->kantor_tujuan}', color='{$shipment->color_code}'");
 
                         $isInProc = $shipment->status_kategori === 'IN_PROCESS';
                         $slaStr = $botService->formatRunningSla($shipment->tanggal_kirim, $shipment->status_kategori, $shipment->sla_days);

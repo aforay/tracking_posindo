@@ -53,11 +53,11 @@
 
         <!-- 12-Month Navigation Tab Bar -->
         <div class="bg-orange-800/90 border-t border-orange-400/30 overflow-x-auto">
-            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-1.5 flex items-center gap-1 text-xs whitespace-nowrap">
-                <span class="text-[11px] font-bold text-orange-200 uppercase tracking-wider mr-1.5"><i class="fa-regular fa-calendar text-[10px]"></i> Bulan:</span>
+            <div class="w-full px-4 sm:px-6 lg:px-8 py-1.5 flex items-center justify-between gap-1 text-xs whitespace-nowrap min-w-[920px]">
+                <span class="text-[11px] font-bold text-orange-200 uppercase tracking-wider mr-1 shrink-0"><i class="fa-regular fa-calendar text-[10px]"></i> Bulan:</span>
 
                 <a href="{{ route('tracking.index', ['month' => 'ALL', 'year' => $selectedYear]) }}"
-                   class="px-3 py-1 rounded-lg font-bold transition flex items-center gap-1 {{ $selectedMonth === 'ALL' ? 'bg-white text-orange-800 shadow' : 'text-orange-100 hover:bg-orange-700/60' }}">
+                   class="flex-[1.3] text-center justify-center px-2 py-1 rounded-lg font-bold transition flex items-center gap-1 {{ $selectedMonth === 'ALL' ? 'bg-white text-orange-800 shadow' : 'text-orange-100 hover:bg-orange-700/60' }}">
                    Semua (Setahun)
                    <span class="px-1.5 py-0.2 text-[9px] rounded-full {{ $selectedMonth === 'ALL' ? 'bg-orange-100 text-orange-800' : 'bg-orange-900/60 text-orange-200' }}">{{ $annualStats['total'] ?? 0 }}</span>
                 </a>
@@ -68,7 +68,7 @@
                     $isActive = $selectedMonth === $m;
                 @endphp
                 <a href="{{ route('tracking.index', ['month' => $m, 'year' => $selectedYear]) }}"
-                   class="px-2.5 py-1 rounded-lg font-semibold transition flex items-center gap-1 {{ $isActive ? 'bg-white text-orange-800 font-bold shadow' : 'text-orange-100 hover:bg-orange-700/60' }}">
+                   class="flex-1 text-center justify-center px-2 py-1 rounded-lg font-semibold transition flex items-center gap-1 {{ $isActive ? 'bg-white text-orange-800 font-bold shadow' : 'text-orange-100 hover:bg-orange-700/60' }}">
                    {{ ucfirst(strtolower($m)) }}
                    @if($count > 0)
                    <span class="px-1.5 py-0.2 text-[9px] rounded-full {{ $isActive ? 'bg-orange-100 text-orange-800 font-bold' : 'bg-orange-900/60 text-orange-200' }}">{{ $count }}</span>

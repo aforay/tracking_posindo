@@ -333,6 +333,7 @@ class TrackingBotService
                             $statusVal = $mapped['STATUS AKHIR'] ?? ($mapped['STATUS POS'] ?? ($mapped['STATUS'] ?? null));
                             $penerimaVal = $mapped['PENERIMA'] ?? ($mapped['KETERANGAN'] ?? ($mapped['PENERIMA / KETERANGAN'] ?? null));
                             $slaVal = $mapped['SLA'] ?? ($mapped['SLA (MASA TAHAN)'] ?? null);
+                            $kantorVal = $mapped['KANTOR TUJUAN'] ?? ($mapped['KANTOR POS'] ?? ($mapped['LOKASI'] ?? ($mapped['KANTOR'] ?? null)));
 
                             if ($statusVal !== null) {
                                 $normalizedStatus = $this->normalizeNiposStatus($statusVal);
@@ -346,6 +347,8 @@ class TrackingBotService
                                     'status_kategori' => $this->categorizeStatus($normalizedStatus, $normalizedKet),
                                     'sla_days' => (int)($slaVal ?: 2),
                                     'sla' => (string)($slaVal ?: '2'),
+                                    'kantor_tujuan' => $kantorVal ?: $this->extractKantorTujuan(implode(' ', $rowValues)),
+                                    'last_location' => $kantorVal ?: null,
                                     'raw' => implode(' | ', $rowValues),
                                 ];
                             }
@@ -362,6 +365,22 @@ class TrackingBotService
 
         // 3. Text and Regex Attribute Parsing
         return $this->parseTextAttributes($rawText, $resi);
+    }
+
+    /**
+     * Extract destination office or last location from tracking text
+     */
+    public function extractKantorTujuan(string $text): ?string
+    {
+        if (preg_match('/(?:KANTOR TUJUAN|TUJUAN|KCU|KC|KCP|MPC|DC|KANTOR POS)\s*[:=]?\s*([A-Z0-9\s\.\,\-\(\)]+)/i', $text, $m)) {
+            $extracted = trim($m[1]);
+            $extracted = preg_split('/[\r\n\|\<\>\;]/', $extracted)[0];
+            $extracted = trim($extracted);
+            if (mb_strlen($extracted) >= 3 && mb_strlen($extracted) <= 60) {
+                return $extracted;
+            }
+        }
+        return null;
     }
 
     /**
@@ -423,6 +442,8 @@ class TrackingBotService
             'status_kategori' => $this->categorizeStatus($status, $normKet),
             'sla_days' => (int)$sla,
             'sla' => (string)$sla,
+            'kantor_tujuan' => $this->extractKantorTujuan($rawText),
+            'last_location' => $this->extractKantorTujuan($rawText),
             'raw' => $rawText,
         ];
     }
@@ -553,6 +574,26 @@ class TrackingBotService
      */
     public function generateSimulatedResult(string $resi, ?string $note = null): array
     {
+        $officePool = [
+            'KCU BANDUNG 40000',
+            'KCU JAKARTA PUSAT 10000',
+            'KCU SURABAYA 60000',
+            'KC JAKARTA SELATAN 12000',
+            'KCU SEMARANG 50000',
+            'KCU YOGYAKARTA 55000',
+            'KCU BEKASI 17000',
+            'KCU BOGOR 16000',
+            'KC CIMAHI 40500',
+            'KCU TANGERANG 15000',
+            'KC MALANG 65100',
+            'KCU MEDAN 20000',
+            'KCU MAKASSAR 90000',
+            'KCU DENPASAR 80000',
+        ];
+
+        $hash = abs(crc32($resi));
+        $kantorTujuan = $officePool[$hash % count($officePool)];
+
         if (str_contains($resi, '30943') || str_contains($resi, 'RETUR')) {
             return [
                 'resi' => $resi,
@@ -562,11 +603,12 @@ class TrackingBotService
                 'status_kategori' => 'RETUR',
                 'sla_days' => 9,
                 'sla' => '9',
+                'kantor_tujuan' => $kantorTujuan,
+                'last_location' => $kantorTujuan,
                 'raw' => "DELIVERED (RETURN DELIVERY) - zaherba fajar, (DITERIMA PENGIRIM (MITRA)) - SLA 9",
             ];
         }
 
-        $hash = abs(crc32($resi));
         $status = self::STATUS_DELIVERED;
         $sla = (string)(2 + ($hash % 3));
 
@@ -587,6 +629,8 @@ class TrackingBotService
             'status_kategori' => 'SUKSES',
             'sla_days' => (int)$sla,
             'sla' => $sla,
+            'kantor_tujuan' => $kantorTujuan,
+            'last_location' => $kantorTujuan,
             'raw' => "DELIVERED - $keterangan - SLA $sla" . ($note ? " [$note]" : ''),
         ];
     }

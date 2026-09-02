@@ -8,6 +8,9 @@ import {
   StickyNote,
   AlertTriangle,
   Check,
+  MessageSquare,
+  Building2,
+  Phone,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -47,6 +50,7 @@ interface Props {
   onToggleAll: () => void;
   onStatus: (ids: string[], fu: FuStatus, escalationDate?: string) => void;
   onNote: (id: string, note: string) => void;
+  onOpenWhatsApp?: (shipment: Shipment) => void;
 }
 
 export function DataTable({
@@ -58,6 +62,7 @@ export function DataTable({
   onToggleAll,
   onStatus,
   onNote,
+  onOpenWhatsApp,
 }: Props) {
   const [noteFor, setNoteFor] = useState<string | null>(null);
   const [noteDraft, setNoteDraft] = useState("");
@@ -72,7 +77,7 @@ export function DataTable({
   return (
     <>
       <div className="pos-scroll overflow-x-auto rounded-xl border border-border bg-card">
-        <table className="w-full min-w-[1400px] border-collapse text-[13px]">
+        <table className="w-full min-w-[1550px] border-collapse text-[13px]">
           <thead className="sticky top-0 z-10 bg-[#1E40AF] text-white">
             <tr className="[&>th]:px-3 [&>th]:py-2.5 [&>th]:text-left [&>th]:font-semibold [&>th]:tracking-wide">
               <th className="w-10 whitespace-nowrap">
@@ -86,11 +91,12 @@ export function DataTable({
               <th className="w-32 whitespace-nowrap">Seller / Mitra</th>
               <th className="w-44 whitespace-nowrap">No. Resi</th>
               <th className="w-28 whitespace-nowrap">Tgl Kirim</th>
-              <th className="max-w-[220px] min-w-[170px] whitespace-normal">Asal &amp; Tujuan</th>
-              <th className="min-w-[260px] max-w-[320px] whitespace-normal">Penerima &amp; Keterangan (K)</th>
+              <th className="max-w-[200px] min-w-[150px] whitespace-normal">Asal &amp; Tujuan</th>
+              <th className="min-w-[190px] max-w-[240px] whitespace-normal">Kantor Tujuan (KC) &amp; WA</th>
+              <th className="min-w-[240px] max-w-[300px] whitespace-normal">Penerima &amp; Keterangan (K)</th>
               <th className="w-36 whitespace-nowrap">Status NIPOS (L)</th>
               <th className="w-20 whitespace-nowrap">SLA (M)</th>
-              <th className="min-w-[190px] whitespace-nowrap">Status Follow-Up CS</th>
+              <th className="min-w-[180px] whitespace-nowrap">Status Follow-Up CS</th>
             </tr>
           </thead>
           <tbody>
@@ -170,11 +176,38 @@ export function DataTable({
                     <td className="px-3 py-2 whitespace-nowrap tabular-nums">
                       {formatDate(row.tanggalKirim)}
                     </td>
-                    <td className="px-3 py-2 max-w-[220px] min-w-[170px] whitespace-normal break-words">
+                    <td className="px-3 py-2 max-w-[200px] min-w-[150px] whitespace-normal break-words">
                       <div className="inline-flex flex-wrap items-center gap-1 text-xs font-medium line-clamp-2 break-words leading-snug">
                         <span className="font-semibold shrink-0">Cilacap</span>
                         <ArrowRight className="h-3 w-3 shrink-0 opacity-60" />
                         <span className="break-words">{row.tujuan}</span>
+                      </div>
+                    </td>
+                    <td className="px-3 py-2 min-w-[190px] max-w-[240px] whitespace-normal">
+                      <div className="space-y-1.5">
+                        <div className="flex items-center gap-1 text-xs font-bold" style={{ color: dark ? "#FFFFFF" : "#1E3A8A" }}>
+                          <Building2 className="h-3.5 w-3.5 shrink-0 text-blue-600" />
+                          <span className="truncate" title={row.kantorTujuan || "KC Tujuan"}>
+                            {row.kantorTujuan || "KC TUJUAN"}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <button
+                            type="button"
+                            onClick={() => onOpenWhatsApp?.(row)}
+                            className="inline-flex items-center gap-1 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white px-2 py-1 text-[11px] font-bold shadow-sm transition cursor-pointer"
+                            title="Buka Chat Follow-Up WhatsApp ke KC"
+                          >
+                            <MessageSquare className="h-3 w-3" />
+                            <span>Chat KC</span>
+                          </button>
+                          {row.kantorPosPhone && (
+                            <span className="inline-flex items-center gap-0.5 text-[10px] font-mono opacity-80" title={`PIC: ${row.kantorPosPic || "-"}`}>
+                              <Phone className="h-2.5 w-2.5 text-emerald-600" />
+                              {row.kantorPosPhone.substring(0, 11)}...
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </td>
                     <td className="px-3 py-2 min-w-[260px] max-w-[320px] whitespace-normal break-words">

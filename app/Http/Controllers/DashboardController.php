@@ -252,10 +252,13 @@ class DashboardController extends Controller
             })->count(),
         ];
 
+        $allPostOffices = \App\Models\PostOffice::orderBy('province', 'asc')->orderBy('city', 'asc')->orderBy('name', 'asc')->get();
+        $officeMapById = $allPostOffices->keyBy('id');
+
         // 50 Items Per Page Pagination to prevent Memory Exhaustion (Ordered ascending from row 1 downwards)
         $paginatedShipments = $query->orderBy('id', 'asc')->paginate(50)->withQueryString();
 
-        $formattedShipmentsData = collect($paginatedShipments->items())->map(function ($s) {
+        $formattedShipmentsData = collect($paginatedShipments->items())->map(function ($s) use ($officeMapById) {
             $fu = 'PUTIH';
             if (!empty($s->color_code)) {
                 $fu = strtoupper($s->color_code);
@@ -278,6 +281,16 @@ class DashboardController extends Controller
                 }
             }
 
+            // Match post office for destination / KC
+            $office = null;
+            if (!empty($s->kantor_pos_id) && isset($officeMapById[$s->kantor_pos_id])) {
+                $office = $officeMapById[$s->kantor_pos_id];
+            } else {
+                $office = \App\Models\PostOffice::matchByDestinationOrAddress($s->kantor_tujuan, $s->alamat);
+            }
+
+            $kantorTujuan = $s->kantor_tujuan ?: ($office ? $office->name : null);
+
             return [
                 'id' => (string)$s->id,
                 'resi' => $s->no_resi,
@@ -293,6 +306,10 @@ class DashboardController extends Controller
                 'fu' => $fu,
                 'note' => $s->noted ?: $s->keterangan,
                 'escalationDate' => $s->fu_pos_date ?: ($s->last_tracked_at ? (is_string($s->last_tracked_at) ? $s->last_tracked_at : $s->last_tracked_at->format('Y-m-d H:i')) : null),
+                'kantorTujuan' => $kantorTujuan ?: 'KC TUJUAN',
+                'kantorPosPhone' => $office ? $office->phone_wa : '',
+                'kantorPosPic' => $office ? ($office->pic_name ?: $office->name) : '',
+                'lastLocation' => $s->last_location ?: $kantorTujuan,
             ];
         })->toArray();
 
@@ -351,6 +368,7 @@ class DashboardController extends Controller
             'monthCounts' => $monthCounts,
             'yearTotal' => $yearTotal,
             'sellersList' => array_values(array_unique($sellersList)),
+            'postOffices' => $allPostOffices,
             'trackingProgress' => [
                 'total' => $totalShipments,
                 'tracked' => $trackedShipments,

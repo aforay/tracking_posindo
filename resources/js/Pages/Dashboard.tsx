@@ -26,6 +26,8 @@ import { Input } from "@/components/ui/input";
 import { TopBar } from "@/components/posindo/TopBar";
 import { DataTable } from "@/components/posindo/DataTable";
 import { ExportPanel } from "@/components/posindo/ExportPanel";
+import { WhatsAppFollowUpModal } from "@/components/posindo/WhatsAppFollowUpModal";
+import { PostOfficesManagerModal } from "@/components/posindo/PostOfficesManagerModal";
 import {
   FU_META,
   FU_ORDER,
@@ -34,6 +36,7 @@ import {
   nf,
   type FuStatus,
   type Shipment,
+  type PostOffice,
 } from "@/lib/posindo";
 
 export interface PaginatedData<T> {
@@ -49,6 +52,7 @@ export interface PaginatedData<T> {
 
 export interface PageProps {
   shipments?: Shipment[] | PaginatedData<Shipment>;
+  postOffices?: PostOffice[];
   filters?: {
     seller?: string;
     month?: string | number;
@@ -98,6 +102,17 @@ export default function Dashboard() {
   }, [pageProps?.shipments]);
 
   const [rows, setRows] = useState<Shipment[]>(shipmentList);
+  const [postOffices, setPostOffices] = useState<PostOffice[]>(pageProps?.postOffices || []);
+  const [waModalOpen, setWaModalOpen] = useState(false);
+  const [selectedShipmentForWa, setSelectedShipmentForWa] = useState<Shipment | null>(null);
+  const [postOfficesModalOpen, setPostOfficesModalOpen] = useState(false);
+
+  useEffect(() => {
+    if (pageProps?.postOffices && Array.isArray(pageProps.postOffices)) {
+      setPostOffices(pageProps.postOffices);
+    }
+  }, [pageProps?.postOffices]);
+
   const [seller, setSeller] = useState(() => {
     const s = pageProps?.filters?.seller;
     if (!s || s === "ALL" || s === "all" || s === "Semua Seller") return "Semua Seller";
@@ -328,6 +343,7 @@ export default function Dashboard() {
     <div className="min-h-screen bg-background text-foreground">
       <Toaster position="top-right" richColors />
       <header className="sticky top-0 z-30 shadow-sm">
+        {/* 1. TopBar Utama (Logo & Tombol Aksi di Atas) */}
         <TopBar
           seller={seller}
           sellersList={pageProps?.sellersList || []}
@@ -340,34 +356,44 @@ export default function Dashboard() {
           googleSheetUrl={pageProps?.googleSheetUrl}
           googleSheetId={pageProps?.googleSheetId}
           googleSheetWebhookUrl={pageProps?.googleSheetWebhookUrl}
+          onOpenPostOffices={() => setPostOfficesModalOpen(true)}
         />
-        <div className="pos-scroll flex gap-1 overflow-x-auto border-b border-border bg-card/95 px-5 py-1.5 backdrop-blur">
-          {[{ label: "Semua (Setahun)", monthNum: "all" as const, n: pageProps?.yearTotal ?? totalCount }].concat(
-            MONTHS.map((m, i) => ({ label: m, monthNum: (i + 1) as never, n: monthCounts[i] ?? 0 }))
-          ).map((t) => {
-            const active = month === t.monthNum;
-            return (
-              <button
-                key={t.label}
-                onClick={() => {
-                  setMonth(t.monthNum);
-                  router.get(
-                    "/shipments",
-                    { seller, month: t.monthNum === "all" ? "ALL" : t.monthNum, color: colorFilter, search: query },
-                    { preserveState: true, preserveScroll: true }
-                  );
-                }}
-                className={`relative shrink-0 rounded-md px-3 py-1.5 text-xs font-semibold transition cursor-pointer ${
-                  active
-                    ? "bg-[#1E40AF] text-white"
-                    : "text-muted-foreground hover:bg-muted"
-                }`}
-              >
-                {t.label}{" "}
-                <span className={active ? "opacity-80" : "opacity-60"}>({nf(t.n)})</span>
-              </button>
-            );
-          })}
+
+        {/* 2. Bar Navigasi 12 Bulan (Di Bawah TopBar) */}
+        <div className="pos-scroll overflow-x-auto border-b border-border bg-card/95 px-4 py-1.5 backdrop-blur">
+          <div className="flex w-full min-w-[920px] items-center gap-1.5 justify-between">
+            {[{ label: "Semua (Setahun)", monthNum: "all" as const, n: pageProps?.yearTotal ?? totalCount }].concat(
+              MONTHS.map((m, i) => ({ label: m, monthNum: (i + 1) as never, n: monthCounts[i] ?? 0 }))
+            ).map((t) => {
+              const active = month === t.monthNum;
+              const isAll = t.monthNum === "all";
+              return (
+                <button
+                  key={t.label}
+                  onClick={() => {
+                    setMonth(t.monthNum);
+                    router.get(
+                      "/shipments",
+                      { seller, month: t.monthNum === "all" ? "ALL" : t.monthNum, color: colorFilter, search: query },
+                      { preserveState: true, preserveScroll: true }
+                    );
+                  }}
+                  className={`relative flex items-center justify-center gap-1 rounded-md px-2 py-1.5 text-xs font-semibold transition cursor-pointer whitespace-nowrap text-center ${
+                    isAll ? "flex-[1.35]" : "flex-1"
+                  } ${
+                    active
+                      ? "bg-[#1E40AF] text-white shadow-sm"
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  }`}
+                >
+                  <span>{t.label}</span>{" "}
+                  <span className={`text-[11px] ${active ? "opacity-85 text-blue-100" : "opacity-65"}`}>
+                    ({nf(t.n)})
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </div>
       </header>
 
@@ -561,6 +587,10 @@ export default function Dashboard() {
           onToggleAll={toggleAll}
           onStatus={setStatus}
           onNote={setNote}
+          onOpenWhatsApp={(shipment) => {
+            setSelectedShipmentForWa(shipment);
+            setWaModalOpen(true);
+          }}
         />
 
         <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-3 py-2">
@@ -606,6 +636,24 @@ export default function Dashboard() {
         onOpenChange={setExportOpen}
         rows={selected.size ? rows.filter((r) => selected.has(r.id)) : rows}
         seller={seller === "Semua Seller" ? "Mitra Aliqa (Semua Seller)" : seller}
+      />
+
+      <WhatsAppFollowUpModal
+        isOpen={waModalOpen}
+        onClose={() => {
+          setWaModalOpen(false);
+          setSelectedShipmentForWa(null);
+        }}
+        shipment={selectedShipmentForWa}
+        postOffices={postOffices}
+        onStatusUpdate={(ids, status) => setStatus(ids, status)}
+      />
+
+      <PostOfficesManagerModal
+        isOpen={postOfficesModalOpen}
+        onClose={() => setPostOfficesModalOpen(false)}
+        postOffices={postOffices}
+        onOfficesUpdated={(updated) => setPostOffices(updated)}
       />
     </div>
   );

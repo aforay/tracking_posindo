@@ -22,7 +22,50 @@ export interface Shipment {
   fu: FuStatus;
   note?: string;
   escalationDate?: string;
+  kantorTujuan?: string;
+  kantorPosPhone?: string;
+  kantorPosPic?: string;
+  lastLocation?: string;
 }
+
+export interface PostOffice {
+  id: number | string;
+  code?: string;
+  name: string;
+  city?: string;
+  province?: string;
+  phone_wa: string;
+  pic_name?: string;
+  notes?: string;
+}
+
+export function generatePostOfficeWaMessage(
+  shipment: Shipment,
+  postOfficeName?: string,
+  customNote?: string
+): string {
+  const office = postOfficeName || shipment.kantorTujuan || "Kantor Pos Tujuan";
+  const lines = [
+    `Halo Rekan CS/Antaran Pos Indonesia ${office},`,
+    ``,
+    `Mohon bantuannya untuk pengecekan / follow-up kiriman berikut:`,
+    `📦 *No. Resi:* ${shipment.resi}`,
+    `👤 *Penerima:* ${shipment.penerima || "-"} (${shipment.telepon || "-"})`,
+    `📍 *Alamat:* ${shipment.alamat || shipment.tujuan || "-"}`,
+    `🏪 *Seller / Mitra:* ${shipment.seller || "Pos Indonesia"}`,
+    `📊 *Status NIPOS:* ${shipment.nipos || "ON PROCESS"}`,
+    `📝 *Keterangan:* ${shipment.keterangan || "-"}`,
+  ];
+
+  if (customNote && customNote.trim()) {
+    lines.push(``, `⚠️ *Catatan Tambahan:* ${customNote.trim()}`);
+  } else {
+    lines.push(``, `Mohon bantuannya agar dapat segera diantar / diklarifikasi ke penerima agar paket sukses terkirim dan tidak terjadi komplain ya kak. Terima kasih banyak atas kerjasamanya! 🙏✨`);
+  }
+
+  return lines.join("\n");
+}
+
 
 export const SELLERS = [
   "Mitra Aliqa",
