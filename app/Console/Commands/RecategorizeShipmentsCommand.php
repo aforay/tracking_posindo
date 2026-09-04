@@ -51,8 +51,9 @@ class RecategorizeShipmentsCommand extends Command
         $followUpCount = 0;
         $inProcessCount = 0;
 
-        OutgoingShipment::chunk(1000, function ($shipments) use ($botService, &$updatedCount, &$returCount, &$suksesCount, &$followUpCount, &$inProcessCount, $bar) {
-            DB::transaction(function () use ($shipments, $botService, &$updatedCount, &$returCount, &$suksesCount, &$followUpCount, &$inProcessCount, $bar) {
+        OutgoingShipment::select(['id', 'status_pos', 'keterangan', 'status_kategori', 'color_code'])
+            ->chunkById(1000, function ($shipments) use ($botService, &$updatedCount, &$returCount, &$suksesCount, &$followUpCount, &$inProcessCount, $bar) {
+                DB::transaction(function () use ($shipments, $botService, &$updatedCount, &$returCount, &$suksesCount, &$followUpCount, &$inProcessCount, $bar) {
                 foreach ($shipments as $shipment) {
                     $newCategory = $botService->categorizeStatus($shipment->status_pos, $shipment->keterangan);
                     $newColor = $botService->determineColorCode($newCategory);

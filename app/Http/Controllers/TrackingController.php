@@ -246,18 +246,28 @@ class TrackingController extends Controller
      */
     public function trackSingle(Request $request, int $id)
     {
-        $shipment = Shipment::findOrFail($id);
-        $this->trackSingleShipment($shipment);
+        $shipment = OutgoingShipment::findOrFail($id);
+        $job = new ProcessNiposTrackingJob([$shipment->id]);
+        $job->handle($this->botService);
+
+        $fresh = $shipment->fresh();
 
         if ($request->ajax() || $request->wantsJson()) {
             return response()->json([
                 'success' => true,
-                'message' => "Resi {$shipment->resi} berhasil di-tracking.",
-                'shipment' => $shipment,
+                'message' => "Resi {$fresh->no_resi} berhasil diperbarui dari NIPOS.",
+                'shipment' => [
+                    'id' => (string)$fresh->id,
+                    'resi' => $fresh->no_resi,
+                    'status_pos' => $fresh->status_pos,
+                    'keterangan' => $fresh->keterangan,
+                    'color_code' => $fresh->color_code,
+                    'status_kategori' => $fresh->status_kategori,
+                ],
             ]);
         }
 
-        return back()->with('success', "Resi {$shipment->resi} berhasil diperbarui: {$shipment->status} ({$shipment->keterangan}).");
+        return back()->with('success', "Resi {$fresh->no_resi} berhasil diperbarui: {$fresh->status_pos}.");
     }
 
     /**
@@ -350,26 +360,75 @@ class TrackingController extends Controller
         $shipmentIds = $request->input('shipment_ids', []);
         $useQueue = $request->boolean('use_queue', false);
         $force = $request->boolean('force', false);
-        $limit = (int)$request->input('limit', 50);
+        $limit = min(100, max(5, (int)$request->input('limit', 25)));
+        $seller = $request->input('seller', null);
+
+        // Session timestamp to isolate current bot run batches
+        $sessionStart = $request->input('session_start');
+        $sessionThreshold = !empty($sessionStart)
+            ? \Illuminate\Support\Carbon::parse($sessionStart)
+            : now()->subMinutes(1);
 
         $pendingQuery = OutgoingShipment::query();
-        if (!empty($shipmentIds)) {
-            $pendingQuery->whereIn('id', (array)$shipmentIds);
-        } elseif ($force) {
-            $pendingQuery->where('status_pos', '!=', 'DELIVERED');
-        } else {
-            $pendingQuery->where(function ($q) {
-                $q->whereNotIn('status_kategori', ['SUKSES', 'RETUR'])
-                  ->orWhereNull('status_kategori')
-                  ->orWhere('status_pos', '!=', 'DELIVERED');
+        if (!empty($seller) && $seller !== 'ALL' && $seller !== 'Semua Seller') {
+            $cleanSeller = trim(preg_replace('/^Mitra\s+/i', '', $seller));
+            $pendingQuery->where(function ($q) use ($seller, $cleanSeller) {
+                $q->where('nama_seller', $seller)
+                  ->orWhere('nama_seller', $cleanSeller)
+                  ->orWhere('nama_seller', 'Mitra ' . $cleanSeller)
+                  ->orWhere('nama_seller', 'LIKE', "%{$cleanSeller}%");
             });
         }
 
-        $allPendingIds = $pendingQuery->orderBy('last_tracked_at', 'asc')->limit($limit)->pluck('id')->toArray();
+        $month = $request->input('month', null);
+        if (!empty($month) && $month !== 'ALL' && $month !== 'all') {
+            if (is_numeric($month)) {
+                $pendingQuery->whereMonth('tanggal_kirim', (int)$month);
+            }
+        }
+
+        if (!empty($shipmentIds)) {
+            $pendingQuery->whereIn('id', (array)$shipmentIds);
+        } else {
+            if (!$force) {
+                $pendingQuery->where(function ($q) {
+                    $q->whereNull('status_pos')
+                      ->orWhere('status_pos', 'ON PROCESS')
+                      ->orWhere('status_pos', '')
+                      ->orWhere('status_pos', 'LIKE', '%PROCESS%')
+                      ->orWhereNotIn('status_kategori', ['SUKSES', 'RETUR'])
+                      ->orWhereNotIn('color_code', ['BIRU', 'ORANGE']);
+                });
+            }
+
+            // Exclude items already tracked in this active session
+            $pendingQuery->where(function ($q) use ($sessionThreshold) {
+                $q->whereNull('last_tracked_at')
+                  ->orWhere('last_tracked_at', '<', $sessionThreshold);
+            });
+        }
+
+        $allPendingIds = \Illuminate\Support\Facades\DB::transaction(function () use ($pendingQuery, $limit) {
+            $ids = (clone $pendingQuery)
+                ->orderByRaw('CASE WHEN last_tracked_at IS NULL THEN 0 ELSE 1 END')
+                ->orderBy('last_tracked_at', 'asc')
+                ->orderBy('id', 'asc')
+                ->limit($limit)
+                ->lockForUpdate()
+                ->pluck('id')
+                ->toArray();
+
+            if (!empty($ids)) {
+                OutgoingShipment::whereIn('id', $ids)->update(['last_tracked_at' => now()]);
+            }
+
+            return $ids;
+        });
+
         $pendingCount = count($allPendingIds);
 
         if ($pendingCount === 0) {
-            $msg = "Semua data resi sudah ter-tracking dan berstatus final (SUKSES/RETUR).";
+            $msg = "Semua data resi sudah ter-tracking dan berstatus terbaru.";
             cache()->put('bot_progress', ['current' => 0, 'total' => 0], 3600);
             cache()->forget('bot_running');
             if ($request->ajax() || $request->wantsJson()) {
@@ -387,27 +446,22 @@ class TrackingController extends Controller
         }
 
         if ($useQueue) {
-            // Asynchronous Queue chunked dispatch (100 resis per background job)
-            foreach (array_chunk($allPendingIds, 100) as $chunkIds) {
+            // Asynchronous Queue chunked dispatch
+            foreach (array_chunk($allPendingIds, 25) as $chunkIds) {
                 ProcessNiposTrackingJob::dispatch($chunkIds);
             }
             $msg = "Tracking Bot NIPOS berhasil dijalankan di background queue untuk {$pendingCount} resi.";
             $updatedCount = $pendingCount;
         } else {
-            // High-speed direct batch processing (instant response per 100 items < 0.1s)
+            // High-speed direct batch processing
             $job = new ProcessNiposTrackingJob($allPendingIds);
             $job->handle($this->botService);
             $updatedCount = $pendingCount;
             $msg = "Berhasil memperbarui {$updatedCount} data resi dari NIPOS.";
         }
 
-        $remainingPending = OutgoingShipment::where(function ($q) {
-            $q->whereNotIn('status_kategori', ['SUKSES', 'RETUR'])
-              ->orWhereNull('status_kategori')
-              ->orWhere('status_pos', '!=', 'DELIVERED');
-        })->count();
-
-        $isFinished = $remainingPending === 0 || $pendingCount < $limit;
+        $remainingPending = (clone $pendingQuery)->count();
+        $isFinished = $remainingPending === 0;
 
         if ($request->ajax() || $request->wantsJson()) {
             return response()->json([

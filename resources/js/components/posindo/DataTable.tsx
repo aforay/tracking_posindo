@@ -1,9 +1,9 @@
 import { useState } from "react";
+import { router } from "@inertiajs/react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Copy,
   ExternalLink,
-  ArrowRight,
   ChevronDown,
   StickyNote,
   AlertTriangle,
@@ -11,6 +11,10 @@ import {
   MessageSquare,
   Building2,
   Phone,
+  MapPin,
+  CheckCircle2,
+  ArrowUpDown,
+  RefreshCw,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -31,7 +35,16 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Calendar } from "@/components/ui/calendar";
-import { FU_META, FU_ORDER, formatDate, type FuStatus, type Shipment } from "@/lib/posindo";
+import {
+  FU_META,
+  FU_ORDER,
+  getSellerFuMeta,
+  getSellerFuOrder,
+  formatDate,
+  extractCityRegency,
+  type FuStatus,
+  type Shipment,
+} from "@/lib/posindo";
 
 const NIPOS_STYLE: Record<string, string> = {
   DELIVERED: "bg-sky-100 text-sky-800 border-sky-200",
@@ -51,6 +64,10 @@ interface Props {
   onStatus: (ids: string[], fu: FuStatus, escalationDate?: string) => void;
   onNote: (id: string, note: string) => void;
   onOpenWhatsApp?: (shipment: Shipment) => void;
+  seller?: string;
+  onSort?: (field: string) => void;
+  sortField?: string;
+  sortDirection?: "asc" | "desc";
 }
 
 export function DataTable({
@@ -63,11 +80,50 @@ export function DataTable({
   onStatus,
   onNote,
   onOpenWhatsApp,
+  seller,
+  onSort,
+  sortField,
+  sortDirection,
 }: Props) {
+  const fuMeta = getSellerFuMeta(seller);
+  const fuOrder = getSellerFuOrder(seller);
   const [noteFor, setNoteFor] = useState<string | null>(null);
   const [noteDraft, setNoteDraft] = useState("");
   const [escalateFor, setEscalateFor] = useState<string | null>(null);
   const [escDate, setEscDate] = useState<Date | undefined>(new Date());
+  const [loadingTrackId, setLoadingTrackId] = useState<string | null>(null);
+
+  const handleSingleTrack = async (id: string) => {
+    try {
+      setLoadingTrackId(id);
+      const csrfToken =
+        document.querySelector('meta[name="csrf-token"]')?.getAttribute("content") ||
+        (document.cookie.match(/XSRF-TOKEN=([^;]+)/)?.[1] ? decodeURIComponent(document.cookie.match(/XSRF-TOKEN=([^;]+)/)![1]) : "");
+
+      const res = await fetch(`/shipments/${id}/track`, {
+        method: "POST",
+        headers: {
+          "Accept": "application/json",
+          "Content-Type": "application/json",
+          "X-CSRF-TOKEN": csrfToken,
+          "X-XSRF-TOKEN": csrfToken,
+        },
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success("Status NIPOS berhasil diperbarui!", {
+          description: data.shipment?.status_pos || "Data terbaru berhasil diambil.",
+        });
+        router.reload({ preserveScroll: true });
+      } else {
+        toast.error(data.message || "Gagal memperbarui status NIPOS");
+      }
+    } catch (err: any) {
+      toast.error("Terjadi kesalahan saat melacak resi: " + (err?.message || err));
+    } finally {
+      setLoadingTrackId(null);
+    }
+  };
 
   const copy = (resi: string) => {
     void navigator.clipboard?.writeText(resi);
@@ -89,11 +145,32 @@ export function DataTable({
               </th>
               <th className="w-12 whitespace-nowrap">No</th>
               <th className="w-32 whitespace-nowrap">Seller / Mitra</th>
-              <th className="w-44 whitespace-nowrap">No. Resi</th>
-              <th className="w-28 whitespace-nowrap">Tgl Kirim</th>
-              <th className="max-w-[200px] min-w-[150px] whitespace-normal">Asal &amp; Tujuan</th>
-              <th className="min-w-[190px] max-w-[240px] whitespace-normal">Kantor Tujuan (KC) &amp; WA</th>
-              <th className="min-w-[240px] max-w-[300px] whitespace-normal">Penerima &amp; Keterangan (K)</th>
+              <th className="w-44 whitespace-nowrap">
+                <button
+                  type="button"
+                  onClick={() => onSort?.("resi")}
+                  className="inline-flex items-center gap-1 hover:text-amber-200 transition cursor-pointer font-bold"
+                  title="Klik untuk mengurutkan berdasarkan nomor resi"
+                >
+                  <span>No. Resi</span>
+                  <ArrowUpDown className="h-3 w-3 opacity-80" />
+                </button>
+              </th>
+              <th className="w-28 whitespace-nowrap">
+                <button
+                  type="button"
+                  onClick={() => onSort?.("tanggal")}
+                  className="inline-flex items-center gap-1 hover:text-amber-200 transition cursor-pointer font-bold"
+                  title="Klik untuk mengurutkan berdasarkan tanggal kirim"
+                >
+                  <span>Tgl Kirim</span>
+                  <ArrowUpDown className="h-3 w-3 opacity-80" />
+                </button>
+              </th>
+              <th className="min-w-[200px] max-w-[260px] whitespace-normal">Tujuan Kirim &amp; KC</th>
+              <th className="min-w-[250px] max-w-[320px] whitespace-normal">
+                Penerima &amp; Keterangan (K)
+              </th>
               <th className="w-36 whitespace-nowrap">Status NIPOS (L)</th>
               <th className="w-20 whitespace-nowrap">SLA (M)</th>
               <th className="min-w-[180px] whitespace-nowrap">Status Follow-Up CS</th>
@@ -103,10 +180,16 @@ export function DataTable({
             <AnimatePresence initial={false}>
               {(Array.isArray(rows) ? rows : []).map((row, i) => {
                 if (!row) return null;
-                const meta = FU_META[row.fu] || FU_META["PUTIH"];
+                const meta = fuMeta[row.fu] || fuMeta["PUTIH"];
                 const dark = row.fu === "BIRU_TUA";
-                const overdue = (row.sla || 0) > 3 && row.nipos !== "DELIVERED";
                 const isChecked = Boolean(selected && typeof selected.has === "function" && selected.has(row.id));
+                const niposUpper = (row.nipos || "").toUpperCase();
+                const isRetur = row.fu === "ORANGE" || niposUpper.includes("RETURN") || niposUpper === "DELIVERED (RETURN DELIVERY)";
+                const isDelivered = !isRetur && (row.fu === "BIRU" || niposUpper === "DELIVERED");
+                const isFinal = isDelivered || isRetur;
+                const slaNum = typeof row.sla === "number" ? row.sla : parseInt(String(row.sla || "0"), 10);
+                const isOverdue = isNaN(slaNum) ? false : (slaNum < 0 || slaNum > 4);
+
                 return (
                   <motion.tr
                     key={row.id || `row-${i}`}
@@ -176,42 +259,81 @@ export function DataTable({
                     <td className="px-3 py-2 whitespace-nowrap tabular-nums">
                       {formatDate(row.tanggalKirim)}
                     </td>
-                    <td className="px-3 py-2 max-w-[200px] min-w-[150px] whitespace-normal break-words">
-                      <div className="inline-flex flex-wrap items-center gap-1 text-xs font-medium line-clamp-2 break-words leading-snug">
-                        <span className="font-semibold shrink-0">Cilacap</span>
-                        <ArrowRight className="h-3 w-3 shrink-0 opacity-60" />
-                        <span className="break-words">{row.tujuan}</span>
-                      </div>
-                    </td>
-                    <td className="px-3 py-2 min-w-[190px] max-w-[240px] whitespace-normal">
-                      <div className="space-y-1.5">
-                        <div className="flex items-center gap-1 text-xs font-bold" style={{ color: dark ? "#FFFFFF" : "#1E3A8A" }}>
-                          <Building2 className="h-3.5 w-3.5 shrink-0 text-blue-600" />
-                          <span className="truncate" title={row.kantorTujuan || "KC Tujuan"}>
-                            {row.kantorTujuan || "KC TUJUAN"}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <button
-                            type="button"
-                            onClick={() => onOpenWhatsApp?.(row)}
-                            className="inline-flex items-center gap-1 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white px-2 py-1 text-[11px] font-bold shadow-sm transition cursor-pointer"
-                            title="Buka Chat Follow-Up WhatsApp ke KC"
-                          >
-                            <MessageSquare className="h-3 w-3" />
-                            <span>Chat KC</span>
-                          </button>
-                          {row.kantorPosPhone && (
-                            <span className="inline-flex items-center gap-0.5 text-[10px] font-mono opacity-80" title={`PIC: ${row.kantorPosPic || "-"}`}>
-                              <Phone className="h-2.5 w-2.5 text-emerald-600" />
-                              {row.kantorPosPhone.substring(0, 11)}...
-                            </span>
-                          )}
-                        </div>
-                      </div>
+                    <td className="px-3 py-2 min-w-[200px] max-w-[260px] whitespace-normal">
+                      {(() => {
+                        const cityRegency = extractCityRegency(row.alamat || row.tujuan, row.kantorTujuan);
+                        const cleanCityName = cityRegency.replace(/^(Kota|Kab\.?|Kec\.?)\s+/i, "").trim();
+                        const rawKC = row.kantorTujuan ? row.kantorTujuan.trim() : "";
+                        const isGenericKC = !rawKC || ['KC TUJUAN', 'KC', 'KC POS PENGANTARAN', 'KC PENGANTARAN', 'POS PENGANTARAN'].includes(rawKC.toUpperCase());
+                        const displayKC = isGenericKC
+                          ? (cleanCityName && cleanCityName !== "-" ? `KC ${cleanCityName.toUpperCase()}` : "KC PENGANTARAN")
+                          : rawKC;
+
+                        return (
+                          <div className="space-y-1.5">
+                            {/* 1. Kota / Kabupaten Tujuan */}
+                            <div className="flex items-center gap-1.5">
+                              <MapPin className="h-3.5 w-3.5 shrink-0 text-rose-500" />
+                              <span className="font-bold text-xs leading-snug break-words" title={row.alamat || row.tujuan}>
+                                {cityRegency}
+                              </span>
+                            </div>
+
+                            {/* 2. Tulisan KC di bawahnya */}
+                            <div className="flex items-center gap-1 text-[11px] font-semibold" style={{ color: dark ? "#FFFFFF" : "#1E40AF" }}>
+                              <Building2 className="h-3 w-3 shrink-0 text-blue-600" />
+                              <span className="truncate" title={displayKC}>
+                                {displayKC}
+                              </span>
+                            </div>
+
+                            {/* 3. Tombol Chat KC jika non-final, atau status Paket Sukses/Retur jika final */}
+                            {isFinal ? (
+                              <div className="text-[10px] font-bold">
+                                {isDelivered ? (
+                                  <span className="inline-flex items-center gap-1 text-emerald-900 bg-emerald-100/90 rounded px-1.5 py-0.5 border border-emerald-300">
+                                    ✓ Paket Sukses (Final)
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 text-amber-950 bg-amber-100/90 rounded px-1.5 py-0.5 border border-amber-300">
+                                    ✓ Paket Retur (Final)
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                                <button
+                                  type="button"
+                                  onClick={() => onOpenWhatsApp?.(row)}
+                                  className="inline-flex items-center gap-1 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white px-2 py-0.5 text-[11px] font-bold shadow-sm transition cursor-pointer"
+                                  title="Buka Chat Follow-Up WhatsApp ke KC"
+                                >
+                                  <MessageSquare className="h-3 w-3" />
+                                  <span>Chat KC</span>
+                                </button>
+                                {row.kantorPosPhone && (
+                                  <span className="inline-flex items-center gap-0.5 text-[10px] font-mono opacity-80" title={`PIC: ${row.kantorPosPic || "-"}`}>
+                                    <Phone className="h-2.5 w-2.5 text-emerald-600" />
+                                    {row.kantorPosPhone.substring(0, 11)}...
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </td>
                     <td className="px-3 py-2 min-w-[260px] max-w-[320px] whitespace-normal break-words">
-                      <div className="font-semibold">{row.penerima}</div>
+                      {(() => {
+                        const rawPenerima = (row.penerima || "").trim();
+                        const isResiValue = !rawPenerima || rawPenerima === "-" || rawPenerima === row.resi || /^(BAC\d|P26\d|P\d{7})/i.test(rawPenerima);
+                        const displayPenerima = isResiValue ? "Nama Penerima" : rawPenerima;
+                        return (
+                          <div className="font-semibold text-sm leading-tight text-slate-900" style={{ color: dark ? "#FFFFFF" : undefined }}>
+                            {displayPenerima}
+                          </div>
+                        );
+                      })()}
                       <div className="text-[11px] opacity-75 break-words line-clamp-3 leading-snug">
                         {row.telepon} &middot; {row.alamat}
                       </div>
@@ -227,21 +349,44 @@ export function DataTable({
                         </div>
                       )}
                     </td>
-                    <td className="px-3 py-2">
-                      <span
-                        className={`inline-flex rounded border px-2 py-0.5 text-[11px] font-bold ${NIPOS_STYLE[row.nipos] || "bg-slate-100 text-slate-700"}`}
-                      >
-                        {row.nipos}
-                      </span>
+                    <td className="px-3 py-2 min-w-[220px] max-w-[340px] whitespace-normal">
+                      <div className="flex items-start gap-1.5">
+                        <div
+                          className={`flex-1 rounded-md border p-1.5 text-[11px] font-semibold leading-snug break-words ${
+                            isRetur
+                              ? "bg-amber-50 text-amber-950 border-amber-300"
+                              : isDelivered
+                              ? "bg-emerald-50 text-emerald-950 border-emerald-300"
+                              : "bg-slate-50 text-slate-800 border-slate-200"
+                          }`}
+                          title={row.nipos}
+                        >
+                          {row.nipos || "-"}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleSingleTrack(row.id);
+                          }}
+                          disabled={loadingTrackId === row.id}
+                          title="Lacak NIPOS Sekarang"
+                          className="shrink-0 p-1 mt-0.5 rounded border border-slate-200 bg-white hover:bg-blue-50 text-slate-500 hover:text-blue-600 transition-colors disabled:opacity-50 cursor-pointer shadow-xs"
+                        >
+                          <RefreshCw className={`h-3 w-3 ${loadingTrackId === row.id ? "animate-spin text-blue-600" : ""}`} />
+                        </button>
+                      </div>
                     </td>
-                    <td className="px-3 py-2">
+                    <td className="px-3 py-2 whitespace-nowrap">
                       <span
                         className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-bold ${
-                          overdue ? "bg-red-100 text-red-700 border border-red-300" : "bg-black/5"
-                        } ${dark && !overdue ? "bg-white/15 text-white" : ""}`}
+                          isOverdue ? "bg-red-100 text-red-700 border border-red-300" : "bg-black/5"
+                        } ${dark && !isOverdue ? "bg-white/15 text-white" : ""}`}
                       >
-                        {overdue && <AlertTriangle className="h-3.5 w-3.5 text-red-600" />}
-                        {row.sla} Hari
+                        {isOverdue && <AlertTriangle className="h-3.5 w-3.5 text-red-600 shrink-0" />}
+                        {isOverdue && row.sla < 0
+                          ? `Over SLA ${Math.abs(row.sla)} Hari`
+                          : `${Math.abs(row.sla)} Hari`}
                       </span>
                     </td>
                     <td className="px-3 py-2">
@@ -257,7 +402,7 @@ export function DataTable({
                             </button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" className="w-64 p-1.5 bg-white border border-slate-200 shadow-xl rounded-xl">
-                            {FU_ORDER.map((k) => (
+                            {fuOrder.map((k) => (
                               <DropdownMenuItem
                                 key={k}
                                 onClick={() => {
@@ -270,10 +415,10 @@ export function DataTable({
                               >
                                 <span
                                   className="h-4 w-4 rounded-md border border-black/10 shrink-0"
-                                  style={{ backgroundColor: FU_META[k].bg }}
+                                  style={{ backgroundColor: fuMeta[k].bg }}
                                 />
                                 <span className="font-bold text-slate-800">
-                                  {FU_META[k].short} — {FU_META[k].label}
+                                  {fuMeta[k].short} — {fuMeta[k].label}
                                 </span>
                                 {row.fu === k && <Check className="ml-auto h-4 w-4 text-slate-900" />}
                               </DropdownMenuItem>

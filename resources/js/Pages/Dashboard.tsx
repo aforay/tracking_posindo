@@ -17,6 +17,9 @@ import {
   ChevronRight,
   X,
   Check,
+  ArrowUpDown,
+  Bot,
+  Loader2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
@@ -31,8 +34,9 @@ import { PostOfficesManagerModal } from "@/components/posindo/PostOfficesManager
 import {
   FU_META,
   FU_ORDER,
+  getSellerFuMeta,
+  getSellerFuOrder,
   MONTHS,
-  generateShipments,
   nf,
   type FuStatus,
   type Shipment,
@@ -85,8 +89,6 @@ export interface PageProps {
   };
 }
 
-const DUMMY_SEED = generateShipments();
-
 export default function Dashboard() {
   const pageProps = (usePage<PageProps>()?.props || {}) as PageProps;
 
@@ -128,8 +130,21 @@ export default function Dashboard() {
     (pageProps?.filters?.color as FuStatus) || null
   );
   const [query, setQuery] = useState(pageProps?.filters?.search || "");
+  const [sort, setSort] = useState<string>(() => pageProps?.filters?.sort || "sheet");
+  const [direction, setDirection] = useState<"asc" | "desc">(() => (pageProps?.filters?.direction as "asc" | "desc") || "asc");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [exportOpen, setExportOpen] = useState(false);
+
+  const handleSortChange = (newSort: string) => {
+    const newDir = sort === newSort && direction === "asc" ? "desc" : "asc";
+    setSort(newSort);
+    setDirection(newDir);
+    router.get(
+      "/shipments",
+      { seller, month, color: colorFilter, search: query, sort: newSort, direction: newDir },
+      { preserveState: true, preserveScroll: true }
+    );
+  };
 
   useEffect(() => {
     setRows(shipmentList);
@@ -273,71 +288,178 @@ export default function Dashboard() {
     );
   };
 
-  const cards = [
-    {
-      label: "Total Kiriman",
-      value: kpi.total,
-      icon: Package,
-      bg: "#F3F4F6",
-      fg: "#374151",
-      sub: "seluruh resi outgoing",
-      colorKey: null,
-    },
-    {
-      label: "Paket Sukses",
-      value: kpi.sukses,
-      icon: CheckCircle2,
-      bg: "#46BDC6",
-      fg: "#083344",
-      sub: "DELIVERED",
-      colorKey: "BIRU" as FuStatus,
-    },
-    {
-      label: "Paket Retur",
-      value: kpi.retur,
-      icon: RotateCcw,
-      bg: "#FBBC04",
-      fg: "#451A03",
-      sub: "RETURN / GAGAL SERAH",
-      colorKey: "ORANGE" as FuStatus,
-    },
-    {
-      label: "Belum di FU",
-      value: kpi.belum,
-      icon: Clock,
-      bg: "#FFFFFF",
-      fg: "#1E293B",
-      sub: "ON PROCESS / RUNSHEET",
-      colorKey: "PUTIH" as FuStatus,
-    },
-    {
-      label: "Sudah di FU",
-      value: kpi.sudahFu,
-      icon: BellRing,
-      bg: "#FFFF00",
-      fg: "#422006",
-      sub: "FOLLOW-UP CS 1X",
-      colorKey: "KUNING" as FuStatus,
-    },
-    {
-      label: "FU 2 Kali",
-      value: kpi.fu2Kali,
-      icon: Repeat,
-      bg: "#93C47D",
-      fg: "#14532D",
-      sub: "FOLLOW-UP 2 KALI",
-      colorKey: "HIJAU" as FuStatus,
-    },
-    {
-      label: "FU POS",
-      value: kpi.fuPos,
-      icon: Send,
-      bg: "#1C4587",
-      fg: "#FFFFFF",
-      sub: "ESKALASI POS PUSAT",
-      colorKey: "BIRU_TUA" as FuStatus,
-    },
-  ];
+  const [isTrackingSelected, setIsTrackingSelected] = useState(false);
+  const trackSelected = async () => {
+    const ids = Array.from(selected);
+    if (ids.length === 0) return;
+
+    try {
+      setIsTrackingSelected(true);
+      const csrfToken =
+        document.querySelector('meta[name="csrf-token"]')?.getAttribute("content") ||
+        (document.cookie.match(/XSRF-TOKEN=([^;]+)/)?.[1] ? decodeURIComponent(document.cookie.match(/XSRF-TOKEN=([^;]+)/)![1]) : "");
+
+      const res = await fetch("/bot/start-tracking", {
+        method: "POST",
+        headers: {
+          "Accept": "application/json",
+          "Content-Type": "application/json",
+          "X-CSRF-TOKEN": csrfToken,
+          "X-XSRF-TOKEN": csrfToken,
+        },
+        body: JSON.stringify({
+          shipment_ids: ids,
+        }),
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        toast.success(`Berhasil melacak ${data.processed_count || ids.length} resi NIPOS terpilih!`);
+        router.reload({ preserveScroll: true });
+        setSelected(new Set());
+      } else {
+        toast.error(data.message || "Gagal melacak resi terpilih");
+      }
+    } catch (err: any) {
+      toast.error("Terjadi kesalahan: " + (err?.message || err));
+    } finally {
+      setIsTrackingSelected(false);
+    }
+  };
+
+  const isAliqa = typeof seller === "string" && seller.toUpperCase().includes("ALIQA");
+  const currentFuMeta = useMemo(() => getSellerFuMeta(seller), [seller]);
+  const currentFuOrder = useMemo(() => getSellerFuOrder(seller), [seller]);
+
+  const cards = useMemo(() => {
+    if (isAliqa) {
+      // 6 Kotak Khusus Mitra Aliqa sesuai catatan resmi:
+      // Total Kiriman, Paket Sukses (Hijau Toska), Paket Retur (Merah), Sudah di FU (Kuning), BLM di FU (Putih), ON FU POS (Biru Tua)
+      return [
+        {
+          label: "Total Kiriman",
+          value: kpi.total,
+          icon: Package,
+          bg: "#F3F4F6",
+          fg: "#374151",
+          sub: "seluruh resi aliqa",
+          colorKey: null,
+        },
+        {
+          label: "Paket Sukses",
+          value: kpi.sukses,
+          icon: CheckCircle2,
+          bg: "#38D9A9", // Hijau Toska
+          fg: "#000000",
+          sub: "DELIVERED",
+          colorKey: "BIRU" as FuStatus,
+        },
+        {
+          label: "Paket Retur",
+          value: kpi.retur,
+          icon: RotateCcw,
+          bg: "#E8A29A", // Merah
+          fg: "#000000",
+          sub: "RETURN / GAGAL SERAH",
+          colorKey: "ORANGE" as FuStatus,
+        },
+        {
+          label: "Sudah di FU",
+          value: kpi.sudahFu,
+          icon: BellRing,
+          bg: "#FFFF00", // Kuning
+          fg: "#000000",
+          sub: "SUDAH DI FU",
+          colorKey: "KUNING" as FuStatus,
+        },
+        {
+          label: "BLM di FU",
+          value: kpi.belum,
+          icon: Clock,
+          bg: "#FFFFFF", // Putih
+          fg: "#1E293B",
+          sub: "BLM DI FU",
+          colorKey: "PUTIH" as FuStatus,
+        },
+        {
+          label: "ON FU POS",
+          value: kpi.fuPos,
+          icon: Send,
+          bg: "#1C4587", // Biru Tua
+          fg: "#FFFFFF",
+          sub: "ESKALASI KC / KCU",
+          colorKey: "BIRU_TUA" as FuStatus,
+        },
+      ];
+    }
+
+    // Default / Mitra Zaherba (7 kotak tetap utuh tidak diubah sama sekali)
+    return [
+      {
+        label: "Total Kiriman",
+        value: kpi.total,
+        icon: Package,
+        bg: "#F3F4F6",
+        fg: "#374151",
+        sub: "seluruh resi outgoing",
+        colorKey: null,
+      },
+      {
+        label: "Paket Sukses",
+        value: kpi.sukses,
+        icon: CheckCircle2,
+        bg: "#46BDC6",
+        fg: "#083344",
+        sub: "DELIVERED",
+        colorKey: "BIRU" as FuStatus,
+      },
+      {
+        label: "Paket Retur",
+        value: kpi.retur,
+        icon: RotateCcw,
+        bg: "#FBBC04",
+        fg: "#451A03",
+        sub: "RETURN / GAGAL SERAH",
+        colorKey: "ORANGE" as FuStatus,
+      },
+      {
+        label: "Belum di FU",
+        value: kpi.belum,
+        icon: Clock,
+        bg: "#FFFFFF",
+        fg: "#1E293B",
+        sub: "ON PROCESS / RUNSHEET",
+        colorKey: "PUTIH" as FuStatus,
+      },
+      {
+        label: "Sudah di FU",
+        value: kpi.sudahFu,
+        icon: BellRing,
+        bg: "#FFFF00",
+        fg: "#422006",
+        sub: "FOLLOW-UP CS 1X",
+        colorKey: "KUNING" as FuStatus,
+      },
+      {
+        label: "FU 2 Kali",
+        value: kpi.fu2Kali,
+        icon: Repeat,
+        bg: "#93C47D",
+        fg: "#14532D",
+        sub: "FOLLOW-UP 2 KALI",
+        colorKey: "HIJAU" as FuStatus,
+      },
+      {
+        label: "FU POS",
+        value: kpi.fuPos,
+        icon: Send,
+        bg: "#1C4587",
+        fg: "#FFFFFF",
+        sub: "ESKALASI POS PUSAT",
+        colorKey: "BIRU_TUA" as FuStatus,
+      },
+    ];
+  }, [isAliqa, kpi]);
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -349,9 +471,10 @@ export default function Dashboard() {
           sellersList={pageProps?.sellersList || []}
           onSeller={(s) => {
             setSeller(s);
-            router.get("/shipments", { seller: s, month, color: colorFilter, search: query }, { preserveState: true, preserveScroll: true });
+            router.get("/shipments", { seller: s, month, color: colorFilter, search: query, sort, direction }, { preserveState: true, preserveScroll: true });
           }}
           total={totalCount}
+          month={month}
           trackingProgress={pageProps?.trackingProgress}
           googleSheetUrl={pageProps?.googleSheetUrl}
           googleSheetId={pageProps?.googleSheetId}
@@ -374,7 +497,7 @@ export default function Dashboard() {
                     setMonth(t.monthNum);
                     router.get(
                       "/shipments",
-                      { seller, month: t.monthNum === "all" ? "ALL" : t.monthNum, color: colorFilter, search: query },
+                      { seller, month: t.monthNum === "all" ? "ALL" : t.monthNum, color: colorFilter, search: query, sort, direction },
                       { preserveState: true, preserveScroll: true }
                     );
                   }}
@@ -398,7 +521,7 @@ export default function Dashboard() {
       </header>
 
       <main className="space-y-4 p-5">
-        <section className="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
+        <section className={`grid gap-3 grid-cols-2 sm:grid-cols-3 ${isAliqa ? "lg:grid-cols-3 xl:grid-cols-6" : "lg:grid-cols-4 xl:grid-cols-7"}`}>
           {cards.map((c, i) => {
             const isSelected = c.colorKey !== null && colorFilter === c.colorKey;
             return (
@@ -410,11 +533,11 @@ export default function Dashboard() {
                 onClick={() => {
                   if (c.colorKey === null) {
                     setColorFilter(null);
-                    router.get("/shipments", { seller, month, search: query }, { preserveState: true, preserveScroll: true });
+                    router.get("/shipments", { seller, month, search: query, sort, direction }, { preserveState: true, preserveScroll: true });
                   } else if (c.colorKey) {
                     const nextColor = colorFilter === c.colorKey ? null : c.colorKey;
                     setColorFilter(nextColor);
-                    router.get("/shipments", { seller, month, color: nextColor, search: query }, { preserveState: true, preserveScroll: true });
+                    router.get("/shipments", { seller, month, color: nextColor, search: query, sort, direction }, { preserveState: true, preserveScroll: true });
                   }
                 }}
                 style={{ backgroundColor: c.bg, color: c.fg }}
@@ -445,7 +568,7 @@ export default function Dashboard() {
             <span className="mr-1 text-[11px] font-bold tracking-wide uppercase text-muted-foreground">
               Filter Status CS
             </span>
-            {FU_ORDER.map((k) => {
+            {currentFuOrder.map((k) => {
               const active = colorFilter === k;
               return (
                 <button
@@ -455,11 +578,11 @@ export default function Dashboard() {
                     setColorFilter(nextColor);
                     router.get(
                       "/shipments",
-                      { seller, month, color: nextColor, search: query },
+                      { seller, month, color: nextColor, search: query, sort, direction },
                       { preserveState: true, preserveScroll: true }
                     );
                   }}
-                  style={{ backgroundColor: FU_META[k].bg, color: FU_META[k].fg }}
+                  style={{ backgroundColor: currentFuMeta[k].bg, color: currentFuMeta[k].fg }}
                   className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] font-extrabold transition-all transform cursor-pointer ${
                     active
                       ? "ring-2 ring-[#1E40AF] ring-offset-1 border-[#1E40AF] shadow-md scale-105"
@@ -467,7 +590,7 @@ export default function Dashboard() {
                   }`}
                 >
                   {active && <Check className="h-3 w-3 text-current stroke-[3]" />}
-                  {FU_META[k].label}
+                  {currentFuMeta[k].label}
                 </button>
               );
             })}
@@ -477,7 +600,7 @@ export default function Dashboard() {
                   setColorFilter(null);
                   router.get(
                     "/shipments",
-                    { seller, month, search: query },
+                    { seller, month, search: query, sort, direction },
                     { preserveState: true, preserveScroll: true }
                   );
                 }}
@@ -498,7 +621,7 @@ export default function Dashboard() {
           </div>
         </section>
 
-        <section className="grid gap-3 rounded-xl border border-border bg-card p-3 md:grid-cols-[1fr_260px]">
+        <section className="grid gap-3 rounded-xl border border-border bg-card p-3 md:grid-cols-[1fr_200px_180px]">
           <div className="relative">
             <Search className="absolute top-2.5 left-3 h-4 w-4 text-muted-foreground" />
             <Textarea
@@ -509,10 +632,10 @@ export default function Dashboard() {
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
-                  router.get("/shipments", { seller, month, color: colorFilter, search: query }, { preserveState: true, preserveScroll: true });
+                  router.get("/shipments", { seller, month, color: colorFilter, search: query, sort, direction }, { preserveState: true, preserveScroll: true });
                 }
               }}
-              placeholder="Cari multi-resi — tempel beberapa nomor resi dipisah koma atau baris baru, lalu tekan Enter..."
+              placeholder="Cari multi-resi, penerima, HP, alamat... (tekan Enter)"
               className="min-h-[42px] resize-y pl-9 text-xs"
               rows={1}
             />
@@ -522,12 +645,37 @@ export default function Dashboard() {
             onChange={(e) => setSeller(e.target.value || "Semua Seller")}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
-                router.get("/shipments", { seller, month, color: colorFilter, search: query }, { preserveState: true, preserveScroll: true });
+                router.get("/shipments", { seller, month, color: colorFilter, search: query, sort, direction }, { preserveState: true, preserveScroll: true });
               }
             }}
             placeholder="Filter nama seller..."
-            className="text-xs"
+            className="text-xs h-[42px]"
           />
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              if (sort === "sheet") {
+                handleSortChange("nama");
+              } else {
+                handleSortChange("sheet");
+              }
+            }}
+            className="h-[42px] text-xs font-bold flex items-center justify-between border-slate-300 bg-slate-50 hover:bg-slate-100 text-slate-800 cursor-pointer shadow-sm"
+            title="Klik untuk mengubah urutan data (Default: Sesuai Spreadsheet)"
+          >
+            <span className="truncate">
+              {sort === "sheet"
+                ? "Urutan: Sesuai Spreadsheet"
+                : sort === "nama"
+                ? direction === "asc"
+                  ? "Nama (A → Z)"
+                  : "Nama (Z → A)"
+                : "Urutan: " + sort}
+            </span>
+            <ArrowUpDown className="h-3.5 w-3.5 ml-1 text-blue-600 shrink-0" />
+          </Button>
         </section>
 
         <AnimatePresence>
@@ -545,17 +693,29 @@ export default function Dashboard() {
               <Button size="sm" variant="secondary" className="cursor-pointer bg-yellow-100 text-yellow-800 hover:bg-yellow-200 border border-yellow-300 font-bold text-xs" onClick={() => bulk("KUNING")}>
                 Mark as Sudah FU
               </Button>
-              <Button size="sm" variant="secondary" className="cursor-pointer bg-emerald-100 text-emerald-800 hover:bg-emerald-200 border border-emerald-300 font-bold text-xs" onClick={() => bulk("HIJAU")}>
-                Mark as FU 2 Kali
-              </Button>
+              {!isAliqa && (
+                <Button size="sm" variant="secondary" className="cursor-pointer bg-emerald-100 text-emerald-800 hover:bg-emerald-200 border border-emerald-300 font-bold text-xs" onClick={() => bulk("HIJAU")}>
+                  Mark as FU 2 Kali
+                </Button>
+              )}
               <Button size="sm" variant="secondary" className="cursor-pointer bg-[#1E40AF] text-white hover:bg-blue-900 border border-blue-900 font-bold text-xs" onClick={() => bulk("BIRU_TUA")}>
-                Mark as FU POS
+                {isAliqa ? "Mark as ON FU POS" : "Mark as FU POS"}
               </Button>
               <Button size="sm" variant="secondary" className="cursor-pointer bg-orange-100 text-orange-800 hover:bg-orange-200 border border-orange-300 font-bold text-xs" onClick={() => bulk("ORANGE")}>
                 Mark as Retur
               </Button>
               <Button size="sm" variant="secondary" className="cursor-pointer bg-white text-slate-700 hover:bg-slate-100 border border-slate-300 font-bold text-xs" onClick={() => bulk("PUTIH")}>
                 Mark as Belum FU
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={isTrackingSelected}
+                className="cursor-pointer bg-indigo-600 text-white hover:bg-indigo-700 border border-indigo-700 font-bold text-xs gap-1"
+                onClick={trackSelected}
+              >
+                {isTrackingSelected ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Bot className="h-3.5 w-3.5" />}
+                Lacak NIPOS Terpilih
               </Button>
               <Button size="sm" variant="outline" className="cursor-pointer font-bold text-xs ml-auto" onClick={() => setExportOpen(true)}>
                 Export Selected
@@ -591,6 +751,10 @@ export default function Dashboard() {
             setSelectedShipmentForWa(shipment);
             setWaModalOpen(true);
           }}
+          seller={seller}
+          onSort={handleSortChange}
+          sortField={sort}
+          sortDirection={direction}
         />
 
         <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-3 py-2">
@@ -608,7 +772,7 @@ export default function Dashboard() {
               className="h-8 w-8 cursor-pointer"
               disabled={currentPage <= 1}
               onClick={() => {
-                router.get("/shipments", { seller, month, color: colorFilter, search: query, page: currentPage - 1 }, { preserveState: true, preserveScroll: true });
+                router.get("/shipments", { seller, month, color: colorFilter, search: query, sort, direction, page: currentPage - 1 }, { preserveState: true, preserveScroll: true });
               }}
             >
               <ChevronLeft className="h-4 w-4" />
@@ -622,7 +786,7 @@ export default function Dashboard() {
               className="h-8 w-8 cursor-pointer"
               disabled={currentPage >= lastPage}
               onClick={() => {
-                router.get("/shipments", { seller, month, color: colorFilter, search: query, page: currentPage + 1 }, { preserveState: true, preserveScroll: true });
+                router.get("/shipments", { seller, month, color: colorFilter, search: query, sort, direction, page: currentPage + 1 }, { preserveState: true, preserveScroll: true });
               }}
             >
               <ChevronRight className="h-4 w-4" />

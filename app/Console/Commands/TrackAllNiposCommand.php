@@ -88,15 +88,15 @@ class TrackAllNiposCommand extends Command
                     $resi = $shipment->no_resi;
                     if (isset($results[$resi])) {
                         $res = $results[$resi];
-                        $statusPos = $res['status_pos'] ?? ($res['status'] ?? 'DELIVERED');
-                        $keterangan = $res['keterangan'] ?? ($res['penerima'] ?? 'DITERIMA YANG BERSANGKUTAN');
+                        $statusPos = $res['status_pos'] ?? ($res['status'] ?? 'IN PROSES');
+                        $keterangan = $res['keterangan'] ?? ($res['penerima'] ?? 'PROSES PENGIRIMAN POS (TRANSIT)');
 
                         $shipment->status_pos = $statusPos;
                         $shipment->keterangan = $keterangan;
 
-                        $category = $botService->categorizeStatus($shipment->status_pos, $shipment->keterangan);
+                        $category = $res['status_kategori'] ?? $botService->categorizeStatus($shipment->status_pos, $shipment->keterangan);
                         $shipment->status_kategori = $category;
-                        $shipment->color_code = $botService->determineColorCode($category);
+                        $shipment->color_code = $res['color_code'] ?? $botService->determineColorCode($category);
 
                         $shipment->sla_days = $res['sla_days'] ?? ($res['sla'] ?? ($shipment->sla_days ?: 2));
                         $shipment->last_tracked_at = $now;

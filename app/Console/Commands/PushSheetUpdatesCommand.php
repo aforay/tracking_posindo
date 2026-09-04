@@ -138,9 +138,9 @@ class PushSheetUpdatesCommand extends Command
         $bar = $this->output->createProgressBar($totalCount);
         $bar->start();
 
-        // Process in DB chunks to preserve memory
-        $query->orderBy('last_tracked_at', 'desc')
-              ->chunk($chunkSize, function ($shipments) use ($syncService, $monthSheetMapZaherba, $monthSheetMapAliqa, $sellerOpt, $targetMonth, &$totalPushed, &$successBatches, &$totalRowsUpdatedInGas, $bar) {
+        // Process in DB chunks to preserve memory using chunkById and minimal selected columns
+        $query->select(['id', 'nama_seller', 'no_resi', 'tanggal_kirim', 'status_pos', 'keterangan', 'status_kategori', 'sla_days', 'last_tracked_at'])
+              ->chunkById($chunkSize, function ($shipments) use ($syncService, $monthSheetMapZaherba, $monthSheetMapAliqa, $sellerOpt, $targetMonth, &$totalPushed, &$successBatches, &$totalRowsUpdatedInGas, $bar) {
                   $batchPayload = [];
                   foreach ($shipments as $shipment) {
                       $isDelivered = $shipment->status_kategori === 'SUKSES';

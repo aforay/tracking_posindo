@@ -48,8 +48,29 @@ class PostOffice extends Model
         $this->attributes['phone_wa'] = self::formatWaPhone($value);
     }
 
+    protected static ?\Illuminate\Database\Eloquent\Collection $cachedOffices = null;
+
     /**
-     * Find best matching PostOffice given destination name or customer address text
+     * Get or load cached post offices collection
+     */
+    public static function getCachedOffices(): \Illuminate\Database\Eloquent\Collection
+    {
+        if (self::$cachedOffices === null) {
+            self::$cachedOffices = self::all();
+        }
+        return self::$cachedOffices;
+    }
+
+    /**
+     * Clear post offices in-memory cache
+     */
+    public static function clearCache(): void
+    {
+        self::$cachedOffices = null;
+    }
+
+    /**
+     * Find best matching PostOffice given destination name or customer address text (Fast in-memory matching)
      */
     public static function matchByDestinationOrAddress(?string $destination, ?string $address = null): ?self
     {
@@ -59,11 +80,18 @@ class PostOffice extends Model
         }
 
         $upper = strtoupper($target);
+        $offices = self::getCachedOffices();
 
-        // 1. Exact or partial Match on Post Office Name / Code
+        // 1. Exact or partial Match on Post Office Name / Code from cached collection
         if (!empty($destination)) {
             $destClean = strtoupper(trim($destination));
-            $byName = self::where('name', 'LIKE', "%{$destClean}%")->first();
+            $byName = $offices->first(function ($item) use ($destClean) {
+                return !empty($item->name) && (
+                    strcasecmp($item->name, $destClean) === 0 ||
+                    str_contains(strtoupper($item->name), $destClean) ||
+                    str_contains($destClean, strtoupper($item->name))
+                );
+            });
             if ($byName) {
                 return $byName;
             }
@@ -72,14 +100,16 @@ class PostOffice extends Model
         // 2. Extract 5-digit postal code
         if (preg_match('/\b\d{5}\b/', $target, $m)) {
             $code = $m[0];
-            $byCode = self::where('code', $code)->orWhere('name', 'LIKE', "%{$code}%")->first();
+            $byCode = $offices->first(function ($item) use ($code) {
+                return (!empty($item->code) && $item->code === $code) ||
+                       (!empty($item->name) && str_contains(strtoupper($item->name), $code));
+            });
             if ($byCode) {
                 return $byCode;
             }
         }
 
-        // 3. Search by city name keywords from database
-        $offices = self::all();
+        // 3. Search by city name keywords from in-memory collection
         foreach ($offices as $office) {
             if (!empty($office->city) && str_contains($upper, strtoupper($office->city))) {
                 return $office;
@@ -89,6 +119,61 @@ class PostOffice extends Model
                 $cleanOfficeName = trim(preg_replace('/\b\d{5}\b/', '', $cleanOfficeName));
                 if (!empty($cleanOfficeName) && mb_strlen($cleanOfficeName) >= 4 && str_contains($upper, strtoupper($cleanOfficeName))) {
                     return $office;
+                }
+            }
+        }
+
+        // 4. Check Regional Alias Dictionary
+        $aliases = [
+            'LABUSEL' => 'Rantauprapat',
+            'LABURA' => 'Rantauprapat',
+            'LABUHANBATU' => 'Rantauprapat',
+            'KOTAPINANG' => 'Rantauprapat',
+            'BIREUN' => 'Bireuen',
+            'GANDAPURA' => 'Bireuen',
+            'TAKENGON' => 'Takengon',
+            'BENER MERIAH' => 'Takengon',
+            'PADALARANG' => 'Cimahi',
+            'LEMBANG' => 'Cimahi',
+            'TOAYA' => 'Palu',
+            'DONGGALA' => 'Palu',
+            'SIGI' => 'Palu',
+            'SINGKOYO' => 'Luwuk',
+            'BANGGAI' => 'Luwuk',
+            'SUMENEP' => 'Sumenep',
+            'BATUAN' => 'Sumenep',
+            'PAMEKASAN' => 'Pamekasan',
+            'SAMPANG' => 'Pamekasan',
+            'BANGKALAN' => 'Pamekasan',
+            'BANJARBARU' => 'Banjarbaru',
+            'SUNGAI ULIN' => 'Banjarbaru',
+            'MARTAPURA' => 'Banjarbaru',
+            'BARITO UTARA' => 'Muara Teweh',
+            'MUARA TEWEH' => 'Muara Teweh',
+            'INDRAGIRI HILIR' => 'Tembilahan',
+            'INHIL' => 'Tembilahan',
+            'BAGAN JAYA' => 'Tembilahan',
+            'TEMBILAHAN' => 'Tembilahan',
+            'BINTAN' => 'Tanjungpinang',
+            'PENAGA' => 'Tanjungpinang',
+            'TANGSEL' => 'Tangerang Selatan',
+            'CIPUTAT' => 'Tangerang Selatan',
+            'PAMULANG' => 'Tangerang Selatan',
+            'BSD' => 'Tangerang Selatan',
+            'SERPONG' => 'Tangerang Selatan',
+            'BINTARO' => 'Tangerang Selatan',
+            'CIKARANG' => 'Bekasi',
+            'TAMBUN' => 'Bekasi',
+            'CIBINONG' => 'Bogor',
+        ];
+
+        foreach ($aliases as $keyword => $targetCity) {
+            if (str_contains($upper, $keyword)) {
+                $matchedByAlias = $offices->first(function ($item) use ($targetCity) {
+                    return !empty($item->city) && strcasecmp($item->city, $targetCity) === 0;
+                });
+                if ($matchedByAlias) {
+                    return $matchedByAlias;
                 }
             }
         }

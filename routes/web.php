@@ -14,6 +14,7 @@ Route::post('/settings/google-sheets', [DashboardController::class, 'updateGoogl
 Route::post('/shipments/sync-google-sheets', [DashboardController::class, 'syncGoogleSheets'])->name('shipments.sync_google_sheets');
 Route::post('/shipments/sync-filter', [DashboardController::class, 'syncFilter'])->name('shipments.sync_filter');
 Route::get('/sync/progress', [DashboardController::class, 'syncProgress'])->name('sync.progress');
+Route::get('/sync/schedule-status', [DashboardController::class, 'syncScheduleStatus'])->name('sync.schedule_status');
 Route::post('/sync/discover', [DashboardController::class, 'syncDiscover'])->name('sync.discover');
 Route::post('/sync/sheet', [DashboardController::class, 'syncSingleSheet'])->name('sync.sheet');
 Route::post('/shipments/push-updates', [DashboardController::class, 'pushUpdatesToSheets'])->name('shipments.push_updates');
@@ -30,6 +31,7 @@ Route::post('/shipments/update-status', [DashboardController::class, 'updateStat
 Route::post('/shipments/bulk-action', [DashboardController::class, 'bulkAction'])->name('shipments.bulk_action');
 Route::post('/shipments/{id}/color', [DashboardController::class, 'updateColor'])->name('shipments.color');
 Route::post('/shipments/{id}/update-color', [DashboardController::class, 'updateColor'])->name('shipments.update_color');
+Route::post('/shipments/{id}/track', [TrackingController::class, 'trackSingle'])->name('shipments.track_single');
 
 use App\Http\Controllers\PostOfficeController;
 

@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/sheet";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
-import { FU_META, formatDate, nf, type Shipment } from "@/lib/posindo";
+import { FU_META, getSellerFuMeta, formatDate, nf, type Shipment } from "@/lib/posindo";
 
 export function ExportPanel({
   open,
@@ -26,6 +26,7 @@ export function ExportPanel({
   rows: Shipment[];
   seller: string;
 }) {
+  const fuMeta = getSellerFuMeta(seller);
   const [scope, setScope] = useState<"all" | "fu">("all");
 
   const safeRows = useMemo(() => (Array.isArray(rows) ? rows : []), [rows]);
@@ -78,7 +79,7 @@ export function ExportPanel({
         r.keterangan,
         r.nipos,
         r.sla,
-        FU_META[r.fu]?.label || r.fu,
+        fuMeta[r.fu]?.label || r.fu,
         r.note ?? "",
       ]),
     ];
@@ -97,8 +98,8 @@ export function ExportPanel({
       { wch: 22 },
     ];
     data.forEach((r, i) => {
-      const bg = (FU_META[r.fu]?.bg || "#FFFFFF").replace("#", "");
-      const fg = (FU_META[r.fu]?.fg || "#000000").replace("#", "");
+      const bg = (fuMeta[r.fu]?.bg || "#FFFFFF").replace("#", "");
+      const fg = (fuMeta[r.fu]?.fg || "#000000").replace("#", "");
       for (let c = 0; c < 11; c++) {
         const ref = XLSX.utils.encode_cell({ r: i + 4, c });
         const cell = ws[ref];
@@ -208,7 +209,7 @@ export function ExportPanel({
                   <tr
                     key={r.id}
                     style={{
-                      backgroundColor: FU_META[r.fu]?.bg || "#FFFFFF",
+                      backgroundColor: fuMeta[r.fu]?.bg || "#FFFFFF",
                       color: r.fu === "BIRU_TUA" ? "#FFFFFF" : "#111827",
                     }}
                     className="[&>td]:border [&>td]:border-black/10 [&>td]:px-2 [&>td]:py-1"
@@ -220,7 +221,7 @@ export function ExportPanel({
                     <td>{r.penerima}</td>
                     <td>{r.nipos}</td>
                     <td>{r.sla}</td>
-                    <td className="font-semibold">{FU_META[r.fu]?.label || r.fu}</td>
+                    <td className="font-semibold">{fuMeta[r.fu]?.label || r.fu}</td>
                   </tr>
                 ))}
               </tbody>

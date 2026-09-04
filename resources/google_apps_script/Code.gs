@@ -188,6 +188,7 @@ function doPost(e) {
       sheets.forEach(function(sheet) {
         const dataRange = sheet.getDataRange();
         const values = dataRange.getValues();
+        const formulas = dataRange.getFormulas();
         if (values.length < 2) return;
 
         const sheetNameUpper = sheet.getName().toUpperCase();
@@ -198,7 +199,7 @@ function doPost(e) {
         let keteranganCol = -1;
         let slaCol = -1;
 
-        // Scan first 3 rows to locate header columns
+        // Scan first 3 rows to locate header columns dynamically
         for (let hRow = 0; hRow < Math.min(3, values.length); hRow++) {
           const headers = values[hRow].map(function(h) {
             return String(h).trim().toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -252,23 +253,32 @@ function doPost(e) {
               sheet.getRange(rowNumber, 3, 1, 8).setBackground(hexColor);
             }
 
-            // 2. Update Sel Kolom 'Status NIPOS' (Aliqa: Q / Zaherba: L)
+            // 2. Update Sel Kolom 'Status NIPOS' (Lindungi Formula '=' jika ada)
             const statusPos = item.status_pos || item.status_nipos || item.status;
             if (trackingPosCol >= 0 && statusPos) {
-              sheet.getRange(rowNumber, trackingPosCol + 1).setValue(String(statusPos));
+              const currentFormula = formulas[r] ? formulas[r][trackingPosCol] : '';
+              if (!currentFormula || !currentFormula.startsWith('=')) {
+                sheet.getRange(rowNumber, trackingPosCol + 1).setValue(String(statusPos));
+              }
             }
 
-            // 3. Update Sel Kolom 'Keterangan' (Aliqa: P / Zaherba: K)
+            // 3. Update Sel Kolom 'Keterangan' (Lindungi Formula '=' jika ada)
             const keterangan = item.keterangan || item.note;
             if (keteranganCol >= 0 && keterangan) {
-              sheet.getRange(rowNumber, keteranganCol + 1).setValue(String(keterangan));
+              const currentFormula = formulas[r] ? formulas[r][keteranganCol] : '';
+              if (!currentFormula || !currentFormula.startsWith('=')) {
+                sheet.getRange(rowNumber, keteranganCol + 1).setValue(String(keterangan));
+              }
             }
 
-            // 4. Update Sel Kolom 'SLA' (Aliqa: R / Zaherba: M)
+            // 4. Update Sel Kolom 'SLA' (Lindungi Formula '=' jika ada)
             const slaVal = item.sla_days || item.sla;
             if (slaCol >= 0 && slaVal !== undefined && slaVal !== null) {
-              const formattedSla = (typeof slaVal === 'number' || !isNaN(slaVal)) ? (Math.round(Number(slaVal))) : String(slaVal);
-              sheet.getRange(rowNumber, slaCol + 1).setValue(formattedSla);
+              const currentFormula = formulas[r] ? formulas[r][slaCol] : '';
+              if (!currentFormula || !currentFormula.startsWith('=')) {
+                const formattedSla = (typeof slaVal === 'number' || !isNaN(slaVal)) ? (Math.round(Number(slaVal))) : String(slaVal);
+                sheet.getRange(rowNumber, slaCol + 1).setValue(formattedSla);
+              }
             }
 
             updatedCount++;

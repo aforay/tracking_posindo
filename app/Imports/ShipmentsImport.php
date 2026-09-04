@@ -288,9 +288,11 @@ class ShipmentsImport
                 $foundCount++;
             }
             // Penerima Column
-            elseif (in_array($clean, ['namadepan', 'penerima', 'namapenerima', 'namakonsumen', 'konsumen', 'penerimabarang', 'namatujuan'])) {
-                $map['penerima'] = $colIdx;
-                $foundCount++;
+            elseif (in_array($clean, ['nama', 'namadepan', 'namalengkap', 'penerima', 'namapenerima', 'namakonsumen', 'konsumen', 'pembeli', 'namapembeli', 'penerimabarang', 'namatujuan'])) {
+                if (!isset($map['penerima'])) {
+                    $map['penerima'] = $colIdx;
+                    $foundCount++;
+                }
             }
             // No HP / Telepon Column
             elseif (in_array($clean, ['teleponalamat', 'telepon', 'nohp', 'hp', 'notelpon', 'phone', 'contact', 'nohppenerima'])) {
@@ -315,6 +317,15 @@ class ShipmentsImport
             // SLA Days Column
             elseif (in_array($clean, ['sla', 'slamasatahan', 'sladays', 'slaindays', 'slam'])) {
                 $map['sla_days'] = $colIdx;
+                $foundCount++;
+            }
+            // Status FU / Warna / Follow-Up Column
+            elseif (in_array($clean, [
+                'fu', 'statusfu', 'followup', 'statusfollowup', 'warna', 'color',
+                'colorcode', 'warnafu', 'sudahfu', 'fucs', 'statuscs', 'fustat',
+                'sudahdifu', 'fu1', 'fu2', 'fupos', 'follow', 'statusfollow',
+            ])) {
+                $map['status_fu'] = $colIdx;
                 $foundCount++;
             }
         }
@@ -420,10 +431,37 @@ class ShipmentsImport
             }
         }
 
-        // 3. Extract Penerima (Aliqa: Kolom D / Index 3)
-        $penerimaRaw = isset($headerMap['penerima']) ? ($rowArray[$headerMap['penerima']] ?? null) : ($rowArray['nama_penerima'] ?? $rowArray['penerima'] ?? $rowArray['nama_konsumen'] ?? ($isAliqaSheet ? ($rowArray[3] ?? null) : ($rowArray[2] ?? ($rowArray[3] ?? null))));
+        // 3. Extract Penerima (Aliqa Jan-Mei: Kolom B / Index 1 "Nama"; Aliqa Jun-Agt: Kolom D / Index 3 "Nama Depan")
+        $penerimaRaw = null;
+        if (isset($headerMap['penerima']) && isset($rowArray[$headerMap['penerima']])) {
+            $penerimaRaw = $rowArray[$headerMap['penerima']];
+        } elseif (!empty($rowArray['nama_penerima'])) {
+            $penerimaRaw = $rowArray['nama_penerima'];
+        } elseif (!empty($rowArray['penerima'])) {
+            $penerimaRaw = $rowArray['penerima'];
+        } elseif (!empty($rowArray['nama'])) {
+            $penerimaRaw = $rowArray['nama'];
+        } elseif (!empty($rowArray['namadepan'])) {
+            $penerimaRaw = $rowArray['namadepan'];
+        }
+
         $penerima = trim((string)($penerimaRaw ?: ''));
-        if (in_array(strtoupper($penerima), ['NAMA KONSUMEN', 'PENERIMA', 'NAMA PENERIMA', 'PENERIMA BARANG', 'NAMA DEPAN'])) {
+        // Cek jika penerima masih kosong atau tidak sengaja berisi nomor resi (dimulai BAC... atau P26...)
+        $isResiValue = !empty($penerima) && preg_match('/^(BAC\d|P26\d|P\d{7})/i', $penerima);
+        if (empty($penerima) || $isResiValue) {
+            $candidates = $isAliqaSheet ? [1, 3, 2] : [2, 1, 3];
+            foreach ($candidates as $cIdx) {
+                if (isset($rowArray[$cIdx])) {
+                    $candStr = trim((string)$rowArray[$cIdx]);
+                    if (!empty($candStr) && !preg_match('/^(BAC\d|P26\d|P\d{7}|\d{10,})/i', $candStr) && !in_array(strtoupper($candStr), ['NAMA', 'RESI', 'INVOICE', '-', 'NAMA DEPAN'])) {
+                        $penerima = $candStr;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (in_array(strtoupper($penerima), ['NAMA KONSUMEN', 'PENERIMA', 'NAMA PENERIMA', 'PENERIMA BARANG', 'NAMA DEPAN', 'NAMA'])) {
             return null; // Skip header row if caught
         }
 
@@ -435,9 +473,9 @@ class ShipmentsImport
         $alamatRaw = isset($headerMap['alamat']) ? ($rowArray[$headerMap['alamat']] ?? null) : ($rowArray['alamat'] ?? ($isAliqaSheet ? ($rowArray[13] ?? null) : ($rowArray[5] ?? ($rowArray[3] ?? null))));
         $alamat = trim((string)($alamatRaw ?: ''));
 
-        // 6. Extract Tanggal Kirim (Header Map -> Index 1 / Index 0 -> Sheet Name Fallback)
+        // 6. Extract Tanggal Kirim (Header Map -> Resi Barcode Pattern -> Sheet Name Fallback)
         $tanggalRaw = isset($headerMap['tanggal_kirim']) ? ($rowArray[$headerMap['tanggal_kirim']] ?? null) : ($rowArray['tanggal_kirim'] ?? $rowArray['tanggal'] ?? ($rowArray[1] ?? ($rowArray[0] ?? null)));
-        $tanggalKirim = $this->parseDateValue($tanggalRaw, $sheetName);
+        $tanggalKirim = $this->parseDateValue($tanggalRaw, $sheetName, $resi);
 
         // 7. Extract Status POS & Keterangan (Aliqa: Keterangan = Kolom P / Index 15, Status POS = Kolom Q / Index 16)
         $statusPosRaw = isset($headerMap['status_pos']) ? ($rowArray[$headerMap['status_pos']] ?? null) : ($rowArray['status_pos'] ?? $rowArray['tracking_pos'] ?? $rowArray['status'] ?? ($isAliqaSheet ? ($rowArray[16] ?? null) : ($rowArray[11] ?? null)));
@@ -456,40 +494,186 @@ class ShipmentsImport
         $slaRaw = isset($headerMap['sla_days']) ? ($rowArray[$headerMap['sla_days']] ?? null) : ($rowArray['sla_days'] ?? $rowArray['sla'] ?? ($isAliqaSheet ? ($rowArray[17] ?? null) : null));
         $slaDays = is_numeric($slaRaw) ? (int)$slaRaw : null;
 
-        // Categorize status with RETUR priority checked FIRST
+        // 9. Extract Status FU / Warna dari kolom sheet (jika ada)
+        $fuRaw = isset($headerMap['status_fu']) ? ($rowArray[$headerMap['status_fu']] ?? null) : ($rowArray['status_fu'] ?? $rowArray['fu'] ?? $rowArray['warna'] ?? null);
+        $fuRawStr = strtoupper(trim((string)($fuRaw ?: '')));
+
+        // Categorize status dengan RETUR priority dicek PERTAMA
         $botService = new \App\Services\TrackingBotService();
         $kategori = $botService->categorizeStatus($statusPos, $keterangan);
 
+        // Tentukan color_code dari kolom FU sheet (prioritas) atau dari status_pos/keterangan
+        $colorCode = $this->resolveFuColorCode($fuRawStr, $kategori, $botService);
+
         return [
-            'nama_seller' => $seller,
-            'no_resi' => $resi,
-            'nama_penerima' => $penerima ?: null,
-            'no_hp' => $noHp ?: null,
-            'alamat' => $alamat ?: null,
-            'tanggal_kirim' => $tanggalKirim,
-            'status_pos' => $statusPos ?: null,
-            'keterangan' => $keterangan ?: null,
+            'nama_seller'     => $seller,
+            'no_resi'         => $resi,
+            'nama_penerima'   => $penerima ?: null,
+            'no_hp'           => $noHp ?: null,
+            'alamat'          => $alamat ?: null,
+            'tanggal_kirim'   => $tanggalKirim,
+            'status_pos'      => $statusPos ?: null,
+            'keterangan'      => $keterangan ?: null,
             'status_kategori' => $kategori,
-            'sla_days' => $slaDays,
-            'created_at' => $now,
-            'updated_at' => $now,
+            'color_code'      => $colorCode,
+            'sla_days'        => $slaDays,
+            'created_at'      => $now,
+            'updated_at'      => $now,
         ];
     }
 
     /**
-     * Robust Date Parsing with Sheet Name Month Fallback
+     * Resolve color_code dari teks status FU di sheet atau dari kategori NIPPOS.
+     *
+     * Prioritas:
+     *  1. Jika kolom FU di sheet berisi teks yang dikenal → gunakan warna yang sesuai
+     *  2. Jika tidak ada kolom FU → derive dari kategori (SUKSES→BIRU, RETUR→ORANGE, dll)
+     *
+     * Mapping teks → color_code:
+     *  - BELUM FU / kosong / PROSES          → PUTIH
+     *  - FU SEKALI / SUDAH FU / FU 1 / FU1   → KUNING
+     *  - FU DUA KALI / FU 2 / FU2 / FU 2X   → HIJAU
+     *  - FU POS / ESKALASI / FUPOS           → BIRU_TUA
+     *  - DELIVERED / SUKSES / SELESAI        → BIRU
+     *  - RETUR / RETURN / GAGAL              → ORANGE
      */
-    protected function parseDateValue($val, ?string $sheetName = null): ?string
+    protected function resolveFuColorCode(string $fuRawStr, string $kategori, \App\Services\TrackingBotService $botService): string
     {
-        if (!empty($val) && !in_array(strtoupper((string)$val), ['TANGGAL', 'TGL', 'TGL KIRIM', 'TANGGAL KIRIM'])) {
+        // === PRIORITAS 1: Jika sheet punya kolom FU dengan teks yang dikenal ===
+        if (!empty($fuRawStr) && !in_array($fuRawStr, ['FU', 'STATUS FU', 'FOLLOW UP', 'WARNA', 'COLOR', 'STATUS', '-'])) {
+
+            // RETUR / RETURN / GAGAL → ORANGE
+            if (str_contains($fuRawStr, 'RETUR') || str_contains($fuRawStr, 'RETURN') || str_contains($fuRawStr, 'GAGAL') || str_contains($fuRawStr, 'ORANGE')) {
+                return 'ORANGE';
+            }
+            // DELIVERED / SUKSES / SELESAI / BIRU → BIRU
+            if (str_contains($fuRawStr, 'DELIVERED') || str_contains($fuRawStr, 'SUKSES') || str_contains($fuRawStr, 'SELESAI') || $fuRawStr === 'BIRU') {
+                return 'BIRU';
+            }
+            // FU POS / ESKALASI / FUPOS / BIRU_TUA → BIRU_TUA
+            if (str_contains($fuRawStr, 'FU POS') || str_contains($fuRawStr, 'FUPOS') || str_contains($fuRawStr, 'ESKALASI') || $fuRawStr === 'BIRU_TUA') {
+                return 'BIRU_TUA';
+            }
+            // FU DUA KALI / FU 2 / FU2 / FU 2X / HIJAU → HIJAU
+            if (
+                str_contains($fuRawStr, 'DUA') || str_contains($fuRawStr, '2 KALI') || str_contains($fuRawStr, '2X') ||
+                $fuRawStr === 'FU2' || $fuRawStr === 'FU 2' || $fuRawStr === 'HIJAU'
+            ) {
+                return 'HIJAU';
+            }
+            // FU SEKALI / SUDAH FU / FU 1 / FU1 / KUNING → KUNING
+            if (
+                str_contains($fuRawStr, 'SEKALI') || str_contains($fuRawStr, 'SUDAH FU') || str_contains($fuRawStr, 'SUDAH DI FU') ||
+                str_contains($fuRawStr, '1 KALI') || str_contains($fuRawStr, '1X') ||
+                $fuRawStr === 'FU1' || $fuRawStr === 'FU 1' || $fuRawStr === 'KUNING' || $fuRawStr === 'FU'
+            ) {
+                return 'KUNING';
+            }
+            // BELUM FU / PROSES / PUTIH → PUTIH
+            if (str_contains($fuRawStr, 'BELUM') || str_contains($fuRawStr, 'PROSES') || $fuRawStr === 'PUTIH') {
+                return 'PUTIH';
+            }
+        }
+
+        // === PRIORITAS 2: Derive dari kategori (SUKSES/RETUR dari status_pos/keterangan) ===
+        return $botService->determineColorCode($kategori);
+    }
+
+
+    /**
+     * Extract date from Pos Indonesia barcode / resi pattern
+     */
+    public static function extractDateFromResi(?string $resi): ?string
+    {
+        if (empty($resi)) {
+            return null;
+        }
+
+        $r = strtoupper(trim($resi));
+
+        // Pattern 1: P + YY + MM + DD (e.g. P2602030004347 -> 2026-02-03, P260115... -> 2026-01-15)
+        if (preg_match('/^P(\d{2})(\d{2})(\d{2})/i', $r, $m)) {
+            $year = '20' . $m[1];
+            $month = (int)$m[2];
+            $day = (int)$m[3];
+            if ($month >= 1 && $month <= 12 && $day >= 1 && $day <= 31) {
+                return sprintf('%s-%02d-%02d', $year, $month, $day);
+            }
+        }
+
+        // Pattern 2: BAC + DD + MM + YYYY (2024-2030) (e.g. BAC20022026 -> 2026-02-20)
+        if (preg_match('/^BAC(\d{2})(\d{2})(20[2-3]\d)/i', $r, $m)) {
+            $day = (int)$m[1];
+            $month = (int)$m[2];
+            $year = $m[3];
+            if ($month >= 1 && $month <= 12 && $day >= 1 && $day <= 31) {
+                return sprintf('%s-%02d-%02d', $year, $month, $day);
+            }
+        }
+
+        // Pattern 3: BAC + DD + MM + YY (e.g. BAC100426... -> 2026-04-10)
+        if (preg_match('/^BAC(\d{2})(\d{2})(2[4-9])/i', $r, $m)) {
+            $day = (int)$m[1];
+            $month = (int)$m[2];
+            $year = '20' . $m[3];
+            if ($month >= 1 && $month <= 12 && $day >= 1 && $day <= 31) {
+                return sprintf('%s-%02d-%02d', $year, $month, $day);
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Robust Date Parsing with Resi Barcode & Sheet Name Month Fallback
+     */
+    protected function parseDateValue($val, ?string $sheetName = null, ?string $resi = null): ?string
+    {
+        // 1. Direct date value parsing if provided
+        if (!empty($val) && !in_array(strtoupper(trim((string)$val)), ['TANGGAL', 'TGL', 'TGL KIRIM', 'TANGGAL KIRIM', 'TANGGAL_KIRIM', 'DATE', '-'])) {
             try {
                 if (is_numeric($val) && (float)$val > 10000) {
                     return ExcelDate::excelToDateTimeObject((float)$val)->format('Y-m-d');
                 }
 
                 $str = trim((string)$val);
-                if (preg_match('/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/', $str, $m)) {
-                    return sprintf('%04d-%02d-%02d', $m[3], $m[2], $m[1]);
+                // Format: YYYY-MM-DD or YYYY/MM/DD
+                if (preg_match('/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/', $str, $m)) {
+                    $yr = (int)$m[1];
+                    $mo = (int)$m[2];
+                    $dy = (int)$m[3];
+                    if ($mo >= 1 && $mo <= 12 && $dy >= 1 && $dy <= 31) {
+                        return sprintf('%04d-%02d-%02d', $yr, $mo, $dy);
+                    }
+                }
+
+                // Format: DD/MM/YYYY or DD-MM-YYYY or MM/DD/YYYY
+                if (preg_match('/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/', $str, $m)) {
+                    $d1 = (int)$m[1];
+                    $d2 = (int)$m[2];
+                    $yr = (int)$m[3];
+                    // If d1 > 12 -> d1 is Day, d2 is Month (DD/MM/YYYY)
+                    if ($d1 > 12 && $d2 <= 12) {
+                        return sprintf('%04d-%02d-%02d', $yr, $d2, $d1);
+                    }
+                    // If d2 > 12 -> d2 is Day, d1 is Month (MM/DD/YYYY)
+                    if ($d2 > 12 && $d1 <= 12) {
+                        return sprintf('%04d-%02d-%02d', $yr, $d1, $d2);
+                    }
+                    // Standard Indonesian default: DD/MM/YYYY ($d1 = Day, $d2 = Month)
+                    if ($d1 <= 31 && $d2 <= 12) {
+                        return sprintf('%04d-%02d-%02d', $yr, $d2, $d1);
+                    }
+                }
+
+                // Format: DD/MM/YY or DD-MM-YY
+                if (preg_match('/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2})$/', $str, $m)) {
+                    $d1 = (int)$m[1];
+                    $d2 = (int)$m[2];
+                    $yr = (int)('20' . $m[3]);
+                    if ($d1 <= 31 && $d2 <= 12) {
+                        return sprintf('%04d-%02d-%02d', $yr, $d2, $d1);
+                    }
                 }
 
                 // Translate Indonesian month names to English before Carbon parsing
@@ -498,42 +682,61 @@ class ShipmentsImport
                     'april' => 'April', 'mei' => 'May', 'juni' => 'June',
                     'juli' => 'July', 'agustus' => 'August', 'september' => 'September',
                     'oktober' => 'October', 'november' => 'November', 'desember' => 'December',
-                    'agt' => 'Aug', 'agu' => 'Aug', 'okt' => 'Oct', 'des' => 'Dec',
+                    'jan' => 'Jan', 'feb' => 'Feb', 'mar' => 'Mar', 'apr' => 'Apr',
+                    'jun' => 'Jun', 'jul' => 'Jul', 'agt' => 'Aug', 'agu' => 'Aug',
+                    'sep' => 'Sep', 'okt' => 'Oct', 'nov' => 'Nov', 'des' => 'Dec',
                 ];
                 $engStr = str_ireplace(array_keys($indoToEng), array_values($indoToEng), $str);
 
-                return Carbon::parse($engStr)->format('Y-m-d');
+                $parsedCarbon = Carbon::parse($engStr);
+                if ($parsedCarbon && $parsedCarbon->year >= 2020 && $parsedCarbon->year <= 2030) {
+                    return $parsedCarbon->format('Y-m-d');
+                }
             } catch (Throwable $e) {
                 // Fallback below
             }
         }
 
-        // Sheet Name Month Fallback (e.g. "JANUARI (ZAHERBA)", "Februari", "Maret", etc.)
+        // 2. Barcode Resi Date Extraction Fallback
+        if (!empty($resi)) {
+            $resiDate = self::extractDateFromResi($resi);
+            if ($resiDate) {
+                return $resiDate;
+            }
+        }
+
+        // 3. Sheet Name Month Fallback (e.g. "JANUARI (ZAHERBA)", "Februari", "Maret", "AGUSTUS", etc.)
         if (!empty($sheetName)) {
             $sheetUpper = strtoupper($sheetName);
             $monthsMap = [
-                'JAN' => '01', 'JANUARI' => '01',
-                'FEB' => '02', 'FEBRUARI' => '02',
-                'MAR' => '03', 'MARET' => '03',
-                'APR' => '04', 'APRIL' => '04',
+                'JANUARI' => '01', 'JAN' => '01',
+                'FEBRUARI' => '02', 'FEB' => '02',
+                'MARET' => '03', 'MAR' => '03',
+                'APRIL' => '04', 'APR' => '04',
                 'MEI' => '05', 'MAY' => '05',
-                'JUN' => '06', 'JUNI' => '06',
-                'JUL' => '07', 'JULI' => '07',
-                'AGT' => '08', 'AGUS' => '08', 'AGUSTUS' => '08',
-                'SEP' => '09', 'SEPTEMBER' => '09',
-                'OKT' => '10', 'OKTOBER' => '10',
-                'NOV' => '11', 'NOVEMBER' => '11',
-                'DES' => '12', 'DESEMBER' => '12',
+                'JUNI' => '06', 'JUN' => '06',
+                'JULI' => '07', 'JUL' => '07',
+                'AGUSTUS' => '08', 'AGUS' => '08', 'AGT' => '08', 'AUG' => '08',
+                'SEPTEMBER' => '09', 'SEP' => '09',
+                'OKTOBER' => '10', 'OKT' => '10', 'OCT' => '10',
+                'NOVEMBER' => '11', 'NOV' => '11',
+                'DESEMBER' => '12', 'DES' => '12', 'DEC' => '12',
             ];
+
+            // Extract Year if present in Sheet Name (e.g. "MARET 2026" -> 2026)
+            $sheetYear = date('Y');
+            if (preg_match('/(20\d{2})/', $sheetUpper, $ym)) {
+                $sheetYear = $ym[1];
+            }
 
             foreach ($monthsMap as $keyword => $mNum) {
                 if (str_contains($sheetUpper, $keyword)) {
-                    return date("Y-{$mNum}-15");
+                    return sprintf('%s-%s-01', $sheetYear, $mNum);
                 }
             }
         }
 
-        return null;
+        return date('Y-m-d');
     }
 
     /**
@@ -558,6 +761,7 @@ class ShipmentsImport
 
         // 1. Fetch existing database records to preserve established statuses & manual CS updates
         $existingMap = OutgoingShipment::whereIn('no_resi', $resisInBuffer)
+            ->select(['id', 'nama_seller', 'no_resi', 'nama_penerima', 'no_hp', 'alamat', 'tanggal_kirim', 'status_pos', 'keterangan', 'status_kategori', 'color_code', 'sla_days', 'fu_pos_date', 'noted', 'kantor_tujuan', 'last_location', 'kantor_pos_id', 'last_tracked_at'])
             ->get()
             ->keyBy('no_resi');
 
@@ -574,7 +778,13 @@ class ShipmentsImport
                 $penerima = !empty($data['nama_penerima']) ? $data['nama_penerima'] : $existing->nama_penerima;
                 $noHp = !empty($data['no_hp']) ? $data['no_hp'] : $existing->no_hp;
                 $alamat = !empty($data['alamat']) ? $data['alamat'] : $existing->alamat;
-                $tanggalKirim = !empty($data['tanggal_kirim']) ? $data['tanggal_kirim'] : ($existing->tanggal_kirim ? (is_string($existing->tanggal_kirim) ? substr($existing->tanggal_kirim, 0, 10) : $existing->tanggal_kirim->format('Y-m-d')) : date('Y-m-d'));
+                $resiBarcodeDate = self::extractDateFromResi($resiKey);
+                $tanggalKirim = !empty($data['tanggal_kirim']) 
+                    ? $data['tanggal_kirim'] 
+                    : ($resiBarcodeDate 
+                        ?: ($existing->tanggal_kirim 
+                            ? (is_string($existing->tanggal_kirim) ? substr($existing->tanggal_kirim, 0, 10) : $existing->tanggal_kirim->format('Y-m-d')) 
+                            : date('Y-m-d')));
 
                 $incomingStatus = $data['status_pos'] ?? '';
                 $incomingKet = $data['keterangan'] ?? '';
@@ -586,14 +796,14 @@ class ShipmentsImport
 
                 // Priority Check: RETUR -> SUKSES -> IN_PROCESS / FOLLOW_UP
                 if ($incomingCategory === 'RETUR' || $existingCategory === 'RETUR') {
-                    $statusPos = !empty($data['status_pos']) ? $data['status_pos'] : ($existing->status_pos ?: 'DELIVERED (RETURN DELIVERY)');
-                    $keterangan = !empty($data['keterangan']) ? $data['keterangan'] : ($existing->keterangan ?: 'DITERIMA PENGIRIM');
+                    $statusPos = ($incomingCategory === 'RETUR') ? ($data['status_pos'] ?: 'DELIVERED (RETURN DELIVERY)') : ($existing->status_pos ?: 'DELIVERED (RETURN DELIVERY)');
+                    $keterangan = ($incomingCategory === 'RETUR') ? ($data['keterangan'] ?: 'DITERIMA PENGIRIM') : ($existing->keterangan ?: 'DITERIMA PENGIRIM');
                     $statusKategori = 'RETUR';
                     $colorCode = 'ORANGE';
                     $slaDays = $data['sla_days'] ?: $existing->sla_days;
                 } elseif ($incomingCategory === 'SUKSES' || $existingCategory === 'SUKSES') {
-                    $statusPos = !empty($data['status_pos']) ? $data['status_pos'] : ($existing->status_pos ?: 'DELIVERED');
-                    $keterangan = !empty($data['keterangan']) ? $data['keterangan'] : ($existing->keterangan ?: 'DITERIMA YANG BERSANGKUTAN');
+                    $statusPos = ($incomingCategory === 'SUKSES') ? ($data['status_pos'] ?: 'DELIVERED') : ($existing->status_pos ?: 'DELIVERED');
+                    $keterangan = ($incomingCategory === 'SUKSES') ? ($data['keterangan'] ?: 'DITERIMA YANG BERSANGKUTAN') : ($existing->keterangan ?: 'DITERIMA YANG BERSANGKUTAN');
                     $statusKategori = 'SUKSES';
                     $colorCode = 'BIRU';
                     $slaDays = $data['sla_days'] ?: $existing->sla_days;
@@ -601,7 +811,25 @@ class ShipmentsImport
                     $statusPos = !empty($data['status_pos']) ? $data['status_pos'] : ($existing->status_pos ?: 'ON PROCESS');
                     $keterangan = !empty($data['keterangan']) ? $data['keterangan'] : ($existing->keterangan ?: 'PROSES PENGIRIMAN POS');
                     $statusKategori = $incomingCategory ?: 'IN_PROCESS';
-                    $colorCode = (!empty($existing->color_code) && $existing->color_code !== 'BIRU' && $existing->color_code !== 'ORANGE') ? $existing->color_code : $botService->determineColorCode($statusKategori);
+
+                    // === PRIORITAS COLOR_CODE ===
+                    // 1. Jika sheet punya kolom FU dengan nilai yang jelas (KUNING/HIJAU/BIRU_TUA/PUTIH)
+                    //    → gunakan langsung dari sheet (data fix sesuai yang diinput)
+                    // 2. Jika tidak ada kolom FU di sheet → pertahankan warna yang sudah ada di DB
+                    //    (misal CS sudah set KUNING via website, jangan di-reset ke PUTIH)
+                    $incomingColorFromSheet = $data['color_code'] ?? null;
+                    $sheetHasFuColor = !empty($incomingColorFromSheet) && in_array($incomingColorFromSheet, ['PUTIH', 'KUNING', 'HIJAU', 'BIRU_TUA', 'BIRU', 'ORANGE']);
+
+                    if ($sheetHasFuColor) {
+                        // Sheet punya data FU yang eksplisit → pakai dari sheet
+                        $colorCode = $incomingColorFromSheet;
+                    } elseif (!empty($existing->color_code) && $existing->color_code !== 'BIRU' && $existing->color_code !== 'ORANGE') {
+                        // Sheet tidak punya kolom FU → pertahankan warna DB yang ada
+                        $colorCode = $existing->color_code;
+                    } else {
+                        $colorCode = $botService->determineColorCode($statusKategori);
+                    }
+
                     $slaDays = $data['sla_days'] ?: $existing->sla_days;
                 }
 
@@ -628,27 +856,28 @@ class ShipmentsImport
                     'updated_at' => $now,
                 ];
             } else {
-                // NEW SHIPMENT: Use defaults
-                $cat = $botService->categorizeStatus($data['status_pos'] ?? '', $data['keterangan'] ?? '');
-                $color = $botService->determineColorCode($cat);
+                // NEW SHIPMENT: Gunakan data dari sheet langsung sebagai data fix awal
+                // color_code sudah di-resolve dari kolom FU sheet oleh parseRowArray()
+                $newResiDate = self::extractDateFromResi($resiKey);
+                $color = !empty($data['color_code']) ? $data['color_code'] : $botService->determineColorCode($data['status_kategori'] ?? 'IN_PROCESS');
 
                 $mergedBatch[] = [
-                    'nama_seller' => $data['nama_seller'] ?: $this->defaultSeller,
-                    'no_resi' => $resiKey,
-                    'nama_penerima' => $data['nama_penerima'],
-                    'no_hp' => $data['no_hp'],
-                    'alamat' => $data['alamat'],
-                    'tanggal_kirim' => $data['tanggal_kirim'] ?: date('Y-m-d'),
-                    'status_pos' => $data['status_pos'] ?: 'ON PROCESS',
-                    'keterangan' => $data['keterangan'] ?: 'PROSES PENGIRIMAN POS',
-                    'status_kategori' => $cat,
-                    'color_code' => $color,
-                    'fu_pos_date' => null,
-                    'noted' => null,
-                    'sla_days' => $data['sla_days'],
+                    'nama_seller'     => $data['nama_seller'] ?: $this->defaultSeller,
+                    'no_resi'         => $resiKey,
+                    'nama_penerima'   => $data['nama_penerima'],
+                    'no_hp'           => $data['no_hp'],
+                    'alamat'          => $data['alamat'],
+                    'tanggal_kirim'   => $data['tanggal_kirim'] ?: ($newResiDate ?: date('Y-m-d')),
+                    'status_pos'      => $data['status_pos'] ?: 'ON PROCESS',
+                    'keterangan'      => $data['keterangan'] ?: 'PROSES PENGIRIMAN POS',
+                    'status_kategori' => $data['status_kategori'] ?? 'IN_PROCESS',
+                    'color_code'      => $color,
+                    'fu_pos_date'     => null,
+                    'noted'           => null,
+                    'sla_days'        => $data['sla_days'],
                     'last_tracked_at' => null,
-                    'created_at' => $now,
-                    'updated_at' => $now,
+                    'created_at'      => $now,
+                    'updated_at'      => $now,
                 ];
             }
         }

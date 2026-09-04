@@ -35,6 +35,22 @@ class OutgoingShipment extends Model
     ];
 
     /**
+     * The "booted" method of the model.
+     * Enforce strict date alignment based on resi barcode pattern.
+     */
+    protected static function booted()
+    {
+        static::saving(function (OutgoingShipment $shipment) {
+            if (!empty($shipment->no_resi)) {
+                $resiDate = \App\Imports\ShipmentsImport::extractDateFromResi($shipment->no_resi);
+                if ($resiDate) {
+                    $shipment->tanggal_kirim = $resiDate;
+                }
+            }
+        });
+    }
+
+    /**
      * Scope query by seller name
      */
     public function scopeForSeller($query, ?string $seller)

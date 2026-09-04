@@ -21,6 +21,7 @@ export function TopBar({
   sellersList,
   onSeller,
   total,
+  month,
   trackingProgress,
   googleSheetUrl,
   googleSheetId,
@@ -31,6 +32,7 @@ export function TopBar({
   sellersList?: string[];
   onSeller: (s: string) => void;
   total: number;
+  month?: string | number;
   trackingProgress?: { percentage: number; tracked: number; total: number; is_running: boolean };
   googleSheetUrl?: string;
   googleSheetId?: string;
@@ -189,49 +191,60 @@ export function TopBar({
 
     try {
       const csrfToken = getCsrfToken();
-      let isDone = false;
+      const sessionStart = new Date().toISOString();
+      let isFinishedGlobally = false;
       let totalProcessed = 0;
       let initialTotalPending = 0;
 
-      while (!isDone) {
-        const res = await fetch("/bot/start-tracking", {
-          method: "POST",
-          headers: {
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-            "X-CSRF-TOKEN": csrfToken,
-            "X-XSRF-TOKEN": csrfToken,
-          },
-          body: JSON.stringify({ limit: 100 }),
-        });
+      while (!isFinishedGlobally) {
+        try {
+          const res = await fetch("/bot/start-tracking", {
+            method: "POST",
+            headers: {
+              "Accept": "application/json",
+              "Content-Type": "application/json",
+              "X-CSRF-TOKEN": csrfToken,
+              "X-XSRF-TOKEN": csrfToken,
+            },
+            body: JSON.stringify({
+              limit: 25,
+              seller: seller || normalizedSeller,
+              month: month && month !== "all" && month !== "ALL" ? month : undefined,
+              session_start: sessionStart,
+            }),
+          });
 
-        if (!res.ok) {
-          throw new Error(`Gagal melacak (HTTP ${res.status})`);
-        }
+          if (!res.ok) {
+            break;
+          }
 
-        const data = await res.json();
-        if (!data.success) {
-          throw new Error(data.message || "Terjadi kesalahan pada bot");
-        }
+          const data = await res.json();
+          if (!data.success) {
+            break;
+          }
 
-        const processedThisBatch = data.processed_count ?? 0;
-        const remainingPending = data.pending_count ?? 0;
-        totalProcessed += processedThisBatch;
+          const processedThisBatch = data.processed_count ?? 0;
+          const remainingPending = data.pending_count ?? 0;
+          totalProcessed += processedThisBatch;
 
-        if (initialTotalPending === 0) {
-          initialTotalPending = totalProcessed + remainingPending;
-        }
+          if (initialTotalPending === 0) {
+            initialTotalPending = totalProcessed + remainingPending;
+          }
 
-        const effectiveTotal = Math.max(initialTotalPending, totalProcessed);
-        const currentPct = effectiveTotal > 0
-          ? Math.round((totalProcessed / effectiveTotal) * 100)
-          : 100;
+          const effectiveTotal = Math.max(initialTotalPending, totalProcessed);
+          const currentPct = effectiveTotal > 0
+            ? Math.min(100, Math.round((totalProcessed / effectiveTotal) * 100))
+            : 100;
 
-        setBotInfo({ current: totalProcessed, total: effectiveTotal });
-        setProgress(currentPct);
+          setBotInfo({ current: totalProcessed, total: effectiveTotal });
+          setProgress(currentPct);
 
-        if (data.is_finished || remainingPending === 0 || processedThisBatch === 0 || processedThisBatch < 100) {
-          isDone = true;
+          if (data.is_finished || remainingPending === 0 || processedThisBatch === 0) {
+            isFinishedGlobally = true;
+            break;
+          }
+        } catch (e) {
+          break;
         }
       }
 
@@ -244,12 +257,15 @@ export function TopBar({
 
       toast.success("Pelacakan Bot NIPos Selesai!", {
         description: totalProcessed > 0
-          ? `${nf(totalProcessed)} data resi berhasil diperbarui dari NIPOS. Data tabel otomatis dimuat ulang.`
+          ? `${nf(totalProcessed)} data resi berhasil diperbarui dari NIPOS. Halaman otomatis dimuat ulang.`
           : "Semua data resi sudah berstatus SUKSES/RETUR.",
       });
 
-      // Instantly reload page data so table reflects the new status immediately
-      router.reload({ preserveScroll: true });
+      // Force refresh data in Inertia
+      router.visit(window.location.href, {
+        preserveScroll: true,
+        preserveState: false,
+      });
 
       setTimeout(() => {
         setBotState("idle");

@@ -19,16 +19,23 @@ class UpdateSheetStatusJob implements ShouldQueue
     protected string $statusColor;
     protected ?string $note;
     protected ?string $escalationDate;
+    protected ?string $fuTimestamp;
 
     /**
      * Create a new job instance.
      */
-    public function __construct(array $resiList, string $statusColor, ?string $note = null, ?string $escalationDate = null)
-    {
-        $this->resiList = array_values(array_unique(array_filter(array_map('trim', $resiList))));
-        $this->statusColor = strtoupper($statusColor);
-        $this->note = $note;
+    public function __construct(
+        array $resiList,
+        string $statusColor,
+        ?string $note = null,
+        ?string $escalationDate = null,
+        ?string $fuTimestamp = null
+    ) {
+        $this->resiList       = array_values(array_unique(array_filter(array_map('trim', $resiList))));
+        $this->statusColor    = strtoupper($statusColor);
+        $this->note           = $note;
         $this->escalationDate = $escalationDate;
+        $this->fuTimestamp    = $fuTimestamp ?? now()->toDateTimeString();
     }
 
     /**
@@ -40,7 +47,7 @@ class UpdateSheetStatusJob implements ShouldQueue
             return;
         }
 
-        $startMsg = "UpdateSheetStatusJob: Starting Google Sheets status update for " . count($this->resiList) . " resis → {$this->statusColor}";
+        $startMsg = "UpdateSheetStatusJob: Starting Google Sheets FU status update for " . count($this->resiList) . " resis → {$this->statusColor}";
         Log::info($startMsg);
 
         try {
@@ -48,10 +55,11 @@ class UpdateSheetStatusJob implements ShouldQueue
                 $this->resiList,
                 $this->statusColor,
                 $this->note,
-                $this->escalationDate
+                $this->escalationDate,
+                $this->fuTimestamp
             );
 
-            $doneMsg = "UpdateSheetStatusJob completed successfully for " . count($this->resiList) . " resis.";
+            $doneMsg = "UpdateSheetStatusJob completed for " . count($this->resiList) . " resis → {$this->statusColor}. Webhook: " . ($summary['webhook_success'] ? 'OK' : 'NO');
             Log::info($doneMsg, $summary);
         } catch (Throwable $e) {
             Log::error("UpdateSheetStatusJob error: " . $e->getMessage(), [

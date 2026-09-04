@@ -35,12 +35,14 @@ class DashboardController extends Controller
     {
         // Dummy data seeding removed - ensure stats return 0 when database is empty
 
-        $selectedSeller = $request->input('seller', 'ALL');
-        $selectedKategori = $request->input('kategori', 'ALL');
+        $selectedSeller = $request->input('seller', 'Semua Seller');
+        $selectedKategori = $request->input('kategori');
         $selectedMonth = $request->input('month', 'ALL');
-        $selectedYear = $request->input('year', null);
-        $selectedColor = $request->input('color', null);
-        $searchQuery = trim($request->input('search', ''));
+        $selectedYear = $request->input('year', date('Y'));
+        $selectedColor = $request->input('color');
+        $searchQuery = $request->input('search');
+        $sortBy = $request->input('sort', 'sheet');
+        $sortDirection = strtolower($request->input('direction', 'asc')) === 'desc' ? 'desc' : 'asc';
 
         // Auto-sync active filter to Google Spreadsheet via Webhook
         if ($request->has('seller') || $request->has('month') || $request->has('color') || $request->has('search')) {
@@ -255,8 +257,21 @@ class DashboardController extends Controller
         $allPostOffices = \App\Models\PostOffice::orderBy('province', 'asc')->orderBy('city', 'asc')->orderBy('name', 'asc')->get();
         $officeMapById = $allPostOffices->keyBy('id');
 
-        // 50 Items Per Page Pagination to prevent Memory Exhaustion (Ordered ascending from row 1 downwards)
-        $paginatedShipments = $query->orderBy('id', 'asc')->paginate(50)->withQueryString();
+        // Sorting: Default urut persis seperti baris di Spreadsheet dari atas ke bawah (id asc)
+        if ($sortBy === 'nama') {
+            $query->orderByRaw("CASE WHEN nama_penerima IS NULL OR nama_penerima = '' THEN 1 ELSE 0 END")
+                  ->orderBy('nama_penerima', $sortDirection)
+                  ->orderBy('id', 'asc');
+        } elseif ($sortBy === 'tanggal') {
+            $query->orderBy('tanggal_kirim', $sortDirection)->orderBy('id', 'asc');
+        } elseif ($sortBy === 'resi') {
+            $query->orderBy('no_resi', $sortDirection);
+        } else {
+            // Default: 'sheet' -> Urutan persis seperti susunan baris di Google Spreadsheet dari baris atas ke bawah
+            $query->orderBy('id', $sortDirection === 'desc' ? 'desc' : 'asc');
+        }
+
+        $paginatedShipments = $query->paginate(50)->withQueryString();
 
         $formattedShipmentsData = collect($paginatedShipments->items())->map(function ($s) use ($officeMapById) {
             $fu = 'PUTIH';
@@ -289,7 +304,14 @@ class DashboardController extends Controller
                 $office = \App\Models\PostOffice::matchByDestinationOrAddress($s->kantor_tujuan, $s->alamat);
             }
 
-            $kantorTujuan = $s->kantor_tujuan ?: ($office ? $office->name : null);
+            $kantorTujuan = null;
+            if (!empty($s->kantor_tujuan) && strtoupper(trim($s->kantor_tujuan)) !== 'KC TUJUAN') {
+                $kantorTujuan = strtoupper(trim($s->kantor_tujuan));
+            } elseif ($office && !empty($office->name)) {
+                $kantorTujuan = strtoupper(trim($office->name));
+            } else {
+                $kantorTujuan = self::deriveKantorPosFromAddress($s->alamat);
+            }
 
             return [
                 'id' => (string)$s->id,
@@ -306,7 +328,7 @@ class DashboardController extends Controller
                 'fu' => $fu,
                 'note' => $s->noted ?: $s->keterangan,
                 'escalationDate' => $s->fu_pos_date ?: ($s->last_tracked_at ? (is_string($s->last_tracked_at) ? $s->last_tracked_at : $s->last_tracked_at->format('Y-m-d H:i')) : null),
-                'kantorTujuan' => $kantorTujuan ?: 'KC TUJUAN',
+                'kantorTujuan' => $kantorTujuan,
                 'kantorPosPhone' => $office ? $office->phone_wa : '',
                 'kantorPosPic' => $office ? ($office->pic_name ?: $office->name) : '',
                 'lastLocation' => $s->last_location ?: $kantorTujuan,
@@ -386,6 +408,8 @@ class DashboardController extends Controller
                 'year' => $selectedYear,
                 'color' => $selectedColor,
                 'search' => $searchQuery,
+                'sort' => $sortBy,
+                'direction' => $sortDirection,
             ]
         ]);
     }
@@ -419,17 +443,50 @@ class DashboardController extends Controller
     public function syncProgress()
     {
         $progress = \Illuminate\Support\Facades\Cache::get('sync_progress', [
-            'is_syncing' => false,
-            'current_sheet' => '',
+            'is_syncing'          => false,
+            'current_sheet'       => '',
             'current_sheet_index' => 0,
-            'total_sheets' => 0,
-            'processed_rows' => 0,
-            'inserted_rows' => 0,
-            'percentage' => 0,
-            'message' => 'Idle',
+            'total_sheets'        => 0,
+            'processed_rows'      => 0,
+            'inserted_rows'       => 0,
+            'percentage'          => 0,
+            'message'             => 'Idle',
         ]);
 
         return response()->json($progress);
+    }
+
+    /**
+     * Status jadwal auto-sync (Sheet → DB dan DB → Sheet) untuk ditampilkan di frontend.
+     * Mengembalikan: waktu terakhir sync, interval, apakah sync aktif, dll.
+     */
+    public function syncScheduleStatus()
+    {
+        $lastSheetSync = \Illuminate\Support\Facades\Cache::get('last_sheet_sync_at');
+        $lastPushSync  = \Illuminate\Support\Facades\Cache::get('last_push_sync_at');
+        $lastNiposSync = \Illuminate\Support\Facades\Cache::get('last_nipos_sync_at');
+
+        $syncProgress = \Illuminate\Support\Facades\Cache::get('sync_progress', []);
+        $isSyncing    = $syncProgress['is_syncing'] ?? false;
+
+        // Hitung berapa menit lagi sync berikutnya (interval 5 menit dari terakhir sync)
+        $nextSync = null;
+        if ($lastSheetSync) {
+            $lastAt  = \Illuminate\Support\Carbon::parse($lastSheetSync);
+            $nextAt  = $lastAt->copy()->addMinutes(5);
+            $nextSync = $nextAt->isFuture() ? $nextAt->diffForHumans() : 'sebentar lagi';
+        }
+
+        return response()->json([
+            'auto_sync_enabled'    => true,
+            'sync_interval_minutes'=> 5,
+            'is_syncing'           => $isSyncing,
+            'last_sheet_sync_at'   => $lastSheetSync,
+            'last_push_sync_at'    => $lastPushSync,
+            'last_nipos_sync_at'   => $lastNiposSync,
+            'next_sync_in'         => $nextSync ?? 'Segera',
+            'schedule_description' => 'Auto-sync setiap 5 menit (Sheet ↔ DB) | Bot NIPPOS setiap 15 menit',
+        ]);
     }
 
     /**
@@ -515,13 +572,15 @@ class DashboardController extends Controller
 
         $shipment->save();
 
-        // Two-Way Sync to Google Sheets in background queue
+        // Two-Way Sync ke Google Sheets di background queue
+        // Kirim payload lengkap termasuk fu_timestamp agar Apps Script tahu kapan FU dilakukan
         if (!empty($shipment->no_resi)) {
             UpdateSheetStatusJob::dispatch(
                 [$shipment->no_resi],
                 $shipment->color_code ?: 'PUTIH',
                 $shipment->noted,
-                $shipment->fu_pos_date
+                $shipment->fu_pos_date,
+                now()->toDateTimeString()   // fu_timestamp
             );
         }
 
@@ -592,10 +651,13 @@ class DashboardController extends Controller
     }
 
     /**
-     * Handle Excel upload: Save raw file to storage/app/public/imports/ and dispatch ProcessExcelImportJob instantly (< 1 sec)
+     * Handle Excel upload: High-speed streaming import (< 20MB RAM, instant execution)
      */
     public function import(Request $request)
     {
+        @set_time_limit(0);
+        @ini_set('memory_limit', '2048M');
+
         $file = $request->file('excel_file') ?? $request->file('file');
 
         if (!$file) {
@@ -617,12 +679,18 @@ class DashboardController extends Controller
             $storedPath = $importsDir . DIRECTORY_SEPARATOR . $filename;
             $file->move($importsDir, $filename);
 
-            // Dispatch background queue job for streaming import & tracking
-            ProcessExcelImportJob::dispatch($storedPath, $defaultSeller);
+            // High-speed direct streaming import
+            $importer = new ShipmentsImport($defaultSeller);
+            $importer->importFile($storedPath, $defaultSeller);
 
-            return redirect()->back()->with('success', 'File 10.000 data berhasil diunggah! Proses membaca data & tracking berjalan di latar belakang (Queue Worker).');
+            // Clean up temp file
+            if (file_exists($storedPath)) {
+                @unlink($storedPath);
+            }
+
+            return redirect()->back()->with('success', 'File data berhasil diimpor! Seluruh data resi telah tersimpan fix ke sistem.');
         } catch (Throwable $e) {
-            return back()->with('error', 'Gagal mengunggah file: ' . $e->getMessage());
+            return back()->with('error', 'Gagal memproses file: ' . $e->getMessage());
         }
     }
 
@@ -759,16 +827,23 @@ class DashboardController extends Controller
         $targetSheet = $request->input('sheet');
 
         if (empty($url)) {
-            $url = SystemSetting::get('google_sheet_url', 'https://docs.google.com/spreadsheets/d/1wUqPnU1_QOq6WocHwpxAhjhScjlb_ZhhSy8I2WqGQKw/edit');
+            $url = SystemSetting::get('google_sheet_url') ?: SystemSetting::get('google_sheet_id');
         }
 
         $spreadsheetId = SystemSetting::extractSpreadsheetId($url);
         if (!$spreadsheetId) {
+            $spreadsheetId = SystemSetting::get('google_sheet_id') 
+                ?: env('GOOGLE_SHEET_ID_ALIQA', '1EeckOBzI5EPNTT1bHsqu6kar9asKD6Ifar2CpTkSnBg');
+        }
+
+        if (!$spreadsheetId) {
             return response()->json(['success' => false, 'message' => 'URL Google Spreadsheet tidak valid.'], 400);
         }
 
-        // Save URL & ID
-        SystemSetting::set('google_sheet_url', $url);
+        // Save URL & ID if provided
+        if (!empty($url)) {
+            SystemSetting::set('google_sheet_url', $url);
+        }
         SystemSetting::set('google_sheet_id', $spreadsheetId);
 
         if (!empty($webhookUrl)) {
@@ -933,5 +1008,54 @@ class DashboardController extends Controller
         } catch (Throwable $e) {
             return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
         }
+    }
+
+    /**
+     * Dynamically derive clean Post Office (KC) name from recipient address
+     */
+    public static function deriveKantorPosFromAddress(?string $alamat): string
+    {
+        $addr = trim((string)$alamat);
+        if (empty($addr)) {
+            return 'KC PENGANTARAN';
+        }
+
+        // 1. Try matching against master PostOffice database (e.g. KCU BOGOR 16000)
+        $matched = \App\Models\PostOffice::matchByDestinationOrAddress(null, $addr);
+        if ($matched && !empty($matched->name)) {
+            return strtoupper(trim($matched->name));
+        }
+
+        // 2. Match Kota / Kotamadya
+        if (preg_match('/\b(?:Kota|Kotamadya)\s+([A-Za-z\s]+?)(?=[,\.\n\r]|\s+(?:Kec|Desa|Kel|Rt|Rw|Prov|Jawa|Sumatera|Kalimantan|Sulawesi|Bali|Papua|\d{5})|$)/i', $addr, $m)) {
+            $words = array_slice(explode(' ', trim(preg_replace('/\s+/', ' ', $m[1]))), 0, 2);
+            return 'KC ' . strtoupper(implode(' ', $words));
+        }
+
+        // 3. Match Kabupaten
+        if (preg_match('/\b(?:Kabupaten|Kab\.?)\s+([A-Za-z\s]+?)(?=[,\.\n\r]|\s+(?:Kec|Desa|Kel|Rt|Rw|Prov|Jawa|Sumatera|Kalimantan|Sulawesi|Bali|Papua|\d{5})|$)/i', $addr, $m)) {
+            $words = array_slice(explode(' ', trim(preg_replace('/\s+/', ' ', $m[1]))), 0, 2);
+            return 'KC ' . strtoupper(implode(' ', $words));
+        }
+
+        // 4. Match Kecamatan
+        if (preg_match('/\b(?:Kecamatan|Kec\.?)\s+([A-Za-z\s]+?)(?=[,\.\n\r]|\s+(?:Kab|Kota|Desa|Kel|Rt|Rw|\d{5})|$)/i', $addr, $m)) {
+            $words = array_slice(explode(' ', trim(preg_replace('/\s+/', ' ', $m[1]))), 0, 2);
+            return 'KC ' . strtoupper(implode(' ', $words));
+        }
+
+        // 5. Match 5-digit postal code
+        if (preg_match('/\b(\d{5})\b/', $addr, $m)) {
+            return 'KC POS ' . $m[1];
+        }
+
+        // 6. Short address snippet
+        $parts = explode(',', $addr);
+        $firstPart = trim($parts[0]);
+        if (strlen($firstPart) >= 3 && strlen($firstPart) <= 25) {
+            return 'KC ' . strtoupper($firstPart);
+        }
+
+        return 'KC PENGANTARAN';
     }
 }

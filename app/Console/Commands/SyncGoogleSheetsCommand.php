@@ -45,6 +45,9 @@ class SyncGoogleSheetsCommand extends Command
         $this->info("Starting Google Sheets synchronization for {$sheetLabel}...");
         $summary = $syncService->sync($spreadsheetId, $seller, $targetSheet, $targetMonth);
 
+        // Catat waktu sync terakhir di cache agar frontend bisa menampilkannya
+        \Illuminate\Support\Facades\Cache::put('last_sheet_sync_at', now()->toDateTimeString(), 3600);
+
         $this->info("=========================================");
         $this->info("Google Sheets Sync Completed Successfully!");
         $this->info("Spreadsheet ID: " . $summary['spreadsheet_id']);

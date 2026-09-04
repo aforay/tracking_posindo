@@ -41,15 +41,20 @@ class SystemSetting extends Model
             return null;
         }
 
-        $input = trim($input);
+        $input = trim(urldecode((string)$input));
 
         // Match Google Sheet URL pattern /d/{ID}
-        if (preg_match('/\/d\/([a-zA-Z0-9-_]{20,})/', $input, $matches)) {
+        if (preg_match('/\/d\/([a-zA-Z0-9-_]{15,})/', $input, $matches)) {
+            return $matches[1];
+        }
+
+        // Match key= parameter pattern (older google spreadsheet URL format)
+        if (preg_match('/[?&]key=([a-zA-Z0-9-_]{15,})/', $input, $matches)) {
             return $matches[1];
         }
 
         // Match raw ID pattern
-        if (preg_match('/^[a-zA-Z0-9-_]{20,}$/', $input)) {
+        if (preg_match('/^[a-zA-Z0-9-_]{15,}$/', $input)) {
             return $input;
         }
 

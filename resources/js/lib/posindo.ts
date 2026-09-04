@@ -66,6 +66,54 @@ export function generatePostOfficeWaMessage(
   return lines.join("\n");
 }
 
+export function extractCityRegency(address?: string, officeName?: string): string {
+  if (!address && !officeName) return "-";
+  const text = (address || "").trim();
+
+  // 1. Try matching "Kota [Name]" or "Kotamadya [Name]"
+  const kotaMatch = text.match(/\b(?:Kota|Kotamadya)\s+([A-Za-z\s]+?)(?=[,\.\n\r]|\s+(?:Kec|Desa|Kel|Rt|Rw|Prov|Jawa|Sumatera|Kalimantan|Sulawesi|Bali|Papua|\d{5})|$)/i);
+  if (kotaMatch && kotaMatch[1].trim()) {
+    const clean = kotaMatch[1].trim().replace(/\s+/g, " ");
+    const words = clean.split(" ").slice(0, 3).join(" ");
+    return `Kota ${words}`;
+  }
+
+  // 2. Try matching "Kab. [Name]" or "Kabupaten [Name]" or "Kab [Name]"
+  const kabMatch = text.match(/\b(?:Kabupaten|Kab\.?)\s+([A-Za-z\s]+?)(?=[,\.\n\r]|\s+(?:Kec|Desa|Kel|Rt|Rw|Prov|Jawa|Sumatera|Kalimantan|Sulawesi|Bali|Papua|\d{5})|$)/i);
+  if (kabMatch && kabMatch[1].trim()) {
+    const clean = kabMatch[1].trim().replace(/\s+/g, " ");
+    const words = clean.split(" ").slice(0, 3).join(" ");
+    return `Kab. ${words}`;
+  }
+
+  // 3. Try matching "Kec. [Name]" if no Kab/Kota
+  const kecMatch = text.match(/\b(?:Kecamatan|Kec\.?)\s+([A-Za-z\s]+?)(?=[,\.\n\r]|\s+(?:Kab|Kota|Desa|Kel|Rt|Rw|\d{5})|$)/i);
+  if (kecMatch && kecMatch[1].trim()) {
+    const clean = kecMatch[1].trim().replace(/\s+/g, " ");
+    const words = clean.split(" ").slice(0, 2).join(" ");
+    return `Kec. ${words}`;
+  }
+
+  // 4. Fallback to Office Name if available (e.g. "KCU SURABAYA 60000" -> "Surabaya", "KC SUMENEP 69400" -> "Sumenep")
+  if (officeName) {
+    const officeClean = officeName.replace(/^(?:KCU|KC|KCP|KANTOR\s+POS)\s+/i, "").replace(/\s+\d{5}$/, "").trim();
+    if (officeClean && officeClean !== "TUJUAN") {
+      return officeClean;
+    }
+  }
+
+  // 5. Short snippet of destination if short
+  if (text.length <= 35) {
+    return text;
+  }
+
+  const firstComma = text.split(",")[0].trim();
+  if (firstComma.length > 0 && firstComma.length <= 30) {
+    return firstComma;
+  }
+
+  return text.substring(0, 28) + "...";
+}
 
 export const SELLERS = [
   "Mitra Aliqa",
@@ -103,6 +151,36 @@ export const FU_META: Record<
 };
 
 export const FU_ORDER: FuStatus[] = ["BIRU", "ORANGE", "KUNING", "PUTIH", "HIJAU", "BIRU_TUA"];
+
+// Konfigurasi Khusus Mitra Aliqa sesuai catatan resmi:
+// 1. HIJAU TOSKA -> PAKET SUKSES
+// 2. MERAH -> PAKET RETUR
+// 3. KUNING -> SUDAH DI FU
+// 4. PUTIH -> BLM DI FU
+// 5. BIRU TUA -> ON FU POS
+export const FU_META_ALIQA: Record<
+  FuStatus,
+  { label: string; bg: string; fg: string; short: string }
+> = {
+  PUTIH: { label: "BLM DI FU", bg: "#FFFFFF", fg: "#1E293B", short: "PUTIH" },
+  BIRU: { label: "PAKET SUKSES", bg: "#38D9A9", fg: "#000000", short: "HIJAU TOSKA" },
+  ORANGE: { label: "PAKET RETUR", bg: "#E8A29A", fg: "#000000", short: "MERAH" },
+  KUNING: { label: "SUDAH DI FU", bg: "#FFFF00", fg: "#000000", short: "KUNING" },
+  HIJAU: { label: "FU 2 KALI", bg: "#93C47D", fg: "#14532D", short: "HIJAU" },
+  BIRU_TUA: { label: "ON FU POS", bg: "#1C4587", fg: "#FFFFFF", short: "BIRU TUA" },
+};
+
+export const FU_ORDER_ALIQA: FuStatus[] = ["BIRU", "ORANGE", "KUNING", "PUTIH", "BIRU_TUA"];
+
+export function getSellerFuMeta(seller?: string): Record<FuStatus, { label: string; bg: string; fg: string; short: string }> {
+  const isAliqa = typeof seller === "string" && seller.toUpperCase().includes("ALIQA");
+  return isAliqa ? FU_META_ALIQA : FU_META;
+}
+
+export function getSellerFuOrder(seller?: string): FuStatus[] {
+  const isAliqa = typeof seller === "string" && seller.toUpperCase().includes("ALIQA");
+  return isAliqa ? FU_ORDER_ALIQA : FU_ORDER;
+}
 
 const CITIES = [
   "Jakarta Selatan",

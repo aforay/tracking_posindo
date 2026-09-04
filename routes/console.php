@@ -15,25 +15,36 @@ Artisan::command('tracking', function () {
 
 /*
 |--------------------------------------------------------------------------
-| Console Schedule Tasks
+| Console Schedule Tasks — Real-Time Bidirectional Sync
 |--------------------------------------------------------------------------
 |
-| Scheduled task for automatic Google Sheets sync every 15 minutes.
-| Run locally with: php artisan schedule:work
+| Jalankan: php artisan schedule:work
+| (atau tambahkan ke Windows Task Scheduler agar otomatis berjalan)
+|
+| ALUR SYNC:
+|   1. sheets:sync        → Pull data baru dari Seller (Google Sheets → DB)
+|   2. sheets:push-updates → Push status update dari DB → Google Sheets (via Webhook)
+|   3. nipos:track-all   → Bot NIPPOS otomatis (DB → NIPPOS → DB → Sheets)
 |
 */
+
+// 1. Auto-pull data baru dari Seller (Sheet → DB) setiap 5 menit
+//    Hanya sync bulan berjalan untuk hemat waktu
 Schedule::command('sheets:sync')
-    ->everyFifteenMinutes()
-    ->withoutOverlapping()
+    ->everyFiveMinutes()
+    ->withoutOverlapping(10)  // Skip jika masih ada yang berjalan (max 10 menit)
     ->appendOutputTo(storage_path('logs/sheets_sync_schedule.log'));
 
+// 2. Push status update terbaru dari DB ke Sheet via Webhook setiap 5 menit
+Schedule::command('sheets:push-updates')
+    ->everyFiveMinutes()
+    ->withoutOverlapping(10)
+    ->appendOutputTo(storage_path('logs/sheets_push_schedule.log'));
+
+// 3. Bot NIPPOS otomatis setiap 15 menit (lebih berat karena akses ke NIPPOS API)
 Schedule::command('nipos:track-all')
     ->everyFifteenMinutes()
-    ->withoutOverlapping()
+    ->withoutOverlapping(20)
     ->appendOutputTo(storage_path('logs/nipos_track_schedule.log'));
 
-Schedule::command('sheets:push-updates')
-    ->everyFifteenMinutes()
-    ->withoutOverlapping()
-    ->appendOutputTo(storage_path('logs/sheets_push_schedule.log'));
 
