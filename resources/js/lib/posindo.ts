@@ -22,6 +22,8 @@ export interface Shipment {
   fu: FuStatus;
   note?: string;
   escalationDate?: string;
+  lastTrackedAt?: string;
+  statusKategori?: string;
   kantorTujuan?: string;
   kantorPosPhone?: string;
   kantorPosPic?: string;

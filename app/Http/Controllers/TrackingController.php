@@ -381,25 +381,42 @@ class TrackingController extends Controller
         }
 
         $month = $request->input('month', null);
-        if (!empty($month) && $month !== 'ALL' && $month !== 'all') {
-            if (is_numeric($month)) {
-                $pendingQuery->whereMonth('tanggal_kirim', (int)$month);
+        $monthMap = [
+            'JANUARI' => 1, 'JAN' => 1,
+            'FEBRUARI' => 2, 'FEB' => 2,
+            'MARET' => 3, 'MAR' => 3,
+            'APRIL' => 4, 'APR' => 4,
+            'MEI' => 5, 'MAY' => 5,
+            'JUNI' => 6, 'JUN' => 6,
+            'JULI' => 7, 'JUL' => 7, 'JULY' => 7,
+            'AGUSTUS' => 8, 'AGT' => 8, 'AGUS' => 8, 'AGU' => 8, 'AUGUST' => 8, 'AUG' => 8,
+            'SEPTEMBER' => 9, 'SEP' => 9,
+            'OKTOBER' => 10, 'OKT' => 10, 'OCT' => 10,
+            'NOVEMBER' => 11, 'NOV' => 11,
+            'DESEMBER' => 12, 'DES' => 12, 'DEC' => 12,
+        ];
+
+        $targetMonthNum = null;
+        if (!empty($month) && strtoupper((string)$month) !== 'ALL' && (string)$month !== 'all') {
+            $monthUpper = strtoupper(trim((string)$month));
+            if (isset($monthMap[$monthUpper])) {
+                $targetMonthNum = $monthMap[$monthUpper];
+            } elseif (is_numeric($month)) {
+                $val = (int)$month;
+                if ($val >= 1 && $val <= 12) {
+                    $targetMonthNum = $val;
+                }
             }
+        }
+
+        if ($targetMonthNum !== null) {
+            $pendingQuery->whereMonth('tanggal_kirim', $targetMonthNum);
         }
 
         if (!empty($shipmentIds)) {
             $pendingQuery->whereIn('id', (array)$shipmentIds);
         } else {
-            if (!$force) {
-                $pendingQuery->where(function ($q) {
-                    $q->whereNull('status_pos')
-                      ->orWhere('status_pos', 'ON PROCESS')
-                      ->orWhere('status_pos', '')
-                      ->orWhere('status_pos', 'LIKE', '%PROCESS%')
-                      ->orWhereNotIn('status_kategori', ['SUKSES', 'RETUR'])
-                      ->orWhereNotIn('color_code', ['BIRU', 'ORANGE']);
-                });
-            }
+            $pendingQuery->needsTracking($force);
 
             // Exclude items already tracked in this active session
             $pendingQuery->where(function ($q) use ($sessionThreshold) {
@@ -463,6 +480,24 @@ class TrackingController extends Controller
         $remainingPending = (clone $pendingQuery)->count();
         $isFinished = $remainingPending === 0;
 
+        // Fetch verification details of updated items for this batch
+        $updatedItems = OutgoingShipment::whereIn('id', $allPendingIds)
+            ->get(['id', 'no_resi', 'nama_seller', 'status_pos', 'keterangan', 'status_kategori', 'color_code', 'sla_days', 'last_tracked_at'])
+            ->map(function ($item) {
+                return [
+                    'id' => (string)$item->id,
+                    'resi' => $item->no_resi,
+                    'seller' => $item->nama_seller,
+                    'status_pos' => $item->status_pos,
+                    'keterangan' => $item->keterangan,
+                    'status_kategori' => $item->status_kategori,
+                    'color_code' => $item->color_code,
+                    'sla' => (int)($item->sla_days ?? 2),
+                    'last_tracked_at' => $item->last_tracked_at ? (is_string($item->last_tracked_at) ? $item->last_tracked_at : $item->last_tracked_at->format('Y-m-d H:i')) : null,
+                ];
+            })
+            ->toArray();
+
         if ($request->ajax() || $request->wantsJson()) {
             return response()->json([
                 'success' => true,
@@ -472,6 +507,7 @@ class TrackingController extends Controller
                 'total_pending' => $remainingPending,
                 'is_running' => !$isFinished,
                 'is_finished' => $isFinished,
+                'updated_items' => $updatedItems,
             ]);
         }
 
@@ -481,20 +517,22 @@ class TrackingController extends Controller
     /**
      * Real-time bot scraping progress polling API
      */
-    public function progress()
+    public function progress(Request $request)
     {
         $botProgress = cache('bot_progress', ['current' => 0, 'total' => 0]);
         $isRunning = cache('bot_running', false);
 
-        $total = OutgoingShipment::count();
-        $delivered = OutgoingShipment::where('status_kategori', 'SUKSES')->count();
-        $retur = OutgoingShipment::where('status_kategori', 'RETUR')->count();
-        $tracked = OutgoingShipment::whereNotNull('last_tracked_at')->count();
-        $pending = OutgoingShipment::where(function ($q) {
-            $q->whereNotIn('status_kategori', ['SUKSES', 'RETUR'])
-              ->orWhereNull('status_kategori')
-              ->orWhere('status_pos', '!=', 'DELIVERED');
-        })->count();
+        $month = $request->input('month');
+        $query = OutgoingShipment::query();
+        if (!empty($month) && is_numeric($month)) {
+            $query->whereMonth('tanggal_kirim', (int)$month);
+        }
+
+        $total = (clone $query)->count();
+        $delivered = (clone $query)->where('status_kategori', 'SUKSES')->count();
+        $retur = (clone $query)->where('status_kategori', 'RETUR')->count();
+        $tracked = (clone $query)->whereNotNull('last_tracked_at')->count();
+        $pending = (clone $query)->needsTracking()->count();
         
         $percentage = ($botProgress['total'] > 0)
             ? round(($botProgress['current'] / $botProgress['total']) * 100, 1)

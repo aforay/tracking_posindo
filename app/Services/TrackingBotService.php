@@ -56,6 +56,44 @@ class TrackingBotService
             return $results;
         }
 
+        // 1. Primary Engine: Bulk tracking via NiposFastTracker (AJAX POST with vBarcode chunked by 40)
+        if (!$isTesting) {
+            try {
+                $fastTracker = app(\App\Services\NiposFastTracker::class);
+                $apiResults = $fastTracker->trackMany($cleanResis, 40);
+                if (!empty($apiResults)) {
+                    foreach ($apiResults as $resi => $data) {
+                        $rawStatus = $data['status_akhir'] ?: 'ON PROCESS';
+                        $cat = $this->categorizeStatus($rawStatus, $rawStatus);
+                        $color = $this->determineColorCode($cat);
+                        $rawSla = $data['sla'] ?? null;
+                        $tglKolekting = $data['tanggal_kolekting'] ?? null;
+                        $parsedSla = $this->extractSlaDays((string)$rawSla, $tglKolekting, $cat);
+                        $results[$resi] = [
+                            'resi' => $resi,
+                            'status_pos' => $rawStatus,
+                            'status' => $rawStatus,
+                            'keterangan' => $rawStatus,
+                            'status_kategori' => $cat,
+                            'color_code' => $color,
+                            'sla_days' => $parsedSla,
+                            'sla' => (string)$parsedSla,
+                            'tanggal_kolekting' => $tglKolekting,
+                            'kantor_tujuan' => null,
+                            'last_location' => null,
+                            'raw' => $rawStatus,
+                        ];
+                    }
+
+                    if (count($results) >= count($cleanResis)) {
+                        return $results;
+                    }
+                }
+            } catch (\Throwable $e) {
+                Log::warning("TrackingBotService: NiposFastTracker bulk attempt: " . $e->getMessage());
+            }
+        }
+
         Log::info("TrackingBotService: Starting High-Speed HTTP tracking for " . count($cleanResis) . " resis against {$url}");
 
         // Process in high-reliability HTTP pools of 12 requests per chunk (prevents Posindo rate-limiting)
@@ -175,7 +213,9 @@ class TrackingBotService
         if (
             str_contains($statusAkhirUpper, 'RETURN') || 
             str_contains($statusAkhirUpper, 'RETUR') || 
-            str_contains($statusAkhirUpper, 'KEMBALI')
+            str_contains($statusAkhirUpper, 'KEMBALI') ||
+            str_contains($statusAkhirUpper, 'DITOLAK') ||
+            str_contains($statusAkhirUpper, 'PENOLAKAN')
         ) {
             return 'RETUR';
 
@@ -213,32 +253,36 @@ class TrackingBotService
      */
     public function formatRunningSla(?string $tanggalKirim, string $category = 'IN_PROCESS', ?int $defaultSla = 2, ?int $slaDays = null): string
     {
+        // Support callers passing $slaDays as 3rd or 4th argument
+        $effectiveSla = $slaDays !== null ? $slaDays : $defaultSla;
+
         if (in_array(strtoupper($category), ['SUKSES', 'RETUR'])) {
-            return (string)($defaultSla ?: 2);
+            return (string)($effectiveSla !== null ? $effectiveSla : 2);
         }
 
-        if ($slaDays !== null) {
-            if ($slaDays < 0) {
-                return "Telat " . abs($slaDays) . " Hari";
-            }
-            if ($slaDays > 0) {
-                return "H+{$slaDays} (JALAN)";
-            }
+        if ($effectiveSla !== null && $effectiveSla < 0) {
+            return "Telat " . abs($effectiveSla) . " Hari";
         }
 
-        if (empty($tanggalKirim)) {
-            return "H+1 (JALAN)";
+        if ($slaDays !== null && $slaDays > 0) {
+            return "H+{$slaDays} (JALAN)";
         }
 
-        try {
-            $tgl = \Illuminate\Support\Carbon::parse($tanggalKirim);
-            $diffHours = abs(now()->diffInHours($tgl));
-            $days = (int)ceil($diffHours / 24);
-            $days = max(1, $days);
-            return "H+{$days} (JALAN)";
-        } catch (\Throwable $e) {
-            return "H+1 (JALAN)";
+        if (!empty($tanggalKirim)) {
+            try {
+                $tgl = \Illuminate\Support\Carbon::parse($tanggalKirim)->startOfDay();
+                $today = now()->startOfDay();
+                $elapsedDays = abs((int)$today->diffInDays($tgl));
+                $target = ($effectiveSla !== null && $effectiveSla > 0) ? $effectiveSla : 2;
+                if ($elapsedDays > $target) {
+                    $over = $elapsedDays - $target;
+                    return "Telat {$over} Hari";
+                }
+                return "H+{$elapsedDays} (JALAN)";
+            } catch (\Throwable $e) {}
         }
+
+        return "H+1 (JALAN)";
     }
 
     /**
@@ -343,6 +387,7 @@ class TrackingBotService
                 // A. EXACT XPATH FOR STATUS AKHIR: //tr[td[contains(., 'STATUS AKHIR')]]/td[2]
                 $statusNode = $crawler->filterXPath("//tr[td[contains(., 'STATUS AKHIR')]]/td[2]");
                 $nomorKirimanNode = $crawler->filterXPath("//tr[td[contains(., 'Nomor Kiriman')]]/td[2]");
+                $slaNode = $crawler->filterXPath("//tr[td[contains(., 'SLA') or contains(., 'MASA TAHAN')]]/td[2]");
 
                 $rawStatusText = '';
                 if ($statusNode->count() > 0) {
@@ -354,9 +399,14 @@ class TrackingBotService
                     $rawNomorKirimanText = $nomorKirimanNode->first()->text();
                 }
 
+                $rawSlaText = '';
+                if ($slaNode->count() > 0) {
+                    $rawSlaText = $slaNode->first()->text();
+                }
+
                 // If not found via exact XPath, scan 2-column key-value rows
                 if (empty($rawStatusText)) {
-                    $crawler->filter('tr')->each(function (Crawler $tr) use (&$rawStatusText, &$rawNomorKirimanText) {
+                    $crawler->filter('tr')->each(function (Crawler $tr) use (&$rawStatusText, &$rawNomorKirimanText, &$rawSlaText) {
                         $tds = $tr->filter('td, th');
                         if ($tds->count() >= 2) {
                             $label = strtoupper(trim($tds->eq(0)->text()));
@@ -365,6 +415,8 @@ class TrackingBotService
                                 $rawStatusText = $val;
                             } elseif (str_contains($label, 'NOMOR KIRIMAN') || str_contains($label, 'NO KIRIMAN')) {
                                 $rawNomorKirimanText = $val;
+                            } elseif (str_contains($label, 'SLA') || str_contains($label, 'MASA TAHAN')) {
+                                $rawSlaText = $val;
                             }
                         }
                     });
@@ -380,9 +432,9 @@ class TrackingBotService
                     $statusKategori = $this->categorizeStatus($cleanStatus, '');
                     $colorCode = $this->determineColorCode($statusKategori);
 
-                    // Ekstraksi SLA dari baris Nomor Kiriman
-                    $slaTargetText = !empty($rawNomorKirimanText) ? $rawNomorKirimanText : $rawHtml;
-                    $parsedSla = $this->extractSlaDays($slaTargetText);
+                    // Ekstraksi SLA dari baris SLA atau Nomor Kiriman
+                    $slaTargetText = !empty($rawSlaText) ? $rawSlaText : (!empty($rawNomorKirimanText) ? $rawNomorKirimanText : '');
+                    $parsedSla = !empty($slaTargetText) ? $this->extractSlaDays($slaTargetText) : 2;
 
                     // Ekstraksi Kantor Pos / Lokasi
                     $kantorTujuan = $this->extractKantorTujuan($cleanStatus, $rawHtml);
@@ -398,7 +450,7 @@ class TrackingBotService
                         'sla' => (string)$parsedSla,
                         'kantor_tujuan' => $kantorTujuan,
                         'last_location' => $kantorTujuan,
-                        'raw' => "STATUS: {$cleanStatus} | NOMOR_KIRIMAN: {$rawNomorKirimanText}",
+                        'raw' => "STATUS: {$cleanStatus} | NOMOR_KIRIMAN: {$rawNomorKirimanText} | SLA: {$rawSlaText}",
                     ];
                 }
             } catch (Throwable $e) {
@@ -444,52 +496,67 @@ class TrackingBotService
     /**
      * Extract integer SLA days from text (e.g. "jatuh tempo => 2 hari lagi" -> 2, "sudah Over SLA => 240 hari" -> -240)
      */
-    public function extractSlaDays(?string $text, ?string $tanggalKirim = null): int
+    public function extractSlaDays(?string $text, ?string $tanggalKirim = null, string $category = 'IN_PROCESS'): int
     {
-        if (empty($text)) {
-            if (!empty($tanggalKirim)) {
-                try {
-                    $tgl = \Illuminate\Support\Carbon::parse($tanggalKirim);
-                    return 2 - (int)now()->diffInDays($tgl);
-                } catch (\Throwable $e) {}
-            }
-            return 2;
-        }
-
-        $clean = self::cleanRawText($text);
+        $isFinal = in_array(strtoupper($category), ['SUKSES', 'RETUR']);
 
         // 1. Check for Overdue / Terlambat / Minus e.g. "sudah Over SLA => 240 hari" or "terlewati 2 hari" or "minus 2" or "-2 hari"
-        if (preg_match('/(?:OVER\s*SLA\s*=>?\s*|TERLEWATI\s*|LEWAT\s*|MINUS\s*|TELAT\s*|-\s*)(\d+)\s*HARI/i', $clean, $m)) {
-            return -1 * abs((int)$m[1]);
-        }
-        if (preg_match('/(?:OVER\s*SLA\s*=>?\s*|TERLEWATI\s*|LEWAT\s*|MINUS\s*|TELAT\s*|-\s*)(\d+)/i', $clean, $m)) {
-            return -1 * abs((int)$m[1]);
-        }
-
-        // 2. Check for positive remaining days e.g. "jatuh tempo => 3 hari lagi" or "SLA : 3 hari" or "3 hari lagi"
-        if (preg_match('/(?:JATUH\s*TEMPO\s*=>?\s*|\b)(\d+)\s*HARI\s*(?:LAGI)?/i', $clean, $m)) {
-            return max(1, (int)$m[1]);
-        }
-        if (preg_match('/(?:SLA|MASA\s*TAHAN)\s*[:=]?\s*(\d+)/i', $clean, $m)) {
-            return max(1, (int)$m[1]);
-        }
-        if (preg_match('/\b(\d+)\b/', $clean, $m)) {
-            $val = (int)$m[1];
-            if ($val >= 1 && $val <= 30) {
-                return $val;
+        if (!empty($text)) {
+            $clean = self::cleanRawText($text);
+            if (preg_match('/(?:OVER\s*SLA\s*=>?\s*|TERLEWATI\s*|LEWAT\s*|MINUS\s*|TELAT\s*|-\s*)(\d+)\s*HARI/i', $clean, $m)) {
+                return -1 * abs((int)$m[1]);
+            }
+            if (preg_match('/(?:OVER\s*SLA\s*=>?\s*|TERLEWATI\s*|LEWAT\s*|MINUS\s*|TELAT\s*|-\s*)(\d+)/i', $clean, $m)) {
+                return -1 * abs((int)$m[1]);
             }
         }
 
-        // 3. Fallback calculation from tanggalKirim: (Standard SLA 2 - elapsed days)
+        // 2. Target SLA limit check (e.g. 2, 3, 14, or negative number)
+        $targetSla = 2;
+        if (!empty($text)) {
+            $trimmed = trim($text);
+            if (is_numeric($trimmed)) {
+                $num = (int)$trimmed;
+                if ($num < 0) {
+                    return $num;
+                }
+                if ($num > 0) {
+                    $targetSla = $num;
+                }
+            } elseif (preg_match('/(?:JATUH\s*TEMPO\s*=>?\s*|\b)(\d+)\s*HARI\s*(?:LAGI)?/i', $clean ?? '', $m)) {
+                $targetSla = (int)$m[1];
+            } elseif (preg_match('/(?:SLA|MASA\s*TAHAN)\s*[:=]?\s*(-?\d+)/i', $clean ?? '', $m)) {
+                $num = (int)$m[1];
+                if ($num < 0) {
+                    return $num;
+                }
+                if ($num > 0) {
+                    $targetSla = $num;
+                }
+            }
+        }
+
+        // If package is finished (DELIVERED / RETUR), SLA is the final duration
+        if ($isFinal) {
+            return $targetSla;
+        }
+
+        // For IN_PROCESS packages: calculate running SLA based on elapsed days from tanggalKirim
         if (!empty($tanggalKirim)) {
             try {
-                $tgl = \Illuminate\Support\Carbon::parse($tanggalKirim);
-                $diffDays = (int)now()->diffInDays($tgl);
-                return 2 - $diffDays;
+                $tgl = \Illuminate\Support\Carbon::parse($tanggalKirim)->startOfDay();
+                $today = now()->startOfDay();
+                $elapsedDays = abs((int)$today->diffInDays($tgl));
+
+                if ($elapsedDays > $targetSla) {
+                    return -1 * ($elapsedDays - $targetSla);
+                } else {
+                    return max(0, $targetSla - $elapsedDays);
+                }
             } catch (\Throwable $e) {}
         }
 
-        return 2;
+        return $targetSla;
     }
 
     /**
@@ -540,7 +607,9 @@ class TrackingBotService
             str_contains($upperText, 'GAGAL SERAH TERIMA') ||
             str_contains($upperText, 'RTS') ||
             str_contains($upperText, 'DITERIMA PENGIRIM') ||
-            str_contains($upperText, 'DITERIMA MITRA')) {
+            str_contains($upperText, 'DITERIMA MITRA') ||
+            str_contains($upperText, 'DITOLAK') ||
+            str_contains($upperText, 'PENOLAKAN')) {
             $status = self::STATUS_DELIVERED_RETURN;
             $keterangan = 'DITERIMA PENGIRIM (MITRA) / RETUR';
         }

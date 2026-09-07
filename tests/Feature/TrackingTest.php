@@ -660,6 +660,201 @@ HTML;
         $this->assertEquals('RETUR', $p->status_kategori, "PUTIH: status_kategori harus RETUR setelah NIPOS RETURN DELIVERY");
         $this->assertEquals('ORANGE', $p->color_code, "PUTIH: color_code harus ORANGE setelah NIPOS RETURN DELIVERY");
     }
+
+    public function test_start_bot_tracking_strictly_filters_by_month(): void
+    {
+        // 1. Resi di bulan Juli (month 7)
+        $juli = OutgoingShipment::create([
+            'nama_seller' => 'Mitra Aliqa',
+            'no_resi' => 'TEST_JULI_01',
+            'tanggal_kirim' => '2026-07-15',
+            'status_pos' => 'inBag',
+            'status_kategori' => 'IN_PROCESS',
+            'color_code' => 'PUTIH',
+        ]);
+
+        // 2. Resi di bulan Agustus (month 8)
+        $agustus = OutgoingShipment::create([
+            'nama_seller' => 'Mitra Aliqa',
+            'no_resi' => 'TEST_AGUSTUS_01',
+            'tanggal_kirim' => '2026-08-15',
+            'status_pos' => 'inBag',
+            'status_kategori' => 'IN_PROCESS',
+            'color_code' => 'PUTIH',
+        ]);
+
+        // Jalankan bot khusus bulan 8 (Agustus)
+        $response = $this->postJson('/bot/start-tracking', [
+            'month' => 8,
+            'seller' => 'Mitra Aliqa',
+        ]);
+
+        $response->assertStatus(200);
+        $response->assertJson(['success' => true]);
+
+        // Resi Agustus harus ter-track
+        $this->assertNotNull($agustus->fresh()->last_tracked_at, 'Resi Agustus harus ter-track saat bot dijalankan untuk bulan 8');
+
+        // Resi Juli TIDAK BOLEH ter-track
+        $this->assertNull($juli->fresh()->last_tracked_at, 'Resi Juli tidak boleh ter-track saat bot hanya dijalankan untuk bulan Agustus');
+    }
+
+    public function test_ditolak_is_categorized_as_retur(): void
+    {
+        $botService = app(\App\Services\TrackingBotService::class);
+        $cat = $botService->categorizeStatus('unBag - -', '(KIRIMAN DITOLAK YANG BERSANGKUTAN)');
+        $this->assertEquals('RETUR', $cat, 'KIRIMAN DITOLAK harus dikategorikan sebagai RETUR');
+    }
+
+    public function test_start_bot_tracking_returns_updated_items_for_notification(): void
+    {
+        $shipment = OutgoingShipment::create([
+            'nama_seller' => 'Mitra Aliqa',
+            'no_resi' => 'TEST_NOTIF_01',
+            'tanggal_kirim' => '2026-08-20',
+            'status_pos' => 'ON PROCESS',
+            'status_kategori' => 'IN_PROCESS',
+            'color_code' => 'PUTIH',
+        ]);
+
+        $response = $this->postJson('/bot/start-tracking', [
+            'month' => 8,
+            'seller' => 'Mitra Aliqa',
+        ]);
+
+        $response->assertStatus(200);
+        $response->assertJsonStructure([
+            'success',
+            'processed_count',
+            'updated_items',
+        ]);
+
+        $data = $response->json();
+        $this->assertNotEmpty($data['updated_items']);
+        $this->assertEquals('TEST_NOTIF_01', $data['updated_items'][0]['resi']);
+    }
+
+    public function test_excel_upload_dispatches_reverse_sync_for_spreadsheet_colors(): void
+    {
+        Queue::fake();
+
+        // Buat file CSV test yang mensimulasikan file hasil follow-up dari Kantor Pos
+        $csvContent = "No Resi,Seller,Nama Penerima,Status POS,Keterangan,Status FU\n";
+        $csvContent .= "P260810001001,Mitra Aliqa,Budi Santoso,DELIVERED,DITERIMA YBS,FU SEKALI\n";
+        $csvContent .= "P260810001002,Mitra Aliqa,Siti Rahma,DELIVERED (RETURN),DITOLAK PENERIMA,RETUR\n";
+
+        $uploadedFile = \Illuminate\Http\UploadedFile::fake()->createWithContent('pos_fu_result.csv', $csvContent);
+
+        $response = $this->post('/process', [
+            'excel_file' => $uploadedFile,
+            'default_seller' => 'Mitra Aliqa',
+        ]);
+
+        $response->assertStatus(302);
+
+        // Verifikasi database terupdate
+        $this->assertDatabaseHas('outgoing_shipments', [
+            'no_resi' => 'P260810001001',
+            'color_code' => 'KUNING',
+        ]);
+
+        $this->assertDatabaseHas('outgoing_shipments', [
+            'no_resi' => 'P260810001002',
+            'color_code' => 'ORANGE',
+        ]);
+
+        // Verifikasi ReverseSyncGoogleSheetsJob di-dispatch agar warna di spreadsheet terupdate
+        Queue::assertPushed(ReverseSyncGoogleSheetsJob::class, function ($job) {
+            return true;
+        });
+    }
+
+    public function test_retur_packages_with_operational_status_are_tracked_and_updated(): void
+    {
+        // 1. Buat paket yang sebelumnya berstatus unBag dan berwarna ORANGE / RETUR
+        $shipment = OutgoingShipment::create([
+            'nama_seller' => 'Mitra Aliqa',
+            'no_resi' => 'PCPTESTRETUR01',
+            'nama_penerima' => 'Konsumen Retur',
+            'no_hp' => '08123456789',
+            'alamat' => 'Bandung',
+            'tanggal_kirim' => '2026-08-20',
+            'status_pos' => 'unBag',
+            'keterangan' => 'unBag - -, (KIRIMAN DITOLAK YANG BERSANGKUTAN)',
+            'status_kategori' => 'RETUR',
+            'color_code' => 'ORANGE',
+            'sla_days' => 5,
+        ]);
+
+        // 2. Pastikan scope needsTracking menyertakan paket ini karena status_pos belum final
+        $this->assertTrue(OutgoingShipment::needsTracking()->where('id', $shipment->id)->exists());
+
+        // 3. Mock bot tracking service mengembalikan status akhir DELIVERED (RETURN DELIVERY)
+        $botService = $this->createMock(TrackingBotService::class);
+        $botService->method('trackResiList')->willReturn([
+            'PCPTESTRETUR01' => [
+                'resi' => 'PCPTESTRETUR01',
+                'status_pos' => 'DELIVERED (RETURN DELIVERY)',
+                'keterangan' => 'DELIVERED (RETURN DELIVERY)',
+                'status_kategori' => 'RETUR',
+                'color_code' => 'ORANGE',
+                'sla_days' => 12,
+            ]
+        ]);
+        $botService->method('categorizeStatus')->willReturn('RETUR');
+        $botService->method('determineColorCode')->willReturn('ORANGE');
+        $botService->method('extractSlaDays')->willReturn(12);
+
+        $job = new ProcessNiposTrackingJob([$shipment->id]);
+        $job->handle($botService);
+
+        $fresh = $shipment->fresh();
+        $this->assertEquals('DELIVERED (RETURN DELIVERY)', $fresh->status_pos);
+        $this->assertEquals('RETUR', $fresh->status_kategori);
+        $this->assertEquals('ORANGE', $fresh->color_code);
+    }
+
+    public function test_retur_packages_preserve_orange_color_when_transit_status_returned(): void
+    {
+        // Paket yang berstatus RETUR / ORANGE dan NIPOS mengembalikan status transit operasional (INVEHICLE)
+        $shipment = OutgoingShipment::create([
+            'nama_seller' => 'Mitra Aliqa',
+            'no_resi' => 'PCPTESTRETUR02',
+            'nama_penerima' => 'Konsumen Transit',
+            'no_hp' => '08123456780',
+            'alamat' => 'Semarang',
+            'tanggal_kirim' => '2026-08-21',
+            'status_pos' => 'unBag',
+            'keterangan' => 'unBag - -, (KIRIMAN DITOLAK YANG BERSANGKUTAN)',
+            'status_kategori' => 'RETUR',
+            'color_code' => 'ORANGE',
+            'sla_days' => 4,
+        ]);
+
+        $botService = $this->createMock(TrackingBotService::class);
+        $botService->method('trackResiList')->willReturn([
+            'PCPTESTRETUR02' => [
+                'resi' => 'PCPTESTRETUR02',
+                'status_pos' => 'INVEHICLE',
+                'keterangan' => 'INVEHICLE - -',
+                'status_kategori' => 'IN_PROCESS', // NIPOS raw parser returns IN_PROCESS for invehicle
+                'color_code' => 'PUTIH',
+                'sla_days' => 6,
+            ]
+        ]);
+        $botService->method('categorizeStatus')->willReturn('IN_PROCESS');
+        $botService->method('determineColorCode')->willReturn('PUTIH');
+        $botService->method('extractSlaDays')->willReturn(6);
+
+        $job = new ProcessNiposTrackingJob([$shipment->id]);
+        $job->handle($botService);
+
+        // Harus tetap RETUR dan ORANGE, tidak boleh turun ke IN_PROCESS / PUTIH
+        $fresh = $shipment->fresh();
+        $this->assertEquals('INVEHICLE', $fresh->status_pos);
+        $this->assertEquals('RETUR', $fresh->status_kategori);
+        $this->assertEquals('ORANGE', $fresh->color_code);
+    }
 }
 
 

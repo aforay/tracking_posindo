@@ -43,12 +43,7 @@ class TrackAllNiposCommand extends Command
         Log::info("TrackAllNiposCommand: Starting automatic tracking with chunk size {$chunkSize}");
 
         $query = OutgoingShipment::query()
-            ->where(function ($q) {
-                $q->whereIn('status_kategori', ['IN_PROCESS', 'FOLLOW_UP'])
-                  ->orWhereNull('status_kategori')
-                  ->orWhere('status_pos', '!=', 'DELIVERED');
-            })
-            ->whereNotIn('status_kategori', ['SUKSES', 'RETUR'])
+            ->needsTracking()
             ->orderBy('last_tracked_at', 'asc');
 
         if ($maxLimit > 0) {
@@ -95,8 +90,16 @@ class TrackAllNiposCommand extends Command
                         $shipment->keterangan = $keterangan;
 
                         $category = $res['status_kategori'] ?? $botService->categorizeStatus($shipment->status_pos, $shipment->keterangan);
+                        $color = $res['color_code'] ?? $botService->determineColorCode($category);
+
+                        // If already RETUR / ORANGE and not delivered to customer, stay RETUR (ORANGE)
+                        if (($shipment->color_code === 'ORANGE' || $shipment->status_kategori === 'RETUR' || $shipment->isReturn()) && $category !== 'SUKSES') {
+                            $category = 'RETUR';
+                            $color = 'ORANGE';
+                        }
+
                         $shipment->status_kategori = $category;
-                        $shipment->color_code = $res['color_code'] ?? $botService->determineColorCode($category);
+                        $shipment->color_code = $color;
 
                         $shipment->sla_days = $res['sla_days'] ?? ($res['sla'] ?? ($shipment->sla_days ?: 2));
                         $shipment->last_tracked_at = $now;

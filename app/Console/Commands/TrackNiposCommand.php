@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Jobs\ReverseSyncGoogleSheetsJob;
 use App\Models\OutgoingShipment;
+use App\Services\NiposFastTracker;
 use App\Services\TrackingBotService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
@@ -28,12 +29,12 @@ class TrackNiposCommand extends Command
      *
      * @var string
      */
-    protected $description = 'Track resi directly against NIPos API and update local database with reverse sync';
+    protected $description = 'Track resi directly against NIPos API using NiposFastTracker and update local database';
 
     /**
      * Execute the console command.
      */
-    public function handle(TrackingBotService $botService): int
+    public function handle(NiposFastTracker $fastTracker, TrackingBotService $botService): int
     {
         $resiOption = $this->option('resi');
         $limit = (int)$this->option('limit');
@@ -47,13 +48,7 @@ class TrackNiposCommand extends Command
             $query->whereIn('no_resi', $resis);
             $this->info("Fetching specific " . count($resis) . " resis: " . implode(', ', $resis));
         } else {
-            if (!$force) {
-                $query->where(function ($q) {
-                    $q->whereIn('status_kategori', ['IN_PROCESS', 'FOLLOW_UP'])
-                      ->orWhereNull('status_kategori')
-                      ->orWhere('status_pos', '!=', 'DELIVERED');
-                })->whereNotIn('status_kategori', ['SUKSES', 'RETUR']);
-            }
+            $query->needsTracking($force);
 
             if (!$trackAll) {
                 $query->limit($limit);
@@ -68,8 +63,8 @@ class TrackNiposCommand extends Command
         }
 
         $totalToTrack = $shipments->count();
-        $this->info("Memulai pelacakan NIPos untuk {$totalToTrack} data resi...");
-        Log::info("TrackNiposCommand: Starting tracking for {$totalToTrack} shipments.");
+        $this->info("Memulai pelacakan NIPos via NiposFastTracker (chunk 40) untuk {$totalToTrack} data resi...");
+        Log::info("TrackNiposCommand: Starting tracking for {$totalToTrack} shipments via NiposFastTracker.");
 
         $tableRows = [];
         $syncPayload = [];
@@ -81,50 +76,74 @@ class TrackNiposCommand extends Command
         cache()->put('bot_running', true, 3600);
         cache()->put('bot_progress', ['current' => 0, 'total' => $totalToTrack], 3600);
 
-        foreach ($shipments->chunk(100) as $chunk) {
+        // Kumpulkan resi per chunk berisi 40 resi per request
+        foreach ($shipments->chunk(40) as $chunk) {
             $chunkResis = $chunk->pluck('no_resi')->toArray();
-            $results = $botService->trackResiList($chunkResis);
+            $results = $fastTracker->trackMany($chunkResis, 40);
 
-            DB::transaction(function () use ($chunk, $results, $botService, &$updatedCount, &$syncPayload, &$tableRows, $totalToTrack, $bar) {
-                $now = now();
+            DB::transaction(function () use ($chunk, $results, $botService, &$updatedCount, &$syncPayload, &$tableRows, $bar) {
+                $now = now()->toDateTimeString();
+                $updatedIds = [];
+                $casesStatusPos = [];
+                $casesKeterangan = [];
+                $casesKategori = [];
+                $casesColor = [];
+                $casesSlaDays = [];
+                $casesTrackedAt = [];
+
                 foreach ($chunk as $shipment) {
                     $resi = $shipment->no_resi;
                     $oldStatus = $shipment->status_pos ?: 'BELUM DI-TRACK';
 
                     if (isset($results[$resi])) {
                         $res = $results[$resi];
-                        $statusPos = $res['status_pos'] ?? ($res['status'] ?? 'IN PROSES');
-                        $keterangan = $res['keterangan'] ?? ($res['penerima'] ?? 'PROSES PENGIRIMAN POS (TRANSIT)');
+                        // Simpan string teks mentah dari kolom STATUS AKHIR apa adanya ke database tanpa klasifikasi if-else
+                        $rawStatusAkhir = $res['status_akhir'] ?? '';
+                        $statusPos = !empty($rawStatusAkhir) ? $rawStatusAkhir : ($shipment->status_pos ?: 'ON PROCESS');
+                        $keterangan = $statusPos;
 
-                        $shipment->status_pos = $statusPos;
-                        $shipment->keterangan = $keterangan;
+                        $category = $botService->categorizeStatus($statusPos, $keterangan);
+                        $color = $botService->determineColorCode($category);
 
-                        $category = $res['status_kategori'] ?? $botService->categorizeStatus($shipment->status_pos, $shipment->keterangan);
-                        $shipment->status_kategori = $category;
-                        $shipment->color_code = $res['color_code'] ?? $botService->determineColorCode($category);
+                        // If already RETUR / ORANGE and not delivered to customer, stay RETUR (ORANGE)
+                        if (($shipment->color_code === 'ORANGE' || $shipment->status_kategori === 'RETUR' || $shipment->isReturn()) && $category !== 'SUKSES') {
+                            $category = 'RETUR';
+                            $color = 'ORANGE';
+                        }
 
-                        $shipment->sla_days = $res['sla_days'] ?? ($res['sla'] ?? ($shipment->sla_days ?: 2));
-                        $shipment->last_tracked_at = $now;
-                        $shipment->save();
+                        // Ekstraksi SLA asli dari hasil NIPOS
+                        $rawSla = $res['sla'] ?? null;
+                        $tglKirim = $shipment->tanggal_kirim ?: ($res['tanggal_kolekting'] ?? null);
+                        $slaDays = $botService->extractSlaDays((string)$rawSla, $tglKirim, $category);
+
+                        $updatedIds[] = $shipment->id;
+                        $casesStatusPos[] = "WHEN id = {$shipment->id} THEN " . DB::getPdo()->quote($statusPos);
+                        $casesKeterangan[] = "WHEN id = {$shipment->id} THEN " . DB::getPdo()->quote($keterangan);
+                        $casesKategori[] = "WHEN id = {$shipment->id} THEN " . DB::getPdo()->quote($category);
+                        $casesColor[] = "WHEN id = {$shipment->id} THEN " . DB::getPdo()->quote($color);
+                        $casesSlaDays[] = "WHEN id = {$shipment->id} THEN " . (int)$slaDays;
+                        $casesTrackedAt[] = "WHEN id = {$shipment->id} THEN " . DB::getPdo()->quote($now);
+
                         $updatedCount++;
 
                         $syncPayload[] = [
                             'resi' => $shipment->no_resi,
-                            'status_pos' => $shipment->status_pos,
-                            'keterangan' => $shipment->keterangan,
-                            'status_kategori' => $shipment->status_kategori,
-                            'color_code' => $shipment->color_code ?: 'PUTIH',
-                            'sla_days' => $shipment->sla_days,
+                            'status_pos' => $statusPos,
+                            'keterangan' => $keterangan,
+                            'status_kategori' => $category,
+                            'color_code' => $color,
+                            'sla_days' => $slaDays,
                         ];
 
                         $tableRows[] = [
                             $shipment->id,
                             $resi,
                             $oldStatus,
-                            $shipment->status_pos,
-                            $shipment->status_kategori,
-                            $shipment->color_code,
-                            substr($shipment->keterangan, 0, 30),
+                            $statusPos,
+                            $category,
+                            $color,
+                            $slaDays,
+                            substr($keterangan, 0, 30),
                         ];
                     } else {
                         $tableRows[] = [
@@ -134,11 +153,27 @@ class TrackNiposCommand extends Command
                             'TIDAK DITEMUKAN / TIMEOUT',
                             $shipment->status_kategori,
                             $shipment->color_code ?: 'PUTIH',
+                            $shipment->sla_days ?: 2,
                             '-',
                         ];
                     }
 
                     $bar->advance();
+                }
+
+                // Batch update ke MySQL agar cepat dan tidak N+1
+                if (!empty($updatedIds)) {
+                    $idList = implode(',', $updatedIds);
+                    DB::statement("
+                        UPDATE outgoing_shipments SET
+                            status_pos = CASE " . implode(' ', $casesStatusPos) . " END,
+                            keterangan = CASE " . implode(' ', $casesKeterangan) . " END,
+                            status_kategori = CASE " . implode(' ', $casesKategori) . " END,
+                            color_code = CASE " . implode(' ', $casesColor) . " END,
+                            sla_days = CASE " . implode(' ', $casesSlaDays) . " END,
+                            last_tracked_at = CASE " . implode(' ', $casesTrackedAt) . " END
+                        WHERE id IN ({$idList})
+                    ");
                 }
             });
 
@@ -149,7 +184,7 @@ class TrackNiposCommand extends Command
         $this->newLine(2);
 
         $this->table(
-            ['ID', 'No Resi', 'Status Lama', 'Status NIPos Baru', 'Kategori', 'Warna', 'Keterangan'],
+            ['ID', 'No Resi', 'Status Lama', 'Status NIPos Baru', 'Kategori', 'Warna', 'SLA', 'Keterangan'],
             $tableRows
         );
 

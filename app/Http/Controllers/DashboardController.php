@@ -35,7 +35,12 @@ class DashboardController extends Controller
     {
         // Dummy data seeding removed - ensure stats return 0 when database is empty
 
-        $selectedSeller = $request->input('seller', 'Semua Seller');
+        $rawSeller = $request->input('seller');
+        if (empty($rawSeller) || $rawSeller === 'Semua Seller' || $rawSeller === 'ALL') {
+            $rawSeller = session('selected_seller', 'Mitra Aliqa');
+        }
+        $selectedSeller = str_contains(strtoupper((string)$rawSeller), 'ZAHERBA') ? 'Mitra Zaherba' : 'Mitra Aliqa';
+        session(['selected_seller' => $selectedSeller]);
         $selectedKategori = $request->input('kategori');
         $selectedMonth = $request->input('month', 'ALL');
         $selectedYear = $request->input('year', date('Y'));
@@ -313,10 +318,39 @@ class DashboardController extends Controller
                 $kantorTujuan = self::deriveKantorPosFromAddress($s->alamat);
             }
 
+            $sellerRaw = $s->nama_seller;
+            $rowSeller = (empty($sellerRaw) || str_contains(strtoupper($sellerRaw), 'ALIQA')) 
+                ? 'Mitra Aliqa' 
+                : (str_contains(strtoupper($sellerRaw), 'ZAHERBA') ? 'Mitra Zaherba' : (str_starts_with($sellerRaw, 'Mitra ') ? $sellerRaw : 'Mitra ' . $sellerRaw));
+
+            $isRetur = ($fu === 'ORANGE') || ($s->status_kategori === 'RETUR');
+            $isDelivered = !$isRetur && (($fu === 'BIRU') || ($s->status_kategori === 'SUKSES'));
+            $isFinal = $isDelivered || $isRetur;
+
+            $sla = (int)($s->sla_days ?? 2);
+            if (!$isFinal && !empty($s->tanggal_kirim)) {
+                try {
+                    $tglKirim = \Carbon\Carbon::parse($s->tanggal_kirim)->startOfDay();
+                    $today = now()->startOfDay();
+                    $elapsedDays = abs((int)$today->diffInDays($tglKirim));
+                    $targetSla = ($s->sla_days !== null && $s->sla_days > 0) ? $s->sla_days : 2;
+
+                    if ($s->sla_days !== null && $s->sla_days < 0) {
+                        $sla = $s->sla_days;
+                    } elseif ($elapsedDays > $targetSla) {
+                        $sla = -1 * ($elapsedDays - $targetSla);
+                    } else {
+                        $sla = max(0, $targetSla - $elapsedDays);
+                    }
+                } catch (\Throwable $e) {
+                    $sla = (int)($s->sla_days ?? 2);
+                }
+            }
+
             return [
                 'id' => (string)$s->id,
                 'resi' => $s->no_resi,
-                'seller' => $s->nama_seller ?? 'Aliqa',
+                'seller' => $rowSeller,
                 'tanggalKirim' => $tglStr,
                 'tujuan' => $s->alamat ?? '-',
                 'penerima' => $s->nama_penerima ?? '-',
@@ -324,10 +358,12 @@ class DashboardController extends Controller
                 'alamat' => $s->alamat ?? '-',
                 'keterangan' => $s->keterangan ?? '-',
                 'nipos' => $s->status_pos ?? 'ON PROCESS',
-                'sla' => (int)($s->sla_days ?? 2),
+                'sla' => $sla,
                 'fu' => $fu,
                 'note' => $s->noted ?: $s->keterangan,
-                'escalationDate' => $s->fu_pos_date ?: ($s->last_tracked_at ? (is_string($s->last_tracked_at) ? $s->last_tracked_at : $s->last_tracked_at->format('Y-m-d H:i')) : null),
+                'escalationDate' => $s->fu_pos_date,
+                'lastTrackedAt' => $s->last_tracked_at ? (is_string($s->last_tracked_at) ? $s->last_tracked_at : $s->last_tracked_at->format('Y-m-d H:i')) : null,
+                'statusKategori' => $s->status_kategori,
                 'kantorTujuan' => $kantorTujuan,
                 'kantorPosPhone' => $office ? $office->phone_wa : '',
                 'kantorPosPic' => $office ? ($office->pic_name ?: $office->name) : '',
@@ -362,34 +398,37 @@ class DashboardController extends Controller
         }
 
         $monthCounts = array_fill(0, 12, 0);
+        $monthPendingCounts = array_fill(0, 12, 0);
         for ($m = 1; $m <= 12; $m++) {
             $monthCounts[$m - 1] = (clone $monthQuery)->whereMonth('tanggal_kirim', $m)->count();
+            $monthPendingCounts[$m - 1] = (clone $monthQuery)
+                ->whereMonth('tanggal_kirim', $m)
+                ->needsTracking()
+                ->count();
         }
         $yearTotal = (clone $monthQuery)->count();
 
-        $dbSellers = OutgoingShipment::select('nama_seller')
-            ->distinct()
-            ->whereNotNull('nama_seller')
-            ->where('nama_seller', '!=', '')
-            ->where('nama_seller', '!=', 'ALL')
-            ->pluck('nama_seller')
-            ->toArray();
+        $sellersList = ['Mitra Aliqa', 'Mitra Zaherba'];
 
-        $defaultSellers = ['Mitra Aliqa', 'Mitra Zaherba', 'Mitra Herbal', 'Mitra Nusantara', 'Mitra Barokah'];
-        $formattedDbSellers = array_map(fn($s) => str_starts_with($s, 'Mitra ') ? $s : 'Mitra ' . $s, $dbSellers);
-        $sellersList = array_values(array_unique(array_merge($defaultSellers, $formattedDbSellers)));
-
-        $totalShipments = OutgoingShipment::count();
-        $pendingShipments = OutgoingShipment::whereNotIn('status_kategori', ['SUKSES', 'RETUR'])->count();
-        $trackedShipments = OutgoingShipment::whereNotNull('last_tracked_at')->count();
+        $totalShipments = (clone $statsBaseQuery)->count();
+        $pendingShipments = (clone $statsBaseQuery)->needsTracking()->count();
+        $trackedShipments = (clone $statsBaseQuery)->whereNotNull('last_tracked_at')->count();
         $progressPct = $totalShipments > 0 ? round((($totalShipments - $pendingShipments) / $totalShipments) * 100, 1) : 100;
+
+        $isZaherba = str_contains(strtoupper($selectedSeller), 'ZAHERBA');
+        $defaultSheetId = $isZaherba
+            ? env('GOOGLE_SHEET_ID_ZAHERBA', '1wUqPnU1_QOq6WocHwpxAhjhScjlb_ZhhSy8I2WqGQKw')
+            : env('GOOGLE_SHEET_ID_ALIQA', '1EeckOBzI5EPNTT1bHsqu6kar9asKD6Ifar2CpTkSnBg');
+        $sheetUrl = SystemSetting::get('google_sheet_url_' . ($isZaherba ? 'zaherba' : 'aliqa'))
+            ?: "https://docs.google.com/spreadsheets/d/{$defaultSheetId}/edit";
 
         return Inertia::render('Dashboard', [
             'shipments' => $paginatedResult,
             'stats' => $stats,
             'monthCounts' => $monthCounts,
+            'monthPendingCounts' => $monthPendingCounts,
             'yearTotal' => $yearTotal,
-            'sellersList' => array_values(array_unique($sellersList)),
+            'sellersList' => $sellersList,
             'postOffices' => $allPostOffices,
             'trackingProgress' => [
                 'total' => $totalShipments,
@@ -398,8 +437,8 @@ class DashboardController extends Controller
                 'percentage' => $progressPct,
                 'is_running' => false,
             ],
-            'googleSheetUrl' => SystemSetting::get('google_sheet_url', 'https://docs.google.com/spreadsheets/d/1wUqPnU1_QOq6WocHwpxAhjhScjlb_ZhhSy8I2WqGQKw/edit'),
-            'googleSheetId' => SystemSetting::get('google_sheet_id', '1wUqPnU1_QOq6WocHwpxAhjhScjlb_ZhhSy8I2WqGQKw'),
+            'googleSheetUrl' => $sheetUrl,
+            'googleSheetId' => $defaultSheetId,
             'googleSheetWebhookUrl' => SystemSetting::get('google_sheet_webhook_url', env('GOOGLE_SHEET_WEBHOOK_URL', '')),
             'filters' => [
                 'seller' => $selectedSeller,
@@ -423,7 +462,7 @@ class DashboardController extends Controller
         $delivered = OutgoingShipment::where('status_kategori', 'SUKSES')->count();
         $retur = OutgoingShipment::where('status_kategori', 'RETUR')->count();
         $tracked = OutgoingShipment::whereNotNull('last_tracked_at')->count();
-        $pending = OutgoingShipment::whereNotIn('status_kategori', ['SUKSES', 'RETUR'])->count();
+        $pending = OutgoingShipment::needsTracking()->count();
         $percentage = $total > 0 ? round((($total - $pending) / $total) * 100, 1) : 100;
 
         return response()->json([
@@ -681,11 +720,21 @@ class DashboardController extends Controller
 
             // High-speed direct streaming import
             $importer = new ShipmentsImport($defaultSeller);
-            $importer->importFile($storedPath, $defaultSeller);
+            $syncedItems = $importer->importFile($storedPath, $defaultSeller);
 
             // Clean up temp file
             if (file_exists($storedPath)) {
                 @unlink($storedPath);
+            }
+
+            // Otomatis sinkronkan data hasil FU Kantor Pos ke Google Spreadsheet (Two-Way Sync / Reverse Sync)
+            $syncedCount = count($syncedItems);
+            if ($syncedCount > 0) {
+                foreach (array_chunk($syncedItems, 250) as $chunk) {
+                    \App\Jobs\ReverseSyncGoogleSheetsJob::dispatch($chunk);
+                }
+                Log::info("DashboardController::import: Dispatched ReverseSyncGoogleSheetsJob for {$syncedCount} imported items.");
+                return redirect()->back()->with('success', "File data ({$syncedCount} resi) berhasil diimpor! Data follow-up & perubahan warna otomatis disinkronkan ke Google Sheets.");
             }
 
             return redirect()->back()->with('success', 'File data berhasil diimpor! Seluruh data resi telah tersimpan fix ke sistem.');
@@ -714,12 +763,8 @@ class DashboardController extends Controller
      */
     public function trackNow(Request $request)
     {
-        // Fetch only resi IDs needing tracking (excluding SUKSES and RETUR)
-        $shipmentIds = OutgoingShipment::where(function ($q) {
-                $q->whereIn('status_kategori', ['IN_PROCESS', 'FOLLOW_UP'])
-                  ->orWhereNull('status_kategori');
-            })
-            ->whereNotIn('status_kategori', ['SUKSES', 'RETUR'])
+        // Fetch only resi IDs needing tracking (excluding terminal SUKSES and terminal RETUR)
+        $shipmentIds = OutgoingShipment::needsTracking()
             ->pluck('id')
             ->toArray();
 
@@ -825,15 +870,22 @@ class DashboardController extends Controller
         $webhookUrl = trim($request->input('webhook_url', ''));
         $targetMonth = $request->input('month');
         $targetSheet = $request->input('sheet');
+        $seller = $request->input('seller', 'Mitra Aliqa');
+        $isZaherba = str_contains(strtoupper((string)$seller), 'ZAHERBA');
 
         if (empty($url)) {
-            $url = SystemSetting::get('google_sheet_url') ?: SystemSetting::get('google_sheet_id');
+            $defaultId = $isZaherba
+                ? env('GOOGLE_SHEET_ID_ZAHERBA', '1wUqPnU1_QOq6WocHwpxAhjhScjlb_ZhhSy8I2WqGQKw')
+                : env('GOOGLE_SHEET_ID_ALIQA', '1EeckOBzI5EPNTT1bHsqu6kar9asKD6Ifar2CpTkSnBg');
+            $url = SystemSetting::get('google_sheet_url_' . ($isZaherba ? 'zaherba' : 'aliqa'))
+                ?: "https://docs.google.com/spreadsheets/d/{$defaultId}/edit";
         }
 
         $spreadsheetId = SystemSetting::extractSpreadsheetId($url);
         if (!$spreadsheetId) {
-            $spreadsheetId = SystemSetting::get('google_sheet_id') 
-                ?: env('GOOGLE_SHEET_ID_ALIQA', '1EeckOBzI5EPNTT1bHsqu6kar9asKD6Ifar2CpTkSnBg');
+            $spreadsheetId = $isZaherba
+                ? env('GOOGLE_SHEET_ID_ZAHERBA', '1wUqPnU1_QOq6WocHwpxAhjhScjlb_ZhhSy8I2WqGQKw')
+                : env('GOOGLE_SHEET_ID_ALIQA', '1EeckOBzI5EPNTT1bHsqu6kar9asKD6Ifar2CpTkSnBg');
         }
 
         if (!$spreadsheetId) {
@@ -955,6 +1007,17 @@ class DashboardController extends Controller
             } elseif (empty($sheet) && (empty($month) || (string)$month === '0' || (string)$month === 'current')) {
                 // Default to current running month if no specific month or ALL specified
                 $query->whereMonth('tanggal_kirim', (int)date('n'));
+            }
+
+            $seller = $request->input('seller');
+            if (!empty($seller) && $seller !== 'ALL' && $seller !== 'Semua Seller') {
+                $cleanSeller = trim(preg_replace('/^Mitra\s+/i', '', $seller));
+                $query->where(function ($q) use ($seller, $cleanSeller) {
+                    $q->where('nama_seller', $seller)
+                      ->orWhere('nama_seller', $cleanSeller)
+                      ->orWhere('nama_seller', 'Mitra ' . $cleanSeller)
+                      ->orWhere('nama_seller', 'LIKE', "%{$cleanSeller}%");
+                });
             }
 
             $query->where(function ($q) {

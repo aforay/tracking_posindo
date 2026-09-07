@@ -15,6 +15,7 @@ import {
   CheckCircle2,
   ArrowUpDown,
   RefreshCw,
+  Bot,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -188,7 +189,7 @@ export function DataTable({
                 const isDelivered = !isRetur && (row.fu === "BIRU" || niposUpper === "DELIVERED");
                 const isFinal = isDelivered || isRetur;
                 const slaNum = typeof row.sla === "number" ? row.sla : parseInt(String(row.sla || "0"), 10);
-                const isOverdue = isNaN(slaNum) ? false : (slaNum < 0 || slaNum > 4);
+                const isOverdue = isNaN(slaNum) ? false : (slaNum < 0 || Math.abs(slaNum) > 4);
 
                 return (
                   <motion.tr
@@ -344,8 +345,14 @@ export function DataTable({
                         </div>
                       )}
                       {row.escalationDate && (
-                        <div className="mt-1 text-[11px] font-semibold">
+                        <div className="mt-1 inline-flex items-center gap-1 rounded bg-blue-100/90 text-blue-900 border border-blue-300 px-1.5 py-0.5 text-[10px] font-bold">
                           Eskalasi Pos Pusat: {formatDate(row.escalationDate)}
+                        </div>
+                      )}
+                      {row.lastTrackedAt && (
+                        <div className="mt-1 flex items-center gap-1 text-[10px] font-medium text-slate-500" title={`Terakhir diverifikasi oleh Bot NIPOS: ${row.lastTrackedAt}`}>
+                          <Bot className="h-3 w-3 text-blue-600 shrink-0" />
+                          <span>NIPOS: {row.lastTrackedAt}</span>
                         </div>
                       )}
                     </td>
@@ -384,9 +391,9 @@ export function DataTable({
                         } ${dark && !isOverdue ? "bg-white/15 text-white" : ""}`}
                       >
                         {isOverdue && <AlertTriangle className="h-3.5 w-3.5 text-red-600 shrink-0" />}
-                        {isOverdue && row.sla < 0
-                          ? `Over SLA ${Math.abs(row.sla)} Hari`
-                          : `${Math.abs(row.sla)} Hari`}
+                        {isOverdue
+                          ? `Over SLA ${Math.abs(slaNum)} Hari`
+                          : `${Math.abs(slaNum)} Hari`}
                       </span>
                     </td>
                     <td className="px-3 py-2">

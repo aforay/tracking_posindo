@@ -36,7 +36,8 @@ return [
     ],
 
     'nipos' => [
-        'url' => env('NIPOS_URL'),
+        'url' => env('NIPOS_URL', 'https://pid.posindonesia.co.id/lacak/admin/lacak_item_banyakzaref.php'),
+        'cookie' => env('NIPOS_SESSION_COOKIE', ''),
     ],
 
 ];

@@ -24,8 +24,9 @@ class ShipmentsImport
 
     /**
      * Import Excel/CSV using OpenSpout Streaming Reader (<20MB RAM)
+     * @return array Array of imported/updated tracking payloads ready for Google Sheets sync
      */
-    public function importFile(string $filePath, string $defaultSeller = 'Aliqa'): void
+    public function importFile(string $filePath, string $defaultSeller = 'Aliqa'): array
     {
         @ini_set('memory_limit', '2048M');
         @set_time_limit(0);
@@ -35,7 +36,7 @@ class ShipmentsImport
         if (!file_exists($filePath)) {
             $msg = "ShipmentsImport: File not found at {$filePath}";
             Log::error($msg);
-            return;
+            return [];
         }
 
         $extension = strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
@@ -43,22 +44,24 @@ class ShipmentsImport
         Log::info($msg);
 
         if (in_array($extension, ['xlsx', 'csv'])) {
-            $this->streamWithOpenSpout($filePath, $extension);
+            return $this->streamWithOpenSpout($filePath, $extension);
         } else {
             // Fallback for .xls (BIFF8) or other formats using low-memory chunking
-            $this->streamWithPhpSpreadsheetChunking($filePath);
+            return $this->streamWithPhpSpreadsheetChunking($filePath);
         }
     }
 
     /**
      * Ultra-fast OpenSpout streaming parser (< 20MB RAM) across MULTIPLE SHEETS (Compatible OpenSpout v4/v5)
+     * @return array Array of imported/updated tracking payloads ready for Google Sheets sync
      */
-    protected function streamWithOpenSpout(string $filePath, string $extension): void
+    protected function streamWithOpenSpout(string $filePath, string $extension): array
     {
         $totalProcessedRows = 0;
         $totalInsertedRows = 0;
         $detectedHeaders = [];
         $sampleRow = [];
+        $allUpdatedPayloads = [];
 
         try {
             if ($extension === 'csv') {
@@ -136,8 +139,11 @@ class ShipmentsImport
 
                     // Process in batches of 1,000 rows to keep memory ultra low (< 20MB)
                     if (count($batchBuffer) >= 1000) {
-                        $inserted = $this->processBufferBatch($batchBuffer, $resisInBuffer);
-                        $totalInsertedRows += $inserted;
+                        $syncedItems = $this->processBufferBatchWithPayloads($batchBuffer, $resisInBuffer);
+                        $totalInsertedRows += count($syncedItems);
+                        foreach ($syncedItems as $si) {
+                            $allUpdatedPayloads[] = $si;
+                        }
                         $batchBuffer = [];
                         $resisInBuffer = [];
                     }
@@ -146,8 +152,11 @@ class ShipmentsImport
 
             // Process remaining rows in buffer
             if (!empty($batchBuffer)) {
-                $inserted = $this->processBufferBatch($batchBuffer, $resisInBuffer);
-                $totalInsertedRows += $inserted;
+                $syncedItems = $this->processBufferBatchWithPayloads($batchBuffer, $resisInBuffer);
+                $totalInsertedRows += count($syncedItems);
+                foreach ($syncedItems as $si) {
+                    $allUpdatedPayloads[] = $si;
+                }
             }
 
             $reader->close();
@@ -160,19 +169,23 @@ class ShipmentsImport
             }
         } catch (Throwable $e) {
             Log::error("OpenSpout streaming error: " . $e->getMessage() . " - fallback to chunking.");
-            $this->streamWithPhpSpreadsheetChunking($filePath);
+            return $this->streamWithPhpSpreadsheetChunking($filePath);
         }
+
+        return $allUpdatedPayloads;
     }
 
     /**
      * Fallback PhpSpreadsheet chunking parser for .xls files across MULTIPLE SHEETS
+     * @return array Array of imported/updated tracking payloads ready for Google Sheets sync
      */
-    protected function streamWithPhpSpreadsheetChunking(string $filePath): void
+    protected function streamWithPhpSpreadsheetChunking(string $filePath): array
     {
         $totalProcessedRows = 0;
         $totalInsertedRows = 0;
         $detectedHeaders = [];
         $sampleRow = [];
+        $allUpdatedPayloads = [];
 
         try {
             $reader = IOFactory::createReaderForFile($filePath);
@@ -229,8 +242,11 @@ class ShipmentsImport
                     }
 
                     if (count($batchBuffer) >= 1000) {
-                        $inserted = $this->processBufferBatch($batchBuffer, $resisInBuffer);
-                        $totalInsertedRows += $inserted;
+                        $syncedItems = $this->processBufferBatchWithPayloads($batchBuffer, $resisInBuffer);
+                        $totalInsertedRows += count($syncedItems);
+                        foreach ($syncedItems as $si) {
+                            $allUpdatedPayloads[] = $si;
+                        }
                         $batchBuffer = [];
                         $resisInBuffer = [];
                     }
@@ -238,8 +254,11 @@ class ShipmentsImport
             }
 
             if (!empty($batchBuffer)) {
-                $inserted = $this->processBufferBatch($batchBuffer, $resisInBuffer);
-                $totalInsertedRows += $inserted;
+                $syncedItems = $this->processBufferBatchWithPayloads($batchBuffer, $resisInBuffer);
+                $totalInsertedRows += count($syncedItems);
+                foreach ($syncedItems as $si) {
+                    $allUpdatedPayloads[] = $si;
+                }
             }
 
             $spreadsheet->disconnectWorksheets();
@@ -254,6 +273,8 @@ class ShipmentsImport
         } catch (Throwable $e) {
             Log::error("PhpSpreadsheet chunking error: " . $e->getMessage());
         }
+
+        return $allUpdatedPayloads;
     }
 
     /**
@@ -283,7 +304,7 @@ class ShipmentsImport
                 $foundCount++;
             }
             // Tanggal Kirim Column
-            elseif (in_array($clean, ['aliqatanggal', 'tglkirim', 'tanggalkirim', 'tgl', 'tanggal', 'tglkirimpos', 'tanggalkirimpos'])) {
+            elseif (str_contains($clean, 'tanggal') || str_contains($clean, 'tgl') || in_array($clean, ['aliqatanggal', 'tglkirim', 'tanggalkirim', 'tgl', 'tanggal', 'tglkirimpos', 'tanggalkirimpos', 'date'])) {
                 $map['tanggal_kirim'] = $colIdx;
                 $foundCount++;
             }
@@ -688,9 +709,20 @@ class ShipmentsImport
                 ];
                 $engStr = str_ireplace(array_keys($indoToEng), array_values($indoToEng), $str);
 
-                $parsedCarbon = Carbon::parse($engStr);
-                if ($parsedCarbon && $parsedCarbon->year >= 2020 && $parsedCarbon->year <= 2030) {
-                    return $parsedCarbon->format('Y-m-d');
+                $hasDigit = preg_match('/\d/', $str);
+                $hasMonth = false;
+                foreach (array_keys($indoToEng) as $mName) {
+                    if (stripos($str, $mName) !== false) {
+                        $hasMonth = true;
+                        break;
+                    }
+                }
+
+                if ($hasDigit || $hasMonth) {
+                    $parsedCarbon = Carbon::parse($engStr);
+                    if ($parsedCarbon && $parsedCarbon->year >= 2020 && $parsedCarbon->year <= 2030) {
+                        return $parsedCarbon->format('Y-m-d');
+                    }
                 }
             } catch (Throwable $e) {
                 // Fallback below
@@ -745,8 +777,18 @@ class ShipmentsImport
      */
     protected function processBufferBatch(array $batchBuffer, array $resisInBuffer): int
     {
+        $payloads = $this->processBufferBatchWithPayloads($batchBuffer, $resisInBuffer);
+        return count($payloads);
+    }
+
+    /**
+     * Process 1,000 rows buffer batch with DB Transaction & Data Preservation
+     * @return array Array of formatted payload items for Google Sheets reverse sync
+     */
+    protected function processBufferBatchWithPayloads(array $batchBuffer, array $resisInBuffer): array
+    {
         if (empty($batchBuffer)) {
-            return 0;
+            return [];
         }
 
         // Deduplicate buffer batch by no_resi to ensure clean unique key upserting
@@ -900,9 +942,37 @@ class ShipmentsImport
         } catch (Throwable $e) {
             DB::rollBack();
             Log::error("ERROR IMPORT: " . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
-            return 0;
+            return [];
         }
 
-        return $insertedCount;
+        // 3. Construct Sync Payloads for Google Sheets
+        $statusLabelMap = [
+            'BIRU'     => 'PAKET SUKSES (DELIVERED)',
+            'ORANGE'   => 'PAKET RETUR (RETURN)',
+            'KUNING'   => 'SUDAH DI FU (1x)',
+            'HIJAU'    => 'FU 2 KALI',
+            'BIRU_TUA' => 'FU POS (ESKALASI KC/KCU)',
+            'PUTIH'    => 'BELUM DI FOLLOW UP',
+        ];
+
+        $syncPayloads = [];
+        foreach ($mergedBatch as $item) {
+            $cc = $item['color_code'] ?: 'PUTIH';
+            $slaStr = $item['sla_days'] !== null ? (string)$item['sla_days'] : '';
+            $syncPayloads[] = [
+                'resi' => $item['no_resi'],
+                'seller' => $item['nama_seller'],
+                'status_pos' => $item['status_pos'],
+                'keterangan' => $item['keterangan'],
+                'status_kategori' => $item['status_kategori'],
+                'color_code' => $cc,
+                'status_label' => $statusLabelMap[$cc] ?? $cc,
+                'fu_type' => $cc,
+                'sla' => $slaStr,
+                'sla_days' => $slaStr,
+            ];
+        }
+
+        return $syncPayloads;
     }
 }

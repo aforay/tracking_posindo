@@ -30,7 +30,7 @@ export function ExportPanel({
   const [scope, setScope] = useState<"all" | "fu">("all");
 
   const safeRows = useMemo(() => (Array.isArray(rows) ? rows : []), [rows]);
-  const safeSeller = seller || "Semua Seller";
+  const safeSeller = seller || "Mitra Aliqa";
 
   const data = useMemo(
     () =>
@@ -78,7 +78,12 @@ export function ExportPanel({
         `${r.penerima} / ${r.telepon}`,
         r.keterangan,
         r.nipos,
-        r.sla,
+        (() => {
+          const sNum = typeof r.sla === "number" ? r.sla : parseInt(String(r.sla || "0"), 10);
+          return !isNaN(sNum) && (sNum < 0 || Math.abs(sNum) > 4)
+            ? `Over SLA ${Math.abs(sNum)} Hari`
+            : `${Math.abs(sNum)} Hari`;
+        })(),
         fuMeta[r.fu]?.label || r.fu,
         r.note ?? "",
       ]),
@@ -220,7 +225,14 @@ export function ExportPanel({
                     <td>{r.tujuan}</td>
                     <td>{r.penerima}</td>
                     <td>{r.nipos}</td>
-                    <td>{r.sla}</td>
+                    <td>
+                      {(() => {
+                        const sNum = typeof r.sla === "number" ? r.sla : parseInt(String(r.sla || "0"), 10);
+                        return !isNaN(sNum) && (sNum < 0 || Math.abs(sNum) > 4)
+                          ? `Over SLA ${Math.abs(sNum)} Hari`
+                          : `${Math.abs(sNum)} Hari`;
+                      })()}
+                    </td>
                     <td className="font-semibold">{fuMeta[r.fu]?.label || r.fu}</td>
                   </tr>
                 ))}
