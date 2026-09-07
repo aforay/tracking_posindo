@@ -27,6 +27,8 @@ import {
   type Shipment,
   type PostOffice,
   type FuStatus,
+  type WaTemplateType,
+  WA_TEMPLATES,
   generatePostOfficeWaMessage,
 } from "@/lib/posindo";
 
@@ -51,6 +53,7 @@ export function WhatsAppFollowUpModal({
   const [phoneNumber, setPhoneNumber] = useState<string>("");
   const [picName, setPicName] = useState<string>("");
   const [customNote, setCustomNote] = useState<string>("");
+  const [selectedTemplate, setSelectedTemplate] = useState<WaTemplateType>("ANTAR_ULANG");
   const [autoMarkFuPos, setAutoMarkFuPos] = useState<boolean>(true);
   const [autoMarkStatus, setAutoMarkStatus] = useState<FuStatus>("BIRU_TUA");
 
@@ -100,8 +103,8 @@ export function WhatsAppFollowUpModal({
   }, [selectedOfficeId, postOffices, shipment]);
 
   const waMessage = useMemo(() => {
-    return generatePostOfficeWaMessage(shipment, selectedOfficeName, customNote);
-  }, [shipment, selectedOfficeName, customNote]);
+    return generatePostOfficeWaMessage(shipment, selectedOfficeName, customNote, selectedTemplate);
+  }, [shipment, selectedOfficeName, customNote, selectedTemplate]);
 
   const cleanPhone = useMemo(() => {
     let clean = phoneNumber.replace(/[^0-9]/g, "");
@@ -233,6 +236,33 @@ export function WhatsAppFollowUpModal({
               </span>
               <span className="text-slate-700 font-normal">{shipment.alamat}</span>
             </div>
+          </div>
+
+          {/* Pilihan Template Pesan WhatsApp */}
+          <div>
+            <label className="text-xs font-bold text-slate-700 flex items-center justify-between mb-1">
+              <span className="flex items-center gap-1.5">
+                <MessageSquare className="w-3.5 h-3.5 text-blue-600" />
+                Pilihan Template Pesan WhatsApp CS:
+              </span>
+              <span className="text-[10px] text-muted-foreground font-normal">
+                Sesuaikan skenario follow-up paket
+              </span>
+            </label>
+            <select
+              value={selectedTemplate}
+              onChange={(e) => setSelectedTemplate(e.target.value as WaTemplateType)}
+              className="w-full text-xs font-bold bg-white border border-slate-300 rounded-lg px-2.5 py-2 text-slate-800 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none shadow-sm cursor-pointer"
+            >
+              {WA_TEMPLATES.map((tpl) => (
+                <option key={tpl.id} value={tpl.id} className="font-semibold text-slate-800 py-1">
+                  {tpl.label}
+                </option>
+              ))}
+            </select>
+            <p className="text-[11px] text-slate-500 mt-1 italic">
+              💡 {WA_TEMPLATES.find((t) => t.id === selectedTemplate)?.desc}
+            </p>
           </div>
 
           {/* Custom Note Addition */}

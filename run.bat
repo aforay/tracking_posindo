@@ -38,17 +38,11 @@ if not exist ".env" (
     php artisan key:generate
 )
 
-:: 3. Pastikan database SQLite siap
-if not exist "database\database.sqlite" (
-    echo [INFO] Menyiapkan database SQLite...
-    type nul > "database\database.sqlite"
-)
-
-:: 4. Jalankan Migrasi Database
+:: 3. Jalankan Migrasi Database MySQL
 echo [INFO] Memeriksa migrasi database...
 php artisan migrate --force
 
-:: 5. Cek apakah frontend build sudah ada
+:: 4. Cek apakah frontend build sudah ada
 if not exist "public\build\manifest.json" (
     echo [INFO] Build frontend belum ditemukan. Membangun aset dengan NPM...
     where npm >nul 2>nul
@@ -62,16 +56,26 @@ if not exist "public\build\manifest.json" (
 
 echo.
 echo =======================================================
-echo  Server siap berjalan!
-echo  Membuka browser otomatis ke: http://localhost:8000
+echo  Server & Queue Worker siap berjalan!
+echo  - Web Server   : http://localhost:8000
+echo  - Queue Worker : Berjalan otomatis di background
+echo                   (timeout=300, tries=3)
+echo.
 echo  Tekan Ctrl+C di jendela ini untuk mematikan server.
 echo =======================================================
 echo.
+
+:: 5. Jalankan Laravel Queue Worker di background
+echo [INFO] Menjalankan Queue Worker di background...
+start "Tracking Posindo - Queue Worker" /min cmd /c "php artisan queue:work --timeout=300 --tries=3"
 
 :: 6. Buka browser otomatis setelah delay 2 detik di background
 start /min cmd /c "timeout /t 2 >nul & start http://localhost:8000"
 
 :: 7. Jalankan server Laravel
 php artisan serve --port=8000
+
+:: 8. Bersihkan proses background saat server ditutup
+taskkill /FI "WINDOWTITLE eq Tracking Posindo - Queue Worker*" /F >nul 2>nul
 
 pause

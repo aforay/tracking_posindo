@@ -14,6 +14,8 @@ use App\Models\OutgoingShipment;
 use App\Models\SystemSetting;
 use App\Services\TrackingBotService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Inertia\Inertia;
 use Maatwebsite\Excel\Facades\Excel;
@@ -46,17 +48,36 @@ class DashboardController extends Controller
         $selectedYear = $request->input('year', date('Y'));
         $selectedColor = $request->input('color');
         $searchQuery = $request->input('search');
+        $isOverdue = $request->boolean('overdue') || $request->input('sla_filter') === 'overdue';
         $sortBy = $request->input('sort', 'sheet');
         $sortDirection = strtolower($request->input('direction', 'asc')) === 'desc' ? 'desc' : 'asc';
 
-        // Auto-sync active filter to Google Spreadsheet via Webhook
+        // Auto-sync active filter to Google Spreadsheet via Webhook (with Debounce & Throttling)
         if ($request->has('seller') || $request->has('month') || $request->has('color') || $request->has('search')) {
-            SyncSheetFilterJob::dispatch(
-                $selectedSeller,
-                $selectedMonth,
-                $selectedColor,
-                $searchQuery
-            );
+            $filterSig = md5("{$selectedSeller}|{$selectedMonth}|{$selectedColor}|{$searchQuery}");
+            $sigCacheKey = 'sheet_filter_sig_' . md5($selectedSeller);
+
+            // Only dispatch when the filter parameters have actually changed
+            if (Cache::get($sigCacheKey) !== $filterSig) {
+                Cache::put($sigCacheKey, $filterSig, now()->addHours(2));
+
+                // Debounce: prune any pending stale SyncSheetFilterJob in the queue so only the latest is executed
+                try {
+                    DB::table('jobs')
+                        ->where('payload', 'LIKE', '%SyncSheetFilterJob%')
+                        ->delete();
+                } catch (\Throwable $e) {
+                    // Ignore DB errors if table locked or in-memory sqlite testing
+                }
+
+                // Dispatch with 3-second delay debounce to absorb rapid keystrokes/clicks
+                SyncSheetFilterJob::dispatch(
+                    $selectedSeller,
+                    $selectedMonth,
+                    $selectedColor,
+                    $searchQuery
+                )->delay(now()->addSeconds(3));
+            }
         }
 
         $query = OutgoingShipment::query();
@@ -208,55 +229,55 @@ class DashboardController extends Controller
             });
         }
 
+        // 5. Overdue / Lewat SLA / Macet > 4 Hari Filter
+        $fourDaysAgo = now()->subDays(4)->toDateString();
+        if ($isOverdue) {
+            $query->where(function ($q) {
+                $q->whereNull('status_kategori')
+                  ->orWhereNotIn('status_kategori', ['SUKSES', 'RETUR']);
+            })->where(function ($q) {
+                $q->whereNull('color_code')
+                  ->orWhereNotIn('color_code', ['BIRU', 'ORANGE']);
+            })->whereDate('tanggal_kirim', '<=', $fourDaysAgo);
+        }
+
+        // Summary Statistics Cards (calculated respecting seller/month/year/search filters, but independent of color filter so all card counters reflect the full breakdown)
+        // Single Query Aggregation: calculate all 8 KPI cards plus tracking progress in 1 single fast query
+        $statsRow = (clone $statsBaseQuery)->selectRaw("
+            COUNT(*) as total,
+            SUM(CASE WHEN color_code = 'BIRU' OR ((color_code IS NULL OR color_code = '') AND status_kategori = 'SUKSES') THEN 1 ELSE 0 END) as sukses,
+            SUM(CASE WHEN color_code = 'ORANGE' OR ((color_code IS NULL OR color_code = '') AND status_kategori = 'RETUR') THEN 1 ELSE 0 END) as retur,
+            SUM(CASE WHEN color_code = 'PUTIH' OR ((color_code IS NULL OR color_code = '') AND (status_kategori = 'IN_PROCESS' OR status_kategori IS NULL OR status_kategori = '' OR status_kategori NOT IN ('SUKSES', 'RETUR', 'FOLLOW_UP'))) THEN 1 ELSE 0 END) as belum,
+            SUM(CASE WHEN color_code = 'KUNING' OR ((color_code IS NULL OR color_code = '') AND status_kategori = 'FOLLOW_UP') THEN 1 ELSE 0 END) as sudah_fu,
+            SUM(CASE WHEN color_code = 'HIJAU' THEN 1 ELSE 0 END) as fu_2_kali,
+            SUM(CASE WHEN color_code = 'BIRU_TUA' THEN 1 ELSE 0 END) as fu_pos,
+            SUM(CASE WHEN color_code IN ('KUNING', 'HIJAU', 'BIRU_TUA') OR ((color_code IS NULL OR color_code = '') AND status_kategori = 'FOLLOW_UP') THEN 1 ELSE 0 END) as follow_up,
+            SUM(CASE WHEN last_tracked_at IS NOT NULL THEN 1 ELSE 0 END) as tracked,
+            SUM(CASE WHEN (
+                (status_kategori IS NULL OR status_kategori NOT IN ('SUKSES', 'RETUR')) 
+                AND (color_code IS NULL OR color_code NOT IN ('BIRU', 'ORANGE')) 
+                AND tanggal_kirim <= '{$fourDaysAgo}'
+            ) THEN 1 ELSE 0 END) as overdue,
+            SUM(CASE WHEN (
+                status_pos IS NULL OR status_pos = '' OR status_pos LIKE '%PROCESS%' 
+                OR status_kategori NOT IN ('SUKSES', 'RETUR') OR status_kategori IS NULL 
+                OR color_code NOT IN ('BIRU', 'ORANGE') OR color_code IS NULL 
+                OR status_pos IN ('unBag', 'UNBAG', 'INVEHICLE', 'INLOCATION', 'inBag', 'INBAG', 'DELIVERYRUNSHEET', 'FAILEDTODELIVERED', 'ARRIVEDUNPAID', 'Irregularity', 'MANIFEST', 'ARRIVAL', 'DEPARTURE')
+                OR ((status_kategori = 'RETUR' OR color_code = 'ORANGE') AND (status_pos IS NULL OR (status_pos NOT LIKE '%RETURN DELIVERY%' AND status_pos NOT LIKE '%RETURN TO SENDER%' AND status_pos NOT LIKE '%DITERIMA PENGIRIM%')))
+                OR ((status_kategori = 'SUKSES' OR color_code = 'BIRU') AND (status_pos IS NULL OR status_pos NOT LIKE '%DELIVERED%' OR status_pos LIKE '%RETURN%'))
+            ) THEN 1 ELSE 0 END) as pending
+        ")->first();
+
         $stats = [
-            'total' => (clone $statsBaseQuery)->count(),
-            'sukses' => (clone $statsBaseQuery)->where(function ($q) {
-                $q->where('color_code', 'BIRU')
-                  ->orWhere(function ($sub) {
-                      $sub->where(function ($c) {
-                          $c->whereNull('color_code')->orWhere('color_code', '');
-                      })->where('status_kategori', 'SUKSES');
-                  });
-            })->count(),
-            'retur' => (clone $statsBaseQuery)->where(function ($q) {
-                $q->where('color_code', 'ORANGE')
-                  ->orWhere(function ($sub) {
-                      $sub->where(function ($c) {
-                          $c->whereNull('color_code')->orWhere('color_code', '');
-                      })->where('status_kategori', 'RETUR');
-                  });
-            })->count(),
-            'belum' => (clone $statsBaseQuery)->where(function ($q) {
-                $q->where('color_code', 'PUTIH')
-                  ->orWhere(function ($sub) {
-                      $sub->where(function ($c) {
-                          $c->whereNull('color_code')->orWhere('color_code', '');
-                      })->where(function ($sub2) {
-                          $sub2->where('status_kategori', 'IN_PROCESS')
-                               ->orWhereNull('status_kategori')
-                               ->orWhere('status_kategori', '')
-                               ->orWhereNotIn('status_kategori', ['SUKSES', 'RETUR', 'FOLLOW_UP']);
-                      });
-                  });
-            })->count(),
-            'sudah_fu' => (clone $statsBaseQuery)->where(function ($q) {
-                $q->where('color_code', 'KUNING')
-                  ->orWhere(function ($sub) {
-                      $sub->where(function ($c) {
-                          $c->whereNull('color_code')->orWhere('color_code', '');
-                      })->where('status_kategori', 'FOLLOW_UP');
-                  });
-            })->count(),
-            'fu_2_kali' => (clone $statsBaseQuery)->where('color_code', 'HIJAU')->count(),
-            'fu_pos' => (clone $statsBaseQuery)->where('color_code', 'BIRU_TUA')->count(),
-            'follow_up' => (clone $statsBaseQuery)->where(function ($q) {
-                $q->whereIn('color_code', ['KUNING', 'HIJAU', 'BIRU_TUA'])
-                  ->orWhere(function ($sub) {
-                      $sub->where(function ($c) {
-                          $c->whereNull('color_code')->orWhere('color_code', '');
-                      })->where('status_kategori', 'FOLLOW_UP');
-                  });
-            })->count(),
+            'total' => (int)($statsRow->total ?? 0),
+            'sukses' => (int)($statsRow->sukses ?? 0),
+            'retur' => (int)($statsRow->retur ?? 0),
+            'belum' => (int)($statsRow->belum ?? 0),
+            'sudah_fu' => (int)($statsRow->sudah_fu ?? 0),
+            'fu_2_kali' => (int)($statsRow->fu_2_kali ?? 0),
+            'fu_pos' => (int)($statsRow->fu_pos ?? 0),
+            'follow_up' => (int)($statsRow->follow_up ?? 0),
+            'overdue' => (int)($statsRow->overdue ?? 0),
         ];
 
         $allPostOffices = \App\Models\PostOffice::orderBy('province', 'asc')->orderBy('city', 'asc')->orderBy('name', 'asc')->get();
@@ -382,7 +403,7 @@ class DashboardController extends Controller
             'links' => $paginatedShipments->linkCollection()->toArray(),
         ];
 
-        // Calculate accurate monthly shipment distribution for month tabs
+        // Calculate accurate monthly shipment distribution for month tabs via single grouped aggregation
         $monthQuery = OutgoingShipment::query();
         if (!empty($selectedSeller) && $selectedSeller !== 'ALL' && $selectedSeller !== 'Semua Seller') {
             $cleanSeller = trim(preg_replace('/^Mitra\s+/i', '', $selectedSeller));
@@ -397,22 +418,52 @@ class DashboardController extends Controller
             $monthQuery->whereYear('tanggal_kirim', (int)$selectedYear);
         }
 
+        $driver = \Illuminate\Support\Facades\DB::connection()->getDriverName();
+        $monthSql = $driver === 'sqlite' ? "CAST(strftime('%m', tanggal_kirim) AS INTEGER)" : "MONTH(tanggal_kirim)";
+
+        $monthRows = (clone $monthQuery)
+            ->selectRaw("
+                {$monthSql} as m,
+                COUNT(*) as total,
+                SUM(CASE WHEN (
+                    status_pos IS NULL 
+                    OR status_pos = '' 
+                    OR status_pos LIKE '%PROCESS%' 
+                    OR status_kategori NOT IN ('SUKSES', 'RETUR') 
+                    OR status_kategori IS NULL 
+                    OR color_code NOT IN ('BIRU', 'ORANGE') 
+                    OR color_code IS NULL 
+                    OR status_pos IN ('unBag', 'UNBAG', 'INVEHICLE', 'INLOCATION', 'inBag', 'INBAG', 'DELIVERYRUNSHEET', 'FAILEDTODELIVERED', 'ARRIVEDUNPAID', 'Irregularity', 'MANIFEST', 'ARRIVAL', 'DEPARTURE')
+                    OR (
+                        (status_kategori = 'RETUR' OR color_code = 'ORANGE') 
+                        AND (status_pos IS NULL OR (status_pos NOT LIKE '%RETURN DELIVERY%' AND status_pos NOT LIKE '%RETURN TO SENDER%' AND status_pos NOT LIKE '%DITERIMA PENGIRIM%'))
+                    )
+                    OR (
+                        (status_kategori = 'SUKSES' OR color_code = 'BIRU') 
+                        AND (status_pos IS NULL OR status_pos NOT LIKE '%DELIVERED%' OR status_pos LIKE '%RETURN%')
+                    )
+                ) THEN 1 ELSE 0 END) as pending
+            ")
+            ->whereNotNull('tanggal_kirim')
+            ->groupByRaw($monthSql)
+            ->get();
+
         $monthCounts = array_fill(0, 12, 0);
         $monthPendingCounts = array_fill(0, 12, 0);
-        for ($m = 1; $m <= 12; $m++) {
-            $monthCounts[$m - 1] = (clone $monthQuery)->whereMonth('tanggal_kirim', $m)->count();
-            $monthPendingCounts[$m - 1] = (clone $monthQuery)
-                ->whereMonth('tanggal_kirim', $m)
-                ->needsTracking()
-                ->count();
+        foreach ($monthRows as $row) {
+            $mIdx = (int)$row->m;
+            if ($mIdx >= 1 && $mIdx <= 12) {
+                $monthCounts[$mIdx - 1] = (int)$row->total;
+                $monthPendingCounts[$mIdx - 1] = (int)$row->pending;
+            }
         }
-        $yearTotal = (clone $monthQuery)->count();
+        $yearTotal = array_sum($monthCounts);
 
         $sellersList = ['Mitra Aliqa', 'Mitra Zaherba'];
 
-        $totalShipments = (clone $statsBaseQuery)->count();
-        $pendingShipments = (clone $statsBaseQuery)->needsTracking()->count();
-        $trackedShipments = (clone $statsBaseQuery)->whereNotNull('last_tracked_at')->count();
+        $totalShipments = $stats['total'];
+        $pendingShipments = (int)($statsRow->pending ?? 0);
+        $trackedShipments = (int)($statsRow->tracked ?? 0);
         $progressPct = $totalShipments > 0 ? round((($totalShipments - $pendingShipments) / $totalShipments) * 100, 1) : 100;
 
         $isZaherba = str_contains(strtoupper($selectedSeller), 'ZAHERBA');
@@ -422,7 +473,18 @@ class DashboardController extends Controller
         $sheetUrl = SystemSetting::get('google_sheet_url_' . ($isZaherba ? 'zaherba' : 'aliqa'))
             ?: "https://docs.google.com/spreadsheets/d/{$defaultSheetId}/edit";
 
+        $currentUser = \Illuminate\Support\Facades\Auth::user();
+
         return Inertia::render('Dashboard', [
+            'auth' => [
+                'user' => $currentUser ? [
+                    'id' => $currentUser->id,
+                    'name' => $currentUser->name,
+                    'email' => $currentUser->email,
+                    'role' => $currentUser->role,
+                    'is_admin' => $currentUser->isAdmin(),
+                ] : null,
+            ],
             'shipments' => $paginatedResult,
             'stats' => $stats,
             'monthCounts' => $monthCounts,
@@ -449,6 +511,7 @@ class DashboardController extends Controller
                 'search' => $searchQuery,
                 'sort' => $sortBy,
                 'direction' => $sortDirection,
+                'overdue' => $isOverdue,
             ]
         ]);
     }
@@ -563,6 +626,15 @@ class DashboardController extends Controller
 
         OutgoingShipment::whereIn('id', $ids)->update($updateData);
 
+        // Audit Trail: Catat riwayat ke tabel shipment_logs
+        foreach ($ids as $sId) {
+            \App\Models\ShipmentLog::logAction(
+                $sId,
+                'UPDATE_STATUS',
+                "Status diubah ke {$fu}" . ($escDate ? " (Tgl Eskalasi: {$escDate})" : "")
+            );
+        }
+
         // Two-Way Sync to Google Sheets in background queue
         $resis = OutgoingShipment::whereIn('id', $ids)->pluck('no_resi')->toArray();
         if (!empty($resis)) {
@@ -611,6 +683,18 @@ class DashboardController extends Controller
 
         $shipment->save();
 
+        // Audit Trail: Catat riwayat ke tabel shipment_logs
+        $logDetails = [];
+        if (!empty($color)) $logDetails[] = "Status: {$color}";
+        if ($request->has('noted') && $request->input('noted')) $logDetails[] = "Catatan: " . $request->input('noted');
+        if ($request->has('fu_pos_date') && $request->input('fu_pos_date')) $logDetails[] = "Tgl Eskalasi: " . $request->input('fu_pos_date');
+
+        \App\Models\ShipmentLog::logAction(
+            $shipment->id,
+            $request->has('noted') ? 'NOTED' : 'UPDATE_COLOR',
+            implode(' | ', $logDetails) ?: "Perubahan status {$color}"
+        );
+
         // Two-Way Sync ke Google Sheets di background queue
         // Kirim payload lengkap termasuk fu_timestamp agar Apps Script tahu kapan FU dilakukan
         if (!empty($shipment->no_resi)) {
@@ -655,6 +739,20 @@ class DashboardController extends Controller
         $action = strtoupper($request->input('action'));
 
         if ($action === 'DELETE') {
+            $user = \Illuminate\Support\Facades\Auth::user();
+            if ($user && !$user->isAdmin()) {
+                if ($request->wantsJson() || $request->ajax()) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Hanya Admin yang memiliki izin untuk menghapus data resi.',
+                    ], 403);
+                }
+                abort(403, 'Hanya Admin yang memiliki izin untuk menghapus data resi.');
+            }
+
+            foreach ($ids as $sId) {
+                \App\Models\ShipmentLog::logAction($sId, 'DELETE', 'Data resi dihapus oleh ' . ($user ? $user->name : 'Admin'));
+            }
             OutgoingShipment::whereIn('id', $ids)->delete();
             $msg = count($ids) . " data resi berhasil dihapus.";
         } else {
@@ -676,6 +774,15 @@ class DashboardController extends Controller
                 'status_pos' => $kategori === 'SUKSES' ? 'DELIVERED' : ($kategori === 'RETUR' ? 'DELIVERED (RETURN DELIVERY)' : 'PERLU FOLLOW UP CS'),
                 'updated_at' => now(),
             ]);
+
+            // Audit Trail: Catat riwayat bulk action ke tabel shipment_logs
+            foreach ($ids as $sId) {
+                \App\Models\ShipmentLog::logAction(
+                    $sId,
+                    'BULK_UPDATE',
+                    "Status massal diubah ke {$action} ({$kategori})"
+                );
+            }
 
             // Two-Way Sync to Google Sheets in background queue
             $resis = OutgoingShipment::whereIn('id', $ids)->pluck('no_resi')->toArray();

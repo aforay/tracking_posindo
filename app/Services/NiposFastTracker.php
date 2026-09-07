@@ -48,14 +48,20 @@ class NiposFastTracker
                 $poolRequests = [];
                 foreach ($chunks as $idx => $chunk) {
                     $vBarcode = implode("\n", $chunk);
+                    $headers = [
+                        'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        'Accept' => 'application/json, text/javascript, text/html, */*; q=0.01',
+                        'X-Requested-With' => 'XMLHttpRequest',
+                    ];
+                    $cookie = \App\Models\SystemSetting::getNiposCookie();
+                    if (!empty($cookie)) {
+                        $headers['Cookie'] = $cookie;
+                    }
+
                     $poolRequests[$idx] = $pool->asForm()
                         ->withoutVerifying()
                         ->timeout(25)
-                        ->withHeaders([
-                            'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                            'Accept' => 'application/json, text/javascript, text/html, */*; q=0.01',
-                            'X-Requested-With' => 'XMLHttpRequest',
-                        ])
+                        ->withHeaders($headers)
                         ->post($this->url, [
                             'vBarcode' => $vBarcode,
                         ]);
@@ -115,14 +121,20 @@ class NiposFastTracker
 
         try {
             // Internal Wi-Fi call: No session cookie required
+            $headers = [
+                'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept' => 'application/json, text/javascript, text/html, */*; q=0.01',
+                'X-Requested-With' => 'XMLHttpRequest',
+            ];
+            $cookie = \App\Models\SystemSetting::getNiposCookie();
+            if (!empty($cookie)) {
+                $headers['Cookie'] = $cookie;
+            }
+
             $response = Http::withoutVerifying()
                 ->timeout(20)
                 ->asForm()
-                ->withHeaders([
-                    'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    'Accept' => 'application/json, text/javascript, text/html, */*; q=0.01',
-                    'X-Requested-With' => 'XMLHttpRequest',
-                ])
+                ->withHeaders($headers)
                 ->post($this->url, [
                     'vBarcode' => $vBarcode,
                 ]);

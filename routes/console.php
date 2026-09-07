@@ -47,4 +47,10 @@ Schedule::command('nipos:track-all')
     ->withoutOverlapping(20)
     ->appendOutputTo(storage_path('logs/nipos_track_schedule.log'));
 
+// 4. Backup database MySQL harian ke storage/backups (dijalankan otomatis setiap malam pukul 02:00)
+Schedule::command('db:backup --compress')
+    ->dailyAt('02:00')
+    ->withoutOverlapping(30)
+    ->appendOutputTo(storage_path('logs/db_backup_schedule.log'));
+
 

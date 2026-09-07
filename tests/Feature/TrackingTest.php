@@ -21,6 +21,16 @@ class TrackingTest extends TestCase
     {
         parent::setUp();
         $this->artisan('migrate');
+
+        $admin = \App\Models\User::firstOrCreate(
+            ['email' => 'admin@posindo.com'],
+            [
+                'name' => 'Admin Test',
+                'password' => \Illuminate\Support\Facades\Hash::make('password'),
+                'role' => 'admin',
+            ]
+        );
+        $this->actingAs($admin);
     }
 
     public function test_dashboard_page_renders_successfully(): void

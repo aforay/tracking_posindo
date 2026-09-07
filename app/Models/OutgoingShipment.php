@@ -35,6 +35,14 @@ class OutgoingShipment extends Model
     ];
 
     /**
+     * Relationship to shipment action/audit logs
+     */
+    public function logs(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(ShipmentLog::class, 'shipment_id');
+    }
+
+    /**
      * The "booted" method of the model.
      * Enforce strict date alignment based on resi barcode pattern.
      */

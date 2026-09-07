@@ -20,6 +20,7 @@ import {
   ArrowUpDown,
   Bot,
   Loader2,
+  AlertTriangle,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
@@ -62,6 +63,15 @@ export interface PaginatedData<T> {
 }
 
 export interface PageProps {
+  auth?: {
+    user?: {
+      id: number;
+      name: string;
+      email: string;
+      role: string;
+      is_admin: boolean;
+    } | null;
+  };
   shipments?: Shipment[] | PaginatedData<Shipment>;
   postOffices?: PostOffice[];
   filters?: {
@@ -70,6 +80,9 @@ export interface PageProps {
     color?: string;
     search?: string;
     kategori?: string;
+    sort?: string;
+    direction?: string;
+    overdue?: boolean | string | number;
   };
   stats?: {
     total?: number;
@@ -81,6 +94,7 @@ export interface PageProps {
     fu_pos?: number;
     belum?: number;
     perluFu?: number;
+    overdue?: number;
   };
   monthCounts?: number[];
   monthPendingCounts?: number[];
@@ -99,6 +113,8 @@ export interface PageProps {
 
 export default function Dashboard() {
   const pageProps = (usePage<PageProps>()?.props || {}) as PageProps;
+  const currentUser = pageProps?.auth?.user || null;
+  const isAdmin = currentUser ? (currentUser.is_admin ?? currentUser.role === "admin") : true;
 
   // 1. Extract shipmentList array safely from props.shipments or fallback
   const shipmentList = useMemo<Shipment[]>(() => {
@@ -137,6 +153,16 @@ export default function Dashboard() {
     return "Mitra Aliqa";
   });
 
+  const [isOverdue, setIsOverdue] = useState<boolean>(() => {
+    const ov = pageProps?.filters?.overdue;
+    return ov === true || ov === "1" || ov === "true" || ov === 1;
+  });
+
+  useEffect(() => {
+    const ov = pageProps?.filters?.overdue;
+    setIsOverdue(ov === true || ov === "1" || ov === "true" || ov === 1);
+  }, [pageProps?.filters?.overdue]);
+
   const handleSellerChange = (newSeller: string) => {
     const nextSeller = newSeller.toUpperCase().includes("ZAHERBA") ? "Mitra Zaherba" : "Mitra Aliqa";
     if (typeof window !== "undefined") {
@@ -145,7 +171,7 @@ export default function Dashboard() {
     setSeller(nextSeller);
     router.get(
       "/shipments",
-      { seller: nextSeller, month, color: colorFilter, search: query, sort, direction },
+      { seller: nextSeller, month, color: colorFilter, search: query, sort, direction, overdue: isOverdue ? 1 : undefined },
       { preserveState: true, preserveScroll: true }
     );
   };
@@ -177,7 +203,7 @@ export default function Dashboard() {
     setDirection(newDir);
     router.get(
       "/shipments",
-      { seller, month, color: colorFilter, search: query, sort: newSort, direction: newDir },
+      { seller, month, color: colorFilter, search: query, sort: newSort, direction: newDir, overdue: isOverdue ? 1 : undefined },
       { preserveState: true, preserveScroll: true }
     );
   };
@@ -500,7 +526,7 @@ export default function Dashboard() {
   return (
     <div className="min-h-screen bg-background text-foreground">
       <Toaster position="top-right" richColors />
-      <header className="sticky top-0 z-30 shadow-sm">
+      <header className="sticky top-0 z-30 bg-white shadow-xs">
         {/* 1. TopBar Utama (Logo & Tombol Aksi di Atas) */}
         <TopBar
           seller={seller}
@@ -514,11 +540,12 @@ export default function Dashboard() {
           googleSheetId={pageProps?.googleSheetId}
           googleSheetWebhookUrl={pageProps?.googleSheetWebhookUrl}
           onOpenPostOffices={() => setPostOfficesModalOpen(true)}
+          currentUser={currentUser}
         />
 
         {/* 2. Bar Navigasi 12 Bulan (Di Bawah TopBar) */}
-        <div className="pos-scroll overflow-x-auto border-b border-border bg-card/95 px-4 py-1.5 backdrop-blur">
-          <div className="flex w-full min-w-[920px] items-center gap-1.5 justify-between">
+        <div className="border-b border-slate-200 bg-slate-50 px-4 py-2">
+          <div className="flex w-full items-center gap-1.5 justify-between">
             {[{ label: "Semua (Setahun)", monthNum: "all" as const, n: pageProps?.yearTotal ?? totalCount }].concat(
               MONTHS.map((m, i) => ({ label: m, monthNum: (i + 1) as never, n: monthCounts[i] ?? 0 }))
             ).map((t) => {
@@ -531,21 +558,21 @@ export default function Dashboard() {
                     setMonth(t.monthNum);
                     router.get(
                       "/shipments",
-                      { seller, month: t.monthNum === "all" ? "ALL" : t.monthNum, color: colorFilter, search: query, sort, direction },
+                      { seller, month: t.monthNum === "all" ? "ALL" : t.monthNum, color: colorFilter, search: query, sort, direction, overdue: isOverdue ? 1 : undefined },
                       { preserveState: true, preserveScroll: true }
                     );
                   }}
-                  className={`relative flex items-center justify-center gap-1 rounded-md px-2 py-1.5 text-xs font-semibold transition cursor-pointer whitespace-nowrap text-center ${
-                    isAll ? "flex-[1.35]" : "flex-1"
+                  className={`relative flex items-center justify-center gap-1 rounded-lg px-2 py-1.5 text-xs font-semibold transition cursor-pointer whitespace-nowrap text-center ${
+                    isAll ? "flex-[1.25]" : "flex-1"
                   } ${
                     active
-                      ? "bg-[#1E40AF] text-white shadow-sm"
-                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                      ? "bg-[#1E40AF] text-white shadow-xs font-bold ring-1 ring-blue-700"
+                      : "text-slate-600 bg-white hover:bg-slate-100 hover:text-slate-900 border border-slate-200"
                   }`}
                 >
-                  <span>{t.label}</span>{" "}
-                  <span className={`text-[11px] ${active ? "opacity-85 text-blue-100" : "opacity-65"}`}>
-                    ({nf(t.n)})
+                  <span>{t.label}</span>
+                  <span className={`text-[10px] rounded-md px-1.5 py-0.2 ${active ? "bg-white/20 text-white font-bold" : "bg-slate-100 text-slate-500 font-medium"}`}>
+                    {nf(t.n)}
                   </span>
                 </button>
               );
@@ -567,11 +594,11 @@ export default function Dashboard() {
                 onClick={() => {
                   if (c.colorKey === null) {
                     setColorFilter(null);
-                    router.get("/shipments", { seller, month, search: query, sort, direction }, { preserveState: true, preserveScroll: true });
+                    router.get("/shipments", { seller, month, search: query, sort, direction, overdue: isOverdue ? 1 : undefined }, { preserveState: true, preserveScroll: true });
                   } else if (c.colorKey) {
                     const nextColor = colorFilter === c.colorKey ? null : c.colorKey;
                     setColorFilter(nextColor);
-                    router.get("/shipments", { seller, month, color: nextColor, search: query, sort, direction }, { preserveState: true, preserveScroll: true });
+                    router.get("/shipments", { seller, month, color: nextColor, search: query, sort, direction, overdue: isOverdue ? 1 : undefined }, { preserveState: true, preserveScroll: true });
                   }
                 }}
                 style={{ backgroundColor: c.bg, color: c.fg }}
@@ -597,9 +624,10 @@ export default function Dashboard() {
           })}
         </section>
 
-        <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card p-3">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="mr-1 text-[11px] font-bold tracking-wide uppercase text-muted-foreground">
+        {/* Baris Filter Status CS & Ekspor */}
+        <section className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200/90 bg-white p-3.5 shadow-xs">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="mr-1 text-[11px] font-extrabold tracking-wider uppercase text-slate-500">
               Filter Status CS
             </span>
             {currentFuOrder.map((k) => {
@@ -612,15 +640,15 @@ export default function Dashboard() {
                     setColorFilter(nextColor);
                     router.get(
                       "/shipments",
-                      { seller, month, color: nextColor, search: query, sort, direction },
+                      { seller, month, color: nextColor, search: query, sort, direction, overdue: isOverdue ? 1 : undefined },
                       { preserveState: true, preserveScroll: true }
                     );
                   }}
                   style={{ backgroundColor: currentFuMeta[k].bg, color: currentFuMeta[k].fg }}
-                  className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] font-extrabold transition-all transform cursor-pointer ${
+                  className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[11px] font-extrabold transition-all transform cursor-pointer ${
                     active
                       ? "ring-2 ring-[#1E40AF] ring-offset-1 border-[#1E40AF] shadow-md scale-105"
-                      : "border-black/20 hover:scale-102 hover:brightness-95 opacity-85 hover:opacity-100"
+                      : "border-black/20 hover:scale-102 hover:brightness-95 opacity-90 hover:opacity-100 shadow-2xs"
                   }`}
                 >
                   {active && <Check className="h-3 w-3 text-current stroke-[3]" />}
@@ -628,86 +656,137 @@ export default function Dashboard() {
                 </button>
               );
             })}
-            {colorFilter && (
+
+            {/* Divider */}
+            <div className="h-5 w-px bg-slate-200 mx-1 hidden sm:block" />
+
+            {/* Tombol Filter Cepat "Lewat SLA / Macet > 4 Hari" */}
+            <button
+              type="button"
+              onClick={() => {
+                const nextOverdue = !isOverdue;
+                setIsOverdue(nextOverdue);
+                router.get(
+                  "/shipments",
+                  {
+                    seller,
+                    month,
+                    color: colorFilter,
+                    search: query,
+                    sort,
+                    direction,
+                    overdue: nextOverdue ? 1 : undefined,
+                  },
+                  { preserveState: true, preserveScroll: true }
+                );
+              }}
+              className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[11px] font-extrabold transition-all transform cursor-pointer ${
+                isOverdue
+                  ? "bg-rose-600 text-white border-rose-700 shadow-md ring-2 ring-rose-400 ring-offset-1 scale-105"
+                  : "bg-amber-50 text-amber-900 border-amber-300/80 hover:bg-amber-100 hover:border-amber-400 hover:scale-102 shadow-2xs"
+              }`}
+              title="Tampilkan kiriman belum selesai (bukan Sukses/Retur) dengan tanggal kirim >= 4 hari lalu"
+            >
+              <AlertTriangle className={`h-3.5 w-3.5 shrink-0 ${isOverdue ? "text-white" : "text-amber-600"}`} />
+              <span>Lewat SLA / Macet &gt; 4 Hari</span>
+              {typeof pageProps?.stats?.overdue === "number" && (
+                <span
+                  className={`ml-1 rounded-full px-2 py-0.2 text-[10px] font-black ${
+                    isOverdue ? "bg-white text-rose-700" : "bg-amber-200 text-amber-950"
+                  }`}
+                >
+                  {nf(pageProps.stats.overdue)}
+                </span>
+              )}
+            </button>
+
+            {(colorFilter || isOverdue) && (
               <button
                 onClick={() => {
                   setColorFilter(null);
+                  setIsOverdue(false);
                   router.get(
                     "/shipments",
                     { seller, month, search: query, sort, direction },
                     { preserveState: true, preserveScroll: true }
                   );
                 }}
-                className="ml-1 inline-flex items-center gap-1 rounded-full bg-slate-200 px-2 py-0.5 text-[11px] font-bold text-slate-700 hover:bg-slate-300 transition cursor-pointer"
+                className="ml-1 inline-flex items-center gap-1 rounded-full bg-slate-100 border border-slate-300/70 px-2.5 py-1 text-[11px] font-bold text-slate-700 hover:bg-slate-200 transition cursor-pointer"
               >
                 <X className="h-3 w-3" /> Reset Filter
               </button>
             )}
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              onClick={() => setExportOpen(true)}
-              className="gap-2 bg-[#1E40AF] text-white hover:bg-blue-900 cursor-pointer font-bold shadow-sm text-xs px-4"
-            >
-              <FileSpreadsheet className="h-4 w-4 text-[#F97316]" />
-              Export Laporan Seller {String(seller).replace("Mitra ", "")} (.XLSX)
-            </Button>
-          </div>
+
+          {isAdmin && (
+            <div className="flex items-center">
+              <Button
+                onClick={() => setExportOpen(true)}
+                className="gap-2 bg-[#1E40AF] text-white hover:bg-blue-900 cursor-pointer font-bold shadow-sm text-xs px-4 h-9 rounded-xl transition-all"
+              >
+                <FileSpreadsheet className="h-4 w-4 text-[#F97316]" />
+                Export Laporan Seller {String(seller).replace("Mitra ", "")} (.XLSX)
+              </Button>
+            </div>
+          )}
         </section>
 
-        <section className="grid gap-3 rounded-xl border border-border bg-card p-3 md:grid-cols-[1fr_200px_180px]">
-          <div className="relative">
-            <Search className="absolute top-2.5 left-3 h-4 w-4 text-muted-foreground" />
-            <Textarea
+        {/* Baris Pencarian, Mitra, & Sorting */}
+        <section className="grid grid-cols-1 md:grid-cols-12 gap-3 rounded-2xl border border-slate-200/90 bg-white p-3.5 shadow-xs items-center">
+          <div className="relative md:col-span-7">
+            <Search className="absolute top-3 left-3.5 h-4 w-4 text-slate-400 pointer-events-none" />
+            <Input
               value={query}
               onChange={(e) => {
                 setQuery(e.target.value);
               }}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
+                if (e.key === 'Enter') {
                   e.preventDefault();
-                  router.get("/shipments", { seller, month, color: colorFilter, search: query, sort, direction }, { preserveState: true, preserveScroll: true });
+                  router.get("/shipments", { seller, month, color: colorFilter, search: query, sort, direction, overdue: isOverdue ? 1 : undefined }, { preserveState: true, preserveScroll: true });
                 }
               }}
-              placeholder="Cari multi-resi, penerima, HP, alamat... (tekan Enter)"
-              className="min-h-[42px] resize-y pl-9 text-xs"
-              rows={1}
+              placeholder="Cari nomor resi, nama penerima, no. HP, kota/alamat tujuan... (tekan Enter)"
+              className="h-10 pl-10 text-xs bg-slate-50/50 border-slate-200 focus:bg-white focus:ring-1 focus:ring-blue-600 rounded-xl"
             />
           </div>
-          <Select value={seller} onValueChange={handleSellerChange}>
-            <SelectTrigger className="h-[42px] text-xs bg-white border border-border font-semibold shadow-none">
-              <SelectValue>{seller}</SelectValue>
-            </SelectTrigger>
-            <SelectContent className="bg-white border border-slate-200 shadow-xl rounded-xl">
-              <SelectItem value="Mitra Aliqa" className="font-semibold cursor-pointer text-xs">Mitra Aliqa</SelectItem>
-              <SelectItem value="Mitra Zaherba" className="font-semibold cursor-pointer text-xs">Mitra Zaherba</SelectItem>
-            </SelectContent>
-          </Select>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              if (sort === "sheet") {
-                handleSortChange("nama");
-              } else {
-                handleSortChange("sheet");
-              }
-            }}
-            className="h-[42px] text-xs font-bold flex items-center justify-between border-slate-300 bg-slate-50 hover:bg-slate-100 text-slate-800 cursor-pointer shadow-sm"
-            title="Klik untuk mengubah urutan data (Default: Sesuai Spreadsheet)"
-          >
-            <span className="truncate">
-              {sort === "sheet"
-                ? "Urutan: Sesuai Spreadsheet"
-                : sort === "nama"
-                ? direction === "asc"
-                  ? "Nama (A → Z)"
-                  : "Nama (Z → A)"
-                : "Urutan: " + sort}
-            </span>
-            <ArrowUpDown className="h-3.5 w-3.5 ml-1 text-blue-600 shrink-0" />
-          </Button>
+          <div className="md:col-span-3">
+            <Select value={seller} onValueChange={handleSellerChange}>
+              <SelectTrigger className="h-10 text-xs bg-white border border-slate-200 font-semibold shadow-2xs rounded-xl focus:ring-1 focus:ring-blue-600 cursor-pointer">
+                <SelectValue>{seller}</SelectValue>
+              </SelectTrigger>
+              <SelectContent className="bg-white border border-slate-200 shadow-xl rounded-xl">
+                <SelectItem value="Mitra Aliqa" className="font-semibold cursor-pointer text-xs">Mitra Aliqa</SelectItem>
+                <SelectItem value="Mitra Zaherba" className="font-semibold cursor-pointer text-xs">Mitra Zaherba</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="md:col-span-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                if (sort === "sheet") {
+                  handleSortChange("nama");
+                } else {
+                  handleSortChange("sheet");
+                }
+              }}
+              className="w-full h-10 text-xs font-bold flex items-center justify-between border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-800 cursor-pointer shadow-2xs rounded-xl"
+              title="Klik untuk mengubah urutan data (Default: Sesuai Spreadsheet)"
+            >
+              <span className="truncate">
+                {sort === "sheet"
+                  ? "Sesuai Sheet"
+                  : sort === "nama"
+                  ? direction === "asc"
+                    ? "Nama A → Z"
+                    : "Nama Z → A"
+                  : sort}
+              </span>
+              <ArrowUpDown className="h-3.5 w-3.5 ml-1 text-blue-600 shrink-0" />
+            </Button>
+          </div>
         </section>
 
         <AnimatePresence>
@@ -749,19 +828,23 @@ export default function Dashboard() {
                 {isTrackingSelected ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Bot className="h-3.5 w-3.5" />}
                 Lacak NIPOS Terpilih
               </Button>
-              <Button size="sm" variant="outline" className="cursor-pointer font-bold text-xs ml-auto" onClick={() => setExportOpen(true)}>
-                Export Selected
-              </Button>
-              <Button
-                size="sm"
-                variant="destructive"
-                className="gap-1 cursor-pointer font-bold text-xs"
-                onClick={deleteSelected}
-              >
-                <Trash2 className="h-3.5 w-3.5" /> Delete Selected
-              </Button>
+              {isAdmin ? (
+                <>
+                  <Button size="sm" variant="outline" className="cursor-pointer font-bold text-xs ml-auto" onClick={() => setExportOpen(true)}>
+                    Export Selected
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    className="gap-1 cursor-pointer font-bold text-xs"
+                    onClick={deleteSelected}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" /> Delete Selected
+                  </Button>
+                </>
+              ) : null}
               <button
-                className="text-xs text-muted-foreground hover:text-foreground cursor-pointer font-medium"
+                className={`text-xs text-muted-foreground hover:text-foreground cursor-pointer font-medium ${!isAdmin ? "ml-auto" : ""}`}
                 onClick={() => setSelected(new Set())}
               >
                 Batalkan
@@ -804,7 +887,7 @@ export default function Dashboard() {
               className="h-8 w-8 cursor-pointer"
               disabled={currentPage <= 1}
               onClick={() => {
-                router.get("/shipments", { seller, month, color: colorFilter, search: query, sort, direction, page: currentPage - 1 }, { preserveState: true, preserveScroll: true });
+                router.get("/shipments", { seller, month, color: colorFilter, search: query, sort, direction, overdue: isOverdue ? 1 : undefined, page: currentPage - 1 }, { preserveState: true, preserveScroll: true });
               }}
             >
               <ChevronLeft className="h-4 w-4" />
@@ -818,7 +901,7 @@ export default function Dashboard() {
               className="h-8 w-8 cursor-pointer"
               disabled={currentPage >= lastPage}
               onClick={() => {
-                router.get("/shipments", { seller, month, color: colorFilter, search: query, sort, direction, page: currentPage + 1 }, { preserveState: true, preserveScroll: true });
+                router.get("/shipments", { seller, month, color: colorFilter, search: query, sort, direction, overdue: isOverdue ? 1 : undefined, page: currentPage + 1 }, { preserveState: true, preserveScroll: true });
               }}
             >
               <ChevronRight className="h-4 w-4" />

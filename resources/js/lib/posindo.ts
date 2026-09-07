@@ -41,16 +41,57 @@ export interface PostOffice {
   notes?: string;
 }
 
+export type WaTemplateType = "STANDAR" | "ANTAR_ULANG" | "KONFIRMASI_ALAMAT" | "TAHAN_RETUR";
+
+export const WA_TEMPLATES: { id: WaTemplateType; label: string; desc: string }[] = [
+  {
+    id: "STANDAR",
+    label: "Pengecekan Standar (Default)",
+    desc: "Permohonan pengecekan status & update pengantaran kiriman",
+  },
+  {
+    id: "ANTAR_ULANG",
+    label: "Permohonan Antar Ulang",
+    desc: "Penerima sudah siap di alamat / siap menerima paket",
+  },
+  {
+    id: "KONFIRMASI_ALAMAT",
+    label: "Konfirmasi Nomor HP / Alamat",
+    desc: "Pembaruan detail nomor telepon aktif atau patokan alamat penerima",
+  },
+  {
+    id: "TAHAN_RETUR",
+    label: "Permintaan Tahan Retur",
+    desc: "Paket mohon tidak diretur dulu, CS koordinasi 1x24 jam",
+  },
+];
+
 export function generatePostOfficeWaMessage(
   shipment: Shipment,
   postOfficeName?: string,
-  customNote?: string
+  customNote?: string,
+  template: WaTemplateType = "STANDAR"
 ): string {
   const office = postOfficeName || shipment.kantorTujuan || "Kantor Pos Tujuan";
+  
+  let greetingTitle = "Mohon bantuannya untuk pengecekan / follow-up kiriman berikut:";
+  let closingMessage = "Mohon bantuannya agar dapat segera diantar / diklarifikasi ke penerima agar paket sukses terkirim dan tidak terjadi komplain ya kak. Terima kasih banyak atas kerjasamanya! 🙏✨";
+
+  if (template === "ANTAR_ULANG") {
+    greetingTitle = "Mohon bantuannya untuk *PERMOHONAN PENGANTARAN ULANG* atas kiriman berikut:";
+    closingMessage = "📌 *Info Tambahan CS:* Penerima telah kami konfirmasi dan siap menerima paket di lokasi. Mohon berkenan dibantu jadwalkan antaran ulang oleh rekan kurir ya kak. Terima kasih banyak! 🙏✨";
+  } else if (template === "KONFIRMASI_ALAMAT") {
+    greetingTitle = "Mohon bantuannya untuk *KONFIRMASI NOMOR HP & DETAIL ALAMAT PENERIMA* atas kiriman berikut:";
+    closingMessage = "📌 *Info Tambahan CS:* Kami telah menghubungi pembeli untuk memastikan nomor HP dan alamat valid sesuai data di atas. Mohon dibantu teruskan ke rekan kurir antaran agar dapat segera dihubungi / diantar kembali. Terima kasih! 🙏✨";
+  } else if (template === "TAHAN_RETUR") {
+    greetingTitle = "Mohon bantuannya untuk *PERMINTAAN TAHAN RETUR SEMENTARA (HOLD RETURN)* atas kiriman berikut:";
+    closingMessage = "📌 *PENTING:* Mohon kiranya paket *JANGAN DI-RETUR TERLEBIH DAHULU* dan ditahan sementara di kantor pos tujuan. Tim CS kami sedang berkoordinasi intensif dengan pembeli/seller (maksimal 1x24 jam). Terima kasih banyak atas kerjasamanya! 🙏✨";
+  }
+
   const lines = [
     `Halo Rekan CS/Antaran Pos Indonesia ${office},`,
     ``,
-    `Mohon bantuannya untuk pengecekan / follow-up kiriman berikut:`,
+    greetingTitle,
     `📦 *No. Resi:* ${shipment.resi}`,
     `👤 *Penerima:* ${shipment.penerima || "-"} (${shipment.telepon || "-"})`,
     `📍 *Alamat:* ${shipment.alamat || shipment.tujuan || "-"}`,
@@ -61,9 +102,9 @@ export function generatePostOfficeWaMessage(
 
   if (customNote && customNote.trim()) {
     lines.push(``, `⚠️ *Catatan Tambahan:* ${customNote.trim()}`);
-  } else {
-    lines.push(``, `Mohon bantuannya agar dapat segera diantar / diklarifikasi ke penerima agar paket sukses terkirim dan tidak terjadi komplain ya kak. Terima kasih banyak atas kerjasamanya! 🙏✨`);
   }
+
+  lines.push(``, closingMessage);
 
   return lines.join("\n");
 }

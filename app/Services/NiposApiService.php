@@ -25,9 +25,7 @@ class NiposApiService
             ?: self::DEFAULT_URL));
 
         $this->cookie = $cookie 
-            ?: (config('services.nipos.cookie') 
-            ?: (env('NIPOS_SESSION_COOKIE') 
-            ?: ''));
+            ?: \App\Models\SystemSetting::getNiposCookie();
     }
 
     /**

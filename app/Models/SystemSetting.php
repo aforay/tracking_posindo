@@ -60,4 +60,25 @@ class SystemSetting extends Model
 
         return null;
     }
+
+    /**
+     * Get active NIPOS session cookie with database priority and .env fallback
+     */
+    public static function getNiposCookie(): string
+    {
+        $cookie = static::get('nipos_session_cookie');
+        if (!empty($cookie) && is_string($cookie) && trim($cookie) !== '') {
+            return trim($cookie);
+        }
+
+        return (string)(config('services.nipos.cookie') ?: env('NIPOS_SESSION_COOKIE', ''));
+    }
+
+    /**
+     * Set active NIPOS session cookie in database
+     */
+    public static function setNiposCookie(string $cookie): void
+    {
+        static::set('nipos_session_cookie', trim($cookie));
+    }
 }

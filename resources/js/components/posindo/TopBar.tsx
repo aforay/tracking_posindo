@@ -1,7 +1,7 @@
 import { useMemo, useEffect, useState } from "react";
 import { router } from "@inertiajs/react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Truck, Upload, Bot, Loader2, CheckCircle2, FileUp, Zap, RefreshCw, Send, Building2, AlertCircle, Check, ArrowUpRight, Search } from "lucide-react";
+import { Truck, Upload, Bot, Loader2, CheckCircle2, FileUp, Zap, RefreshCw, Send, Building2, AlertCircle, Check, ArrowUpRight, Search, Cookie, LogOut, ShieldCheck, User } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,6 +15,7 @@ import {
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
 import { SELLERS, nf } from "@/lib/posindo";
+import { NiposCookieModal } from "./NiposCookieModal";
 
 export function TopBar({
   seller,
@@ -28,6 +29,7 @@ export function TopBar({
   googleSheetId,
   googleSheetWebhookUrl,
   onOpenPostOffices,
+  currentUser,
 }: {
   seller: string;
   sellersList?: string[];
@@ -40,7 +42,9 @@ export function TopBar({
   googleSheetId?: string;
   googleSheetWebhookUrl?: string;
   onOpenPostOffices?: () => void;
+  currentUser?: { id: number; name: string; email: string; role: string; is_admin: boolean } | null;
 }) {
+  const isAdmin = currentUser ? (currentUser.is_admin ?? currentUser.role === "admin") : true;
   const monthNames = [
     "Januari", "Februari", "Maret", "April", "Mei", "Juni",
     "Juli", "Agustus", "September", "Oktober", "November", "Desember"
@@ -147,6 +151,19 @@ export function TopBar({
   const [isUploading, setIsUploading] = useState(false);
   const [botState, setBotState] = useState<"idle" | "running" | "done">("idle");
   const [progress, setProgress] = useState(0);
+  const [niposModalOpen, setNiposModalOpen] = useState(false);
+  const [niposConnected, setNiposConnected] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    fetch("/settings/nipos-cookie/status")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.status) {
+          setNiposConnected(Boolean(data.status.connected));
+        }
+      })
+      .catch(() => setNiposConnected(false));
+  }, []);
   const [syncData, setSyncData] = useState<{
     is_syncing: boolean;
     current_sheet: string;
@@ -488,113 +505,135 @@ export function TopBar({
       : { text: "Completed ✓", cls: "bg-emerald-500 text-white" };
 
   return (
-    <div className="border-b border-border bg-card">
-      <div className="flex flex-wrap items-center justify-between gap-4 px-5 py-3.5">
-        <div className="flex items-center gap-3">
-          <div className="relative grid h-11 w-11 place-items-center rounded-xl bg-[#1E40AF] text-white shadow-lg shadow-blue-900/25">
-            <Truck className="h-6 w-6" />
-            <span className="absolute -bottom-1 -right-1 grid h-5 w-5 place-items-center rounded-full bg-[#F97316] text-white shadow">
-              <Zap className="h-3 w-3" />
+    <div className="border-b border-slate-200/80 bg-white">
+      <div className="flex items-center justify-between gap-4 px-5 py-2.5">
+        {/* Brand Logo & System Info */}
+        <div className="flex items-center gap-3 shrink-0">
+          <div className="relative grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-[#1E40AF] to-blue-800 text-white shadow-md shadow-blue-900/20 shrink-0">
+            <Truck className="h-5 w-5" />
+            <span className="absolute -bottom-0.5 -right-0.5 grid h-4 w-4 place-items-center rounded-full bg-[#F97316] text-white shadow-xs">
+              <Zap className="h-2.5 w-2.5" />
             </span>
           </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-lg leading-none font-extrabold tracking-wider text-[#1E40AF]">
-                TRACKO
-              </h1>
-              <span className="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-bold text-blue-800 border border-blue-200">SYSTEM</span>
-            </div>
-            <p className="mt-0.5 text-xs text-muted-foreground font-medium">
-              Posindo Outgoing Shipments Monitoring &amp; CS Follow-Up (Cilacap Region)
-            </p>
+          <div className="flex items-center gap-1.5">
+            <h1 className="text-base font-black tracking-wider text-[#1E40AF]">
+              TRACKO
+            </h1>
+            <span className="rounded bg-blue-100/90 px-1.5 py-0.5 text-[9px] font-extrabold text-blue-800 border border-blue-200">SYSTEM</span>
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3">
-          {/* Grup 1: Sinkronisasi Sheets */}
-          <div className="flex flex-wrap items-center gap-1.5 rounded-xl bg-slate-100/90 p-1 border border-slate-200/90 shadow-sm">
-            <Select value={selectedSyncMonth} onValueChange={setSelectedSyncMonth}>
-              <SelectTrigger className="w-[160px] h-9 text-xs bg-white border border-slate-300 font-semibold cursor-pointer shadow-none focus:ring-1 focus:ring-emerald-500">
-                <SelectValue placeholder="Pilih Tab / Bulan" />
-              </SelectTrigger>
-              <SelectContent className="bg-white border border-slate-200 shadow-xl rounded-xl">
-                <SelectItem value="current" className="font-semibold cursor-pointer text-xs">Bulan Berjalan (Default)</SelectItem>
-                <SelectItem value="1" className="font-semibold cursor-pointer text-xs">Januari</SelectItem>
-                <SelectItem value="2" className="font-semibold cursor-pointer text-xs">Februari</SelectItem>
-                <SelectItem value="3" className="font-semibold cursor-pointer text-xs">Maret</SelectItem>
-                <SelectItem value="4" className="font-semibold cursor-pointer text-xs">April</SelectItem>
-                <SelectItem value="5" className="font-semibold cursor-pointer text-xs">Mei</SelectItem>
-                <SelectItem value="6" className="font-semibold cursor-pointer text-xs">Juni</SelectItem>
-                <SelectItem value="7" className="font-semibold cursor-pointer text-xs">Juli</SelectItem>
-                <SelectItem value="8" className="font-semibold cursor-pointer text-xs">Agustus</SelectItem>
-                <SelectItem value="9" className="font-semibold cursor-pointer text-xs">September</SelectItem>
-                <SelectItem value="10" className="font-semibold cursor-pointer text-xs">Oktober</SelectItem>
-                <SelectItem value="11" className="font-semibold cursor-pointer text-xs">November</SelectItem>
-                <SelectItem value="12" className="font-semibold cursor-pointer text-xs">Desember</SelectItem>
-                <SelectItem value="ALL" className="font-semibold cursor-pointer text-xs">Semua Bulan (ALL)</SelectItem>
-              </SelectContent>
-            </Select>
+        <div className="flex items-center gap-2 shrink-0">
+          {/* Grup 1: Sinkronisasi Sheets (Khusus Admin) */}
+          {isAdmin && (
+            <div className="flex items-center gap-1.5 rounded-xl bg-slate-50 p-1 border border-slate-200/80 shadow-2xs">
+              <Select value={selectedSyncMonth} onValueChange={setSelectedSyncMonth}>
+                <SelectTrigger className="w-[135px] h-8.5 text-xs bg-white border border-slate-200 font-semibold cursor-pointer shadow-2xs focus:ring-1 focus:ring-emerald-500 rounded-lg">
+                  <SelectValue placeholder="Pilih Tab / Bulan" />
+                </SelectTrigger>
+                <SelectContent className="bg-white border border-slate-200 shadow-xl rounded-xl">
+                  <SelectItem value="current" className="font-semibold cursor-pointer text-xs">Bulan Berjalan</SelectItem>
+                  <SelectItem value="1" className="font-semibold cursor-pointer text-xs">Januari</SelectItem>
+                  <SelectItem value="2" className="font-semibold cursor-pointer text-xs">Februari</SelectItem>
+                  <SelectItem value="3" className="font-semibold cursor-pointer text-xs">Maret</SelectItem>
+                  <SelectItem value="4" className="font-semibold cursor-pointer text-xs">April</SelectItem>
+                  <SelectItem value="5" className="font-semibold cursor-pointer text-xs">Mei</SelectItem>
+                  <SelectItem value="6" className="font-semibold cursor-pointer text-xs">Juni</SelectItem>
+                  <SelectItem value="7" className="font-semibold cursor-pointer text-xs">Juli</SelectItem>
+                  <SelectItem value="8" className="font-semibold cursor-pointer text-xs">Agustus</SelectItem>
+                  <SelectItem value="9" className="font-semibold cursor-pointer text-xs">September</SelectItem>
+                  <SelectItem value="10" className="font-semibold cursor-pointer text-xs">Oktober</SelectItem>
+                  <SelectItem value="11" className="font-semibold cursor-pointer text-xs">November</SelectItem>
+                  <SelectItem value="12" className="font-semibold cursor-pointer text-xs">Desember</SelectItem>
+                  <SelectItem value="ALL" className="font-semibold cursor-pointer text-xs">Semua Bulan (ALL)</SelectItem>
+                </SelectContent>
+              </Select>
+
+              <Button
+                variant="outline"
+                className="gap-1.5 border-emerald-600/70 bg-emerald-50 text-emerald-900 hover:bg-emerald-100 hover:text-emerald-950 cursor-pointer font-semibold text-xs h-9 shadow-xs rounded-lg"
+                onClick={() => setSheetSyncOpen(true)}
+              >
+                <RefreshCw className="h-3.5 w-3.5 text-emerald-600" /> Sync Sheets
+              </Button>
+
+              <Button
+                variant="outline"
+                disabled={isPushing}
+                className="gap-1.5 border-blue-600/70 bg-blue-50 text-blue-900 hover:bg-blue-100 hover:text-blue-950 cursor-pointer font-semibold text-xs h-9 shadow-xs rounded-lg"
+                onClick={handlePushUpdates}
+              >
+                {isPushing ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-600" />
+                ) : (
+                  <Send className="h-3.5 w-3.5 text-blue-600" />
+                )}
+                Push Status
+              </Button>
+            </div>
+          )}
+
+          {/* Grup 2: Quick Tools (Upload Excel FU, Kontak KC Pos, Cookie NIPOS) */}
+          <div className="flex items-center gap-1.5">
+            {isAdmin && (
+              <Button
+                variant="outline"
+                className="gap-1.5 text-xs h-9 font-semibold border-amber-300/80 bg-amber-50/70 hover:bg-amber-100 cursor-pointer shadow-xs text-amber-950 rounded-lg"
+                onClick={() => setUploadOpen(true)}
+                title="Unggah file Excel hasil follow up dari Kantor Pos untuk update status & warna ke spreadsheet"
+              >
+                <Upload className="h-3.5 w-3.5 text-amber-600" /> Upload Excel FU
+              </Button>
+            )}
 
             <Button
               variant="outline"
-              className="gap-1.5 border-emerald-600 bg-emerald-50 text-emerald-900 hover:bg-emerald-100 cursor-pointer font-semibold text-xs h-9 shadow-none"
-              onClick={() => setSheetSyncOpen(true)}
-            >
-              <RefreshCw className="h-3.5 w-3.5 text-emerald-600" /> Sync Sheets
-            </Button>
-
-            <Button
-              variant="outline"
-              disabled={isPushing}
-              className="gap-1.5 border-blue-600 bg-blue-50 text-blue-900 hover:bg-blue-100 cursor-pointer font-semibold text-xs h-9 shadow-none"
-              onClick={handlePushUpdates}
-            >
-              {isPushing ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-600" />
-              ) : (
-                <Send className="h-3.5 w-3.5 text-blue-600" />
-              )}
-              Push Status
-            </Button>
-          </div>
-
-          {/* Grup 2: Impor Data & Seller */}
-          <div className="flex flex-wrap items-center gap-1.5">
-            <Button
-              variant="outline"
-              className="gap-1.5 text-xs h-9 font-semibold border-orange-300 bg-orange-50/80 hover:bg-orange-100 cursor-pointer shadow-sm text-orange-950"
-              onClick={() => setUploadOpen(true)}
-              title="Unggah file Excel hasil follow up dari Kantor Pos untuk update status & warna ke spreadsheet"
-            >
-              <Upload className="h-3.5 w-3.5 text-orange-600" /> Upload Excel FU
-            </Button>
-
-            <Button
-              variant="outline"
-              className="gap-1.5 text-xs h-9 font-semibold border-slate-300 bg-white hover:bg-slate-50 cursor-pointer shadow-sm text-blue-900"
+              className="gap-1.5 text-xs h-9 font-semibold border-slate-200 bg-white hover:bg-slate-50 cursor-pointer shadow-xs text-slate-700 hover:text-slate-900 rounded-lg"
               onClick={onOpenPostOffices}
               title="Buka Database Kontak WhatsApp KC/KCP Pos Indonesia"
             >
               <Building2 className="h-3.5 w-3.5 text-blue-600" /> Kontak KC Pos
             </Button>
 
-            <Select value={normalizedSeller} onValueChange={onSeller}>
-              <SelectTrigger className="w-[160px] h-9 text-xs bg-white border border-slate-300 font-semibold cursor-pointer shadow-sm focus:ring-1 focus:ring-emerald-500">
-                <SelectValue>{normalizedSeller}</SelectValue>
-              </SelectTrigger>
-              <SelectContent className="bg-white border border-slate-200 shadow-xl rounded-xl">
-                <SelectItem value="Mitra Aliqa" className="font-semibold cursor-pointer text-xs">Mitra Aliqa</SelectItem>
-                <SelectItem value="Mitra Zaherba" className="font-semibold cursor-pointer text-xs">Mitra Zaherba</SelectItem>
-              </SelectContent>
-            </Select>
+            {isAdmin && (
+              <Button
+                variant="outline"
+                className="gap-1.5 text-xs h-9 font-semibold border-slate-200 bg-white hover:bg-slate-50 cursor-pointer shadow-xs text-slate-700 hover:text-slate-900 rounded-lg"
+                onClick={() => setNiposModalOpen(true)}
+                title="Pengaturan Session Cookie & Uji Koneksi NIPOS"
+              >
+                <span className="relative flex h-2 w-2">
+                  <span
+                    className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
+                      niposConnected === true
+                        ? "bg-emerald-400"
+                        : niposConnected === false
+                        ? "bg-rose-400"
+                        : "bg-amber-400"
+                    }`}
+                  />
+                  <span
+                    className={`relative inline-flex rounded-full h-2 w-2 ${
+                      niposConnected === true
+                        ? "bg-emerald-600"
+                        : niposConnected === false
+                        ? "bg-rose-600"
+                        : "bg-amber-500"
+                    }`}
+                  />
+                </span>
+                <Cookie className="h-3.5 w-3.5 text-amber-600" />
+                <span>Cookie NIPOS</span>
+              </Button>
+            )}
           </div>
 
-          {/* Grup 3: Bot NIPOS */}
-          <div className="flex items-center gap-1.5">
+          {/* Grup 3: Bot NIPOS Action Button */}
+          <div className="flex items-center">
             <Button
               onClick={runBot}
               disabled={botState === "running"}
-              className="gap-2 bg-[#1E40AF] text-white hover:bg-blue-900 cursor-pointer text-xs h-9 font-bold shadow-md shadow-blue-900/10"
+              className="gap-2 bg-[#1E40AF] text-white hover:bg-blue-900 cursor-pointer text-xs h-9 font-bold shadow-sm shadow-blue-900/20 rounded-lg transition-all"
               title={`Jalankan Bot NIPOS khusus bulan ${activeBotMonthName}`}
             >
               {botState === "running" ? (
@@ -604,12 +643,41 @@ export function TopBar({
               ) : (
                 <Bot className="h-4 w-4 text-[#F97316]" />
               )}
-              Run Bot NIPOS ({activeBotMonthName})
-              <span className={`ml-1 rounded-full px-2 py-0.5 text-[10px] font-bold ${badge.cls}`}>
+              <span>Run Bot NIPOS</span>
+              <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold shadow-xs ${badge.cls}`}>
                 {badge.text}
               </span>
             </Button>
           </div>
+
+          {/* Grup 4: User Profile & Logout */}
+          {currentUser && (
+            <div className="flex items-center gap-2 pl-2.5 border-l border-slate-200">
+              <div className="text-right hidden sm:block">
+                <span className="block text-[11px] font-bold text-slate-800 leading-tight">
+                  {currentUser.name}
+                </span>
+                <span
+                  className={`inline-block text-[9px] font-black uppercase px-1.5 py-0.2 rounded-md ${
+                    isAdmin
+                      ? "bg-purple-100 text-purple-800 border border-purple-200"
+                      : "bg-emerald-100 text-emerald-800 border border-emerald-200"
+                  }`}
+                >
+                  {currentUser.role}
+                </span>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => router.post("/logout")}
+                className="h-8 w-8 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg cursor-pointer transition"
+                title="Keluar / Logout"
+              >
+                <LogOut className="h-4 w-4" />
+              </Button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -689,12 +757,50 @@ export function TopBar({
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
-            className="overflow-hidden border-t border-border bg-blue-50/60 p-3"
+            className="overflow-hidden border-t border-blue-200 bg-blue-50/90 px-5 py-2.5 shadow-inner"
           >
-            <div className="flex items-center gap-4 px-5 py-1">
-              <Progress value={progress} className="h-2 flex-1" />
-              <div className="w-[280px] text-right font-mono text-xs font-bold text-[#1E40AF]">
-                {progress.toFixed(0)}% — {botInfo ? `${nf(botInfo.current)} / ${nf(botInfo.total)}` : `${nf(Math.round((progress / 100) * total))} / ${nf(total)}`} Resi
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              {/* Status Info Kiri */}
+              <div className="flex items-center gap-2.5">
+                <span className="relative flex h-3 w-3">
+                  <span className={`absolute inline-flex h-full w-full rounded-full opacity-75 ${
+                    botState === "running" ? "animate-ping bg-blue-400" : "bg-emerald-400"
+                  }`} />
+                  <span className={`relative inline-flex h-3 w-3 rounded-full ${
+                    botState === "running" ? "bg-[#1E40AF]" : "bg-emerald-600"
+                  }`} />
+                </span>
+                {botState === "running" ? (
+                  <Loader2 className="h-4 w-4 animate-spin text-[#1E40AF]" />
+                ) : (
+                  <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                )}
+                <div className="text-xs font-bold text-slate-800">
+                  <span>
+                    {botState === "running"
+                      ? `Bot NIPOS sedang melacak resi (${activeBotMonthName})...`
+                      : `Pelacakan selesai! Semua resi (${activeBotMonthName}) terverifikasi.`}
+                  </span>
+                  {botUpdatedItems.length > 0 && (
+                    <span className="ml-2 rounded-md bg-emerald-100 px-2 py-0.5 text-[11px] font-extrabold text-emerald-800 border border-emerald-200">
+                      +{botUpdatedItems.length} Resi Berubah Status
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Progress Bar & Counter Kanan */}
+              <div className="flex items-center gap-3 w-full sm:w-auto flex-1 max-w-md">
+                <Progress
+                  value={progress}
+                  className={`h-2.5 flex-1 rounded-full ${botState === "done" ? "bg-emerald-200" : "bg-blue-200"}`}
+                />
+                <div className="font-mono text-xs font-extrabold text-[#1E40AF] shrink-0">
+                  {progress.toFixed(0)}%{" "}
+                  <span className="text-slate-500 font-semibold">
+                    ({botInfo ? `${nf(botInfo.current)} / ${nf(botInfo.total)}` : `${nf(Math.round((progress / 100) * total))} / ${nf(total)}`} Resi)
+                  </span>
+                </div>
               </div>
             </div>
           </motion.div>
@@ -980,6 +1086,13 @@ export function TopBar({
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* NIPOS Cookie & Connection Settings Modal */}
+      <NiposCookieModal
+        isOpen={niposModalOpen}
+        onClose={() => setNiposModalOpen(false)}
+        onStatusChange={setNiposConnected}
+      />
     </div>
   );
 }

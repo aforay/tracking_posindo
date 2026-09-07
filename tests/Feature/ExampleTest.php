@@ -15,8 +15,10 @@ class ExampleTest extends TestCase
      */
     public function test_the_application_returns_a_successful_response(): void
     {
-        $response = $this->get('/');
-
+        $response = $this->get('/login');
         $response->assertStatus(200);
+
+        $user = \App\Models\User::factory()->create(['role' => 'cs']);
+        $this->actingAs($user)->get('/')->assertStatus(200);
     }
 }
