@@ -43,16 +43,9 @@ class ProcessNiposTrackingJob implements ShouldQueue
             if (!empty($this->shipmentIds)) {
                 $query->whereIn('id', $this->shipmentIds);
             } else {
-                $query->where(function ($q) {
-                    $q->whereIn('status_kategori', ['IN_PROCESS', 'FOLLOW_UP'])
-                      ->orWhereNull('status_kategori');
-                })->whereNotIn('status_kategori', ['SUKSES', 'RETUR'])
-                  ->orderBy('last_tracked_at', 'asc')
-                  ->limit(5000);
-            }
-
-            if (empty($this->shipmentIds)) {
-                $query->whereNotIn('status_kategori', ['SUKSES', 'RETUR']);
+                $query->needsTracking()
+                      ->orderBy('last_tracked_at', 'asc')
+                      ->limit(5000);
             }
 
             $shipments = $query->get();
@@ -109,10 +102,20 @@ class ProcessNiposTrackingJob implements ShouldQueue
                                 $newColorCode = $botService->determineColorCode($category);
                             }
 
+                            // === RETUR PERSISTENCE ===
+                            // Jika paket sudah RETUR / ORANGE dan NIPOS mengembalikan status operasional/transit (unBag, INVEHICLE, INLOCATION, inBag, dll),
+                            // paket ini sedang dalam perjalanan kembali ke pengirim -> TETAP RETUR & ORANGE (jangan diturunkan ke PUTIH/IN_PROCESS)
+                            if (($prevColorCode === 'ORANGE' || $shipment->status_kategori === 'RETUR' || $shipment->isReturn()) && $category !== 'SUKSES') {
+                                $category = 'RETUR';
+                                $newColorCode = 'ORANGE';
+                            }
+
                             $shipment->status_kategori = $category;
                             $shipment->color_code = $newColorCode;
 
-                            $shipment->sla_days = $res['sla_days'] ?? ($res['sla'] ?? ($shipment->sla_days ?: 2));
+                            $rawSla = $res['sla_days'] ?? ($res['sla'] ?? ($shipment->sla_days ?: 2));
+                            $tglKirim = $shipment->tanggal_kirim ?: ($res['tanggal_kolekting'] ?? null);
+                            $shipment->sla_days = $botService->extractSlaDays((string)$rawSla, $tglKirim, $category);
                             $shipment->last_tracked_at = $now;
 
                             // Detect and link Kantor Pos Tujuan (Fast in-memory matching)

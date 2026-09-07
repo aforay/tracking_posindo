@@ -26,6 +26,13 @@ import { Toaster } from "@/components/ui/sonner";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { TopBar } from "@/components/posindo/TopBar";
 import { DataTable } from "@/components/posindo/DataTable";
 import { ExportPanel } from "@/components/posindo/ExportPanel";
@@ -76,6 +83,7 @@ export interface PageProps {
     perluFu?: number;
   };
   monthCounts?: number[];
+  monthPendingCounts?: number[];
   yearTotal?: number;
   sellersList?: string[];
   googleSheetUrl?: string;
@@ -117,9 +125,37 @@ export default function Dashboard() {
 
   const [seller, setSeller] = useState(() => {
     const s = pageProps?.filters?.seller;
-    if (!s || s === "ALL" || s === "all" || s === "Semua Seller") return "Semua Seller";
-    return String(s);
+    if (s && s !== "ALL" && s !== "all" && s !== "Semua Seller") {
+      return s.toUpperCase().includes("ZAHERBA") ? "Mitra Zaherba" : "Mitra Aliqa";
+    }
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("posindo_active_seller");
+      if (saved && (saved.includes("Zaherba") || saved.includes("Aliqa"))) {
+        return saved.includes("Zaherba") ? "Mitra Zaherba" : "Mitra Aliqa";
+      }
+    }
+    return "Mitra Aliqa";
   });
+
+  const handleSellerChange = (newSeller: string) => {
+    const nextSeller = newSeller.toUpperCase().includes("ZAHERBA") ? "Mitra Zaherba" : "Mitra Aliqa";
+    if (typeof window !== "undefined") {
+      localStorage.setItem("posindo_active_seller", nextSeller);
+    }
+    setSeller(nextSeller);
+    router.get(
+      "/shipments",
+      { seller: nextSeller, month, color: colorFilter, search: query, sort, direction },
+      { preserveState: true, preserveScroll: true }
+    );
+  };
+
+  useEffect(() => {
+    if (typeof window !== "undefined" && seller) {
+      localStorage.setItem("posindo_active_seller", seller);
+    }
+  }, [seller]);
+
   const [month, setMonth] = useState<number | "all">(() => {
     const fMonth = pageProps?.filters?.month;
     if (!fMonth || fMonth === "ALL" || fMonth === "all") return "all";
@@ -166,7 +202,7 @@ export default function Dashboard() {
   const toItem = paginatedObj?.to ?? rows?.length ?? 0;
 
   const bySeller = useMemo(
-    () => (!seller || seller === "Semua Seller" || seller === "ALL" ? (rows || []) : (rows || []).filter((r) => r?.seller === seller)),
+    () => (rows || []).filter((r) => !seller || r?.seller === seller),
     [rows, seller]
   );
 
@@ -469,12 +505,10 @@ export default function Dashboard() {
         <TopBar
           seller={seller}
           sellersList={pageProps?.sellersList || []}
-          onSeller={(s) => {
-            setSeller(s);
-            router.get("/shipments", { seller: s, month, color: colorFilter, search: query, sort, direction }, { preserveState: true, preserveScroll: true });
-          }}
+          onSeller={handleSellerChange}
           total={totalCount}
           month={month}
+          monthPendingCounts={pageProps?.monthPendingCounts}
           trackingProgress={pageProps?.trackingProgress}
           googleSheetUrl={pageProps?.googleSheetUrl}
           googleSheetId={pageProps?.googleSheetId}
@@ -616,7 +650,7 @@ export default function Dashboard() {
               className="gap-2 bg-[#1E40AF] text-white hover:bg-blue-900 cursor-pointer font-bold shadow-sm text-xs px-4"
             >
               <FileSpreadsheet className="h-4 w-4 text-[#F97316]" />
-              Export Laporan Seller {!seller || seller === "Semua Seller" || seller === "ALL" ? "ALL" : String(seller).replace("Mitra ", "")} (.XLSX)
+              Export Laporan Seller {String(seller).replace("Mitra ", "")} (.XLSX)
             </Button>
           </div>
         </section>
@@ -640,17 +674,15 @@ export default function Dashboard() {
               rows={1}
             />
           </div>
-          <Input
-            value={seller === "Semua Seller" ? "" : seller}
-            onChange={(e) => setSeller(e.target.value || "Semua Seller")}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                router.get("/shipments", { seller, month, color: colorFilter, search: query, sort, direction }, { preserveState: true, preserveScroll: true });
-              }
-            }}
-            placeholder="Filter nama seller..."
-            className="text-xs h-[42px]"
-          />
+          <Select value={seller} onValueChange={handleSellerChange}>
+            <SelectTrigger className="h-[42px] text-xs bg-white border border-border font-semibold shadow-none">
+              <SelectValue>{seller}</SelectValue>
+            </SelectTrigger>
+            <SelectContent className="bg-white border border-slate-200 shadow-xl rounded-xl">
+              <SelectItem value="Mitra Aliqa" className="font-semibold cursor-pointer text-xs">Mitra Aliqa</SelectItem>
+              <SelectItem value="Mitra Zaherba" className="font-semibold cursor-pointer text-xs">Mitra Zaherba</SelectItem>
+            </SelectContent>
+          </Select>
           <Button
             type="button"
             variant="outline"
@@ -799,7 +831,7 @@ export default function Dashboard() {
         open={exportOpen}
         onOpenChange={setExportOpen}
         rows={selected.size ? rows.filter((r) => selected.has(r.id)) : rows}
-        seller={seller === "Semua Seller" ? "Mitra Aliqa (Semua Seller)" : seller}
+        seller={seller}
       />
 
       <WhatsAppFollowUpModal

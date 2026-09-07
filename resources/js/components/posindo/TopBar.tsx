@@ -1,7 +1,7 @@
 import { useMemo, useEffect, useState } from "react";
 import { router } from "@inertiajs/react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Truck, Upload, Bot, Loader2, CheckCircle2, FileUp, Zap, RefreshCw, Send, Building2 } from "lucide-react";
+import { Truck, Upload, Bot, Loader2, CheckCircle2, FileUp, Zap, RefreshCw, Send, Building2, AlertCircle, Check, ArrowUpRight, Search } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,7 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
 import { SELLERS, nf } from "@/lib/posindo";
 
@@ -22,6 +22,7 @@ export function TopBar({
   onSeller,
   total,
   month,
+  monthPendingCounts,
   trackingProgress,
   googleSheetUrl,
   googleSheetId,
@@ -33,41 +34,62 @@ export function TopBar({
   onSeller: (s: string) => void;
   total: number;
   month?: string | number;
-  trackingProgress?: { percentage: number; tracked: number; total: number; is_running: boolean };
+  monthPendingCounts?: number[];
+  trackingProgress?: { percentage: number; tracked: number; total: number; is_running: boolean; pending?: number };
   googleSheetUrl?: string;
   googleSheetId?: string;
   googleSheetWebhookUrl?: string;
   onOpenPostOffices?: () => void;
 }) {
+  const monthNames = [
+    "Januari", "Februari", "Maret", "April", "Mei", "Juni",
+    "Juli", "Agustus", "September", "Oktober", "November", "Desember"
+  ];
+
+  const activeBotMonth = useMemo(() => {
+    if (typeof month === "number" && month >= 1 && month <= 12) {
+      return month;
+    }
+    if (typeof month === "string" && !isNaN(Number(month)) && Number(month) >= 1 && Number(month) <= 12) {
+      return Number(month);
+    }
+    return 8; // Default to Agustus
+  }, [month]);
+
+  const activeBotMonthName = monthNames[activeBotMonth - 1] || "Agustus";
+
+  const targetMonthPending = useMemo(() => {
+    if (monthPendingCounts && Array.isArray(monthPendingCounts) && monthPendingCounts[activeBotMonth - 1] !== undefined) {
+      return monthPendingCounts[activeBotMonth - 1];
+    }
+    return trackingProgress?.pending ?? 0;
+  }, [monthPendingCounts, activeBotMonth, trackingProgress?.pending]);
+
   const sellerOptions = useMemo(() => {
-    const list = new Set<string>(SELLERS);
-    if (sellersList && Array.isArray(sellersList)) {
-      sellersList.forEach((s) => {
-        if (s && s !== "ALL" && s !== "Semua Seller") {
-          list.add(s.startsWith("Mitra ") ? s : `Mitra ${s}`);
-        }
-      });
-    }
-    return Array.from(list);
-  }, [sellersList]);
+    return ["Mitra Aliqa", "Mitra Zaherba"];
+  }, []);
   const normalizedSeller = useMemo(() => {
-    if (!seller || seller === "ALL" || seller === "all" || seller === "Semua Seller") {
-      return "Semua Seller";
-    }
-    if (seller.includes("Aliqa") || seller === "Aliqa") {
-      return "Mitra Aliqa";
-    }
-    if (seller.includes("Zaherba") || seller === "Zaherba") {
+    if (seller && (seller.toUpperCase().includes("ZAHERBA") || seller === "Zaherba")) {
       return "Mitra Zaherba";
     }
-    return seller;
+    return "Mitra Aliqa";
   }, [seller]);
   const [selectedSyncMonth, setSelectedSyncMonth] = useState<string>("current");
   const [uploadOpen, setUploadOpen] = useState(false);
   const [sheetSyncOpen, setSheetSyncOpen] = useState(false);
   const [sheetUrlInput, setSheetUrlInput] = useState(
-    googleSheetUrl || "https://docs.google.com/spreadsheets/d/1wUqPnU1_QOq6WocHwpxAhjhScjlb_ZhhSy8I2WqGQKw/edit"
+    googleSheetUrl || "https://docs.google.com/spreadsheets/d/1EeckOBzI5EPNTT1bHsqu6kar9asKD6Ifar2CpTkSnBg/edit"
   );
+
+  useEffect(() => {
+    if (googleSheetUrl) {
+      setSheetUrlInput(googleSheetUrl);
+    } else if (normalizedSeller === "Mitra Zaherba") {
+      setSheetUrlInput("https://docs.google.com/spreadsheets/d/1wUqPnU1_QOq6WocHwpxAhjhScjlb_ZhhSy8I2WqGQKw/edit");
+    } else {
+      setSheetUrlInput("https://docs.google.com/spreadsheets/d/1EeckOBzI5EPNTT1bHsqu6kar9asKD6Ifar2CpTkSnBg/edit");
+    }
+  }, [googleSheetUrl, normalizedSeller]);
   const [webhookUrlInput, setWebhookUrlInput] = useState(googleSheetWebhookUrl || "");
   const [isSyncing, setIsSyncing] = useState(false);
   const [isPushing, setIsPushing] = useState(false);
@@ -88,6 +110,7 @@ export function TopBar({
         },
         body: JSON.stringify({
           month: targetMonth,
+          seller: normalizedSeller,
         }),
       });
       const data = await res.json();
@@ -182,12 +205,26 @@ export function TopBar({
   };
 
   const [botInfo, setBotInfo] = useState<{ current: number; total: number } | null>(null);
+  const [botResultModalOpen, setBotResultModalOpen] = useState(false);
+  const [botUpdatedItems, setBotUpdatedItems] = useState<Array<{
+    id: string;
+    resi: string;
+    seller: string;
+    status_pos: string;
+    keterangan: string;
+    status_kategori: string;
+    color_code: string;
+    sla?: number;
+    last_tracked_at: string;
+  }>>([]);
+  const [botFilterQuery, setBotFilterQuery] = useState("");
 
   const runBot = async () => {
     if (botState === "running") return;
     setBotState("running");
     setProgress(0);
     setBotInfo(null);
+    setBotUpdatedItems([]);
 
     try {
       const csrfToken = getCsrfToken();
@@ -195,6 +232,7 @@ export function TopBar({
       let isFinishedGlobally = false;
       let totalProcessed = 0;
       let initialTotalPending = 0;
+      const accumulatedUpdated: any[] = [];
 
       while (!isFinishedGlobally) {
         try {
@@ -207,9 +245,9 @@ export function TopBar({
               "X-XSRF-TOKEN": csrfToken,
             },
             body: JSON.stringify({
-              limit: 25,
+              limit: 80,
               seller: seller || normalizedSeller,
-              month: month && month !== "all" && month !== "ALL" ? month : undefined,
+              month: activeBotMonth,
               session_start: sessionStart,
             }),
           });
@@ -226,6 +264,11 @@ export function TopBar({
           const processedThisBatch = data.processed_count ?? 0;
           const remainingPending = data.pending_count ?? 0;
           totalProcessed += processedThisBatch;
+
+          if (Array.isArray(data.updated_items) && data.updated_items.length > 0) {
+            accumulatedUpdated.push(...data.updated_items);
+            setBotUpdatedItems([...accumulatedUpdated]);
+          }
 
           if (initialTotalPending === 0) {
             initialTotalPending = totalProcessed + remainingPending;
@@ -255,23 +298,25 @@ export function TopBar({
         setBotInfo({ current: totalProcessed, total: totalProcessed });
       }
 
-      toast.success("Pelacakan Bot NIPos Selesai!", {
+      toast.success(`Pelacakan Bot NIPOS Selesai (${activeBotMonthName})!`, {
         description: totalProcessed > 0
-          ? `${nf(totalProcessed)} data resi berhasil diperbarui dari NIPOS. Halaman otomatis dimuat ulang.`
-          : "Semua data resi sudah berstatus SUKSES/RETUR.",
+          ? `${nf(totalProcessed)} data resi bulan ${activeBotMonthName} berhasil diperbarui dari NIPOS.`
+          : `Semua data resi bulan ${activeBotMonthName} sudah berstatus SUKSES/RETUR.`,
       });
 
-      // Force refresh data in Inertia
-      router.visit(window.location.href, {
-        preserveScroll: true,
-        preserveState: false,
-      });
+      // Buka modal pemberitahuan hasil update bot agar user bisa verifikasi
+      if (accumulatedUpdated.length > 0) {
+        setBotResultModalOpen(true);
+      }
+
+      // Reload background Inertia data
+      router.reload({ preserveScroll: true });
 
       setTimeout(() => {
         setBotState("idle");
         setProgress(0);
         setBotInfo(null);
-      }, 2500);
+      }, 3000);
 
     } catch (err: unknown) {
       setBotState("idle");
@@ -290,7 +335,7 @@ export function TopBar({
     setIsUploading(true);
     const formData = new FormData();
     formData.append("excel_file", file);
-    formData.append("default_seller", seller === "Semua Seller" ? "Aliqa" : seller);
+    formData.append("default_seller", normalizedSeller);
 
     router.post("/process", formData, {
       forceFormData: true,
@@ -298,17 +343,15 @@ export function TopBar({
         setIsUploading(false);
         setUploadOpen(false);
         setFile(null);
-        toast.success("File 10.000 data berhasil diunggah!", {
-          description: "Proses membaca data & tracking berjalan di latar belakang (Queue Worker).",
+        toast.success("File Excel FU berhasil diunggah!", {
+          description: "Data follow-up dari Kantor Pos tersimpan & perubahan status warna otomatis disinkronkan ke Google Sheets.",
         });
       },
       onError: () => {
         setIsUploading(false);
         setUploadOpen(false);
         setFile(null);
-        toast.success("File 10.000 data berhasil diunggah!", {
-          description: "Proses membaca data & tracking berjalan di latar belakang (Queue Worker).",
-        });
+        toast.error("Gagal mengunggah file Excel.");
       },
     });
   };
@@ -347,6 +390,7 @@ export function TopBar({
         body: JSON.stringify({
           url: sheetUrlInput,
           webhook_url: webhookUrlInput,
+          seller: normalizedSeller,
           month: selectedSyncMonth === "current" ? "" : selectedSyncMonth,
         }),
       });
@@ -391,7 +435,7 @@ export function TopBar({
           body: JSON.stringify({
             spreadsheet_id: spreadsheetId,
             sheet_name: sheetName,
-            seller: seller === "Semua Seller" ? "Aliqa" : seller,
+            seller: normalizedSeller,
           }),
         });
 
@@ -433,15 +477,14 @@ export function TopBar({
     }
   };
 
-  const pendingCount = trackingProgress?.pending ?? 0;
   const badge =
     botState === "idle"
       ? {
-          text: pendingCount > 0 ? `${pendingCount} Pending` : "All Done",
-          cls: pendingCount > 0 ? "bg-amber-500 text-white" : "bg-emerald-500 text-white",
+          text: targetMonthPending > 0 ? `${nf(targetMonthPending)} Pending` : "All Done",
+          cls: targetMonthPending > 0 ? "bg-amber-500 text-white" : "bg-emerald-500 text-white",
         }
       : botState === "running"
-      ? { text: "Scraping NIPOS@MID...", cls: "bg-pos-orange text-white animate-pulse" }
+      ? { text: `Tracking ${activeBotMonthName}...`, cls: "bg-pos-orange text-white animate-pulse" }
       : { text: "Completed ✓", cls: "bg-emerald-500 text-white" };
 
   return (
@@ -519,6 +562,15 @@ export function TopBar({
           <div className="flex flex-wrap items-center gap-1.5">
             <Button
               variant="outline"
+              className="gap-1.5 text-xs h-9 font-semibold border-orange-300 bg-orange-50/80 hover:bg-orange-100 cursor-pointer shadow-sm text-orange-950"
+              onClick={() => setUploadOpen(true)}
+              title="Unggah file Excel hasil follow up dari Kantor Pos untuk update status & warna ke spreadsheet"
+            >
+              <Upload className="h-3.5 w-3.5 text-orange-600" /> Upload Excel FU
+            </Button>
+
+            <Button
+              variant="outline"
               className="gap-1.5 text-xs h-9 font-semibold border-slate-300 bg-white hover:bg-slate-50 cursor-pointer shadow-sm text-blue-900"
               onClick={onOpenPostOffices}
               title="Buka Database Kontak WhatsApp KC/KCP Pos Indonesia"
@@ -528,12 +580,9 @@ export function TopBar({
 
             <Select value={normalizedSeller} onValueChange={onSeller}>
               <SelectTrigger className="w-[160px] h-9 text-xs bg-white border border-slate-300 font-semibold cursor-pointer shadow-sm focus:ring-1 focus:ring-emerald-500">
-                <SelectValue placeholder="Pilih Seller">
-                  {normalizedSeller === "Semua Seller" ? "Pilih Seller" : normalizedSeller}
-                </SelectValue>
+                <SelectValue>{normalizedSeller}</SelectValue>
               </SelectTrigger>
               <SelectContent className="bg-white border border-slate-200 shadow-xl rounded-xl">
-                <SelectItem value="Semua Seller" className="font-semibold cursor-pointer text-xs">Pilih Seller (Semua)</SelectItem>
                 <SelectItem value="Mitra Aliqa" className="font-semibold cursor-pointer text-xs">Mitra Aliqa</SelectItem>
                 <SelectItem value="Mitra Zaherba" className="font-semibold cursor-pointer text-xs">Mitra Zaherba</SelectItem>
               </SelectContent>
@@ -546,6 +595,7 @@ export function TopBar({
               onClick={runBot}
               disabled={botState === "running"}
               className="gap-2 bg-[#1E40AF] text-white hover:bg-blue-900 cursor-pointer text-xs h-9 font-bold shadow-md shadow-blue-900/10"
+              title={`Jalankan Bot NIPOS khusus bulan ${activeBotMonthName}`}
             >
               {botState === "running" ? (
                 <Loader2 className="h-4 w-4 animate-spin text-[#F97316]" />
@@ -554,7 +604,7 @@ export function TopBar({
               ) : (
                 <Bot className="h-4 w-4 text-[#F97316]" />
               )}
-              Run Bot NIPOS
+              Run Bot NIPOS ({activeBotMonthName})
               <span className={`ml-1 rounded-full px-2 py-0.5 text-[10px] font-bold ${badge.cls}`}>
                 {badge.text}
               </span>
@@ -714,16 +764,22 @@ export function TopBar({
       <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Upload Excel / Spreadsheet Resi</DialogTitle>
+            <DialogTitle className="text-orange-950 font-bold flex items-center gap-2">
+              <Upload className="h-5 w-5 text-orange-600" />
+              Upload Excel Hasil Follow Up Kantor Pos
+            </DialogTitle>
+            <DialogDescription className="text-xs text-slate-500">
+              File Excel dari Kantor Pos berisi status FU terbaru akan otomatis diimpor ke database dan langsung disinkronkan warnanya ke Google Spreadsheet via Webhook.
+            </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleUploadSubmit} className="space-y-4">
-            <label className="grid w-full place-items-center gap-2 rounded-xl border-2 border-dashed border-blue-400/50 bg-blue-50/40 px-6 py-10 transition hover:border-[#1E40AF] cursor-pointer">
-              <FileUp className="h-8 w-8 text-[#1E40AF]" />
+            <label className="grid w-full place-items-center gap-2 rounded-xl border-2 border-dashed border-orange-400/50 bg-orange-50/40 px-6 py-10 transition hover:border-[#F97316] cursor-pointer">
+              <FileUp className="h-8 w-8 text-[#F97316]" />
               <span className="text-sm font-semibold text-slate-800">
-                {file ? file.name : "Klik untuk memilih file Excel / CSV"}
+                {file ? file.name : "Klik untuk memilih file Excel / CSV dari Kantor Pos"}
               </span>
               <span className="text-xs text-muted-foreground">
-                Mendukung file .xlsx / .csv hingga 40.000+ baris (Chunking 50 baris)
+                Mendukung file .xlsx / .xls / .csv (Multi-sheet, streaming &lt; 20MB RAM)
               </span>
               <input
                 type="file"
@@ -736,7 +792,7 @@ export function TopBar({
               <div className="space-y-1">
                 <Progress value={50} className="h-2" />
                 <p className="text-center font-mono text-xs text-muted-foreground">
-                  Mengunggah dan mengolah batch chunking...
+                  Mengunggah, memperbarui data &amp; mensinkronkan warna ke spreadsheet...
                 </p>
               </div>
             )}
@@ -747,12 +803,181 @@ export function TopBar({
               <Button
                 type="submit"
                 disabled={!file || isUploading}
-                className="bg-[#F97316] hover:bg-orange-600 text-white font-bold"
+                className="bg-[#F97316] hover:bg-orange-600 text-white font-bold cursor-pointer"
               >
-                Impor Sekarang
+                {isUploading ? <Loader2 className="h-4 w-4 animate-spin mr-1.5" /> : null}
+                Impor &amp; Sinkronkan ke Spreadsheet
               </Button>
             </div>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={botResultModalOpen} onOpenChange={setBotResultModalOpen}>
+        <DialogContent className="max-w-3xl max-h-[85vh] flex flex-col bg-white border border-slate-200 shadow-2xl rounded-2xl p-0 overflow-hidden">
+          <DialogHeader className="p-5 pb-3 border-b border-slate-100 bg-slate-50/80">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="h-8 w-8 rounded-lg bg-blue-600/10 flex items-center justify-center text-blue-600">
+                  <Bot className="h-5 w-5" />
+                </div>
+                <div>
+                  <DialogTitle className="text-base font-bold text-slate-900">
+                    Pemberitahuan Hasil Update Bot NIPOS ({activeBotMonthName})
+                  </DialogTitle>
+                  <DialogDescription className="text-xs text-slate-500">
+                    Berikut adalah data resi yang baru saja di-tracking &amp; diperbarui statusnya dari web Pos Indonesia.
+                  </DialogDescription>
+                </div>
+              </div>
+            </div>
+
+            {/* Statistik Ringkasan */}
+            <div className="grid grid-cols-4 gap-2 pt-3">
+              <div className="rounded-xl border border-slate-200 bg-white p-2.5 text-center shadow-xs">
+                <div className="text-[11px] font-medium text-slate-500">Total Diperbarui</div>
+                <div className="text-lg font-bold text-slate-900">{botUpdatedItems.length}</div>
+              </div>
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-2.5 text-center shadow-xs">
+                <div className="text-[11px] font-medium text-emerald-700">Sukses (Delivered)</div>
+                <div className="text-lg font-bold text-emerald-700">
+                  {botUpdatedItems.filter((i) => i.status_kategori === "SUKSES" || i.color_code === "BIRU").length}
+                </div>
+              </div>
+              <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-2.5 text-center shadow-xs">
+                <div className="text-[11px] font-medium text-amber-800">Retur (Return)</div>
+                <div className="text-lg font-bold text-amber-800">
+                  {botUpdatedItems.filter((i) => i.status_kategori === "RETUR" || i.color_code === "ORANGE").length}
+                </div>
+              </div>
+              <div className="rounded-xl border border-blue-200 bg-blue-50/60 p-2.5 text-center shadow-xs">
+                <div className="text-[11px] font-medium text-blue-700">In Process / FU</div>
+                <div className="text-lg font-bold text-blue-700">
+                  {botUpdatedItems.filter((i) => !["SUKSES", "RETUR"].includes(i.status_kategori) && !["BIRU", "ORANGE"].includes(i.color_code)).length}
+                </div>
+              </div>
+            </div>
+
+            {/* Search filter di dalam modal */}
+            <div className="relative pt-2">
+              <Search className="absolute left-2.5 top-5 h-3.5 w-3.5 text-slate-400" />
+              <Input
+                placeholder="Cari nomor resi atau status di daftar ini..."
+                value={botFilterQuery}
+                onChange={(e) => setBotFilterQuery(e.target.value)}
+                className="pl-8 h-8 text-xs bg-white"
+              />
+            </div>
+          </DialogHeader>
+
+          {/* Daftar Resi yang Terupdate */}
+          <div className="flex-1 overflow-y-auto p-5 pt-3 space-y-2">
+            {(() => {
+              const filtered = botUpdatedItems.filter((item) => {
+                if (!botFilterQuery.trim()) return true;
+                const q = botFilterQuery.toLowerCase();
+                return (
+                  item.resi.toLowerCase().includes(q) ||
+                  (item.status_pos && item.status_pos.toLowerCase().includes(q)) ||
+                  (item.keterangan && item.keterangan.toLowerCase().includes(q)) ||
+                  (item.status_kategori && item.status_kategori.toLowerCase().includes(q))
+                );
+              });
+
+              if (filtered.length === 0) {
+                return (
+                  <div className="text-center py-8 text-xs text-slate-500">
+                    Tidak ada data resi yang cocok dengan pencarian.
+                  </div>
+                );
+              }
+
+              return filtered.map((item, idx) => {
+                const isSukses = item.status_kategori === "SUKSES" || item.color_code === "BIRU";
+                const isRetur = item.status_kategori === "RETUR" || item.color_code === "ORANGE";
+
+                return (
+                  <div
+                    key={item.id || item.resi || idx}
+                    className={`flex items-start justify-between gap-3 p-3 rounded-xl border text-xs transition ${
+                      isSukses
+                        ? "bg-emerald-50/40 border-emerald-200"
+                        : isRetur
+                        ? "bg-amber-50/40 border-amber-200"
+                        : "bg-slate-50 border-slate-200"
+                    }`}
+                  >
+                    <div className="flex-1 min-w-0 space-y-1">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-bold text-slate-900 text-sm">
+                          {item.resi}
+                        </span>
+                        <span
+                          className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ${
+                            isSukses
+                              ? "bg-emerald-600 text-white"
+                              : isRetur
+                              ? "bg-amber-600 text-white"
+                              : "bg-blue-600 text-white"
+                          }`}
+                        >
+                          {item.status_kategori || "IN PROCESS"}
+                        </span>
+                        {item.sla !== undefined && (
+                          <span
+                            className={`rounded border px-1.5 py-0.5 text-[10px] font-bold ${
+                              item.sla < 0 || Math.abs(item.sla) > 4
+                                ? "bg-red-100 border-red-300 text-red-700"
+                                : "bg-slate-200/90 border-slate-300 text-slate-800"
+                            }`}
+                          >
+                            {item.sla < 0 || Math.abs(item.sla) > 4
+                              ? `Over SLA ${Math.abs(item.sla)} Hari`
+                              : `SLA: ${item.sla} Hari`}
+                          </span>
+                        )}
+                        <span className="text-[10px] text-slate-400">
+                          {item.seller}
+                        </span>
+                      </div>
+                      <div className="text-slate-700 font-medium break-words leading-relaxed text-[11px]">
+                        <span className="font-bold text-slate-900">Status NIPOS:</span> {item.status_pos || "-"}
+                      </div>
+                      {item.keterangan && item.keterangan !== item.status_pos && (
+                        <div className="text-slate-500 italic text-[11px] break-words">
+                          {item.keterangan}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="shrink-0 text-right space-y-1">
+                      <div className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700 bg-emerald-100/80 px-2 py-0.5 rounded-full border border-emerald-300">
+                        <CheckCircle2 className="h-3 w-3" /> Valid Diperbarui
+                      </div>
+                      <div className="text-[10px] text-slate-400">
+                        {item.last_tracked_at || "Baru saja"}
+                      </div>
+                    </div>
+                  </div>
+                );
+              });
+            })()}
+          </div>
+
+          <div className="p-3 border-t border-slate-100 bg-slate-50 flex items-center justify-between">
+            <span className="text-xs text-slate-500">
+              Menampilkan {botUpdatedItems.length} data yang telah diverifikasi bot.
+            </span>
+            <Button
+              onClick={() => {
+                setBotResultModalOpen(false);
+                router.reload({ preserveScroll: true });
+              }}
+              className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold"
+            >
+              Tutup &amp; Lihat Dashboard
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
     </div>
