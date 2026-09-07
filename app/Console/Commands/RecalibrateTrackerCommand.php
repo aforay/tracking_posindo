@@ -21,14 +21,14 @@ class RecalibrateTrackerCommand extends Command
                             {--seller=all : Filter by seller (e.g. Aliqa, Zaherba, or all)}
                             {--month=8 : Filter by shipment month (1-12 or all)}
                             {--force : Force bypass delivered/retur protection and overwrite with live NIPos status}
-                            {--chunk=50 : Batch chunk size for NIPos scraper}';
+                            {--chunk=500 : Batch chunk size for NIPos scraper}';
 
     /**
      * The console command description.
      *
      * @var string
      */
-    protected $description = 'Force recalibrate and re-scrape shipments from NIPos using hardened anti-fallthrough parser';
+    protected $description = 'Force recalibrate and re-scrape shipments from NIPos using hardened anti-fallthrough parser and bulk upsert';
 
     /**
      * Execute the console command.
@@ -84,7 +84,7 @@ class RecalibrateTrackerCommand extends Command
         $query->select([
             'id', 'nama_seller', 'no_resi', 'nama_penerima', 'no_hp', 'alamat',
             'tanggal_kirim', 'status_pos', 'keterangan', 'status_kategori',
-            'color_code', 'sla_days', 'kantor_tujuan', 'last_location', 'last_tracked_at'
+            'color_code', 'sla_days', 'kantor_tujuan', 'kantor_pos_id', 'last_location', 'last_tracked_at', 'created_at'
         ])->chunkById($chunkSize, function ($shipments) use ($botService, $force, &$recalibratedCount, &$correctedToInProcess, &$correctedToRetur, &$remainedDelivered, &$syncPayload, $bar) {
             $resiList = $shipments->pluck('no_resi')->toArray();
 
@@ -96,60 +96,83 @@ class RecalibrateTrackerCommand extends Command
             }
 
             $now = now();
+            $nowStr = $now->toDateTimeString();
+            $updateChunkPayload = [];
 
-            DB::transaction(function () use ($shipments, $results, $botService, $force, $now, &$recalibratedCount, &$correctedToInProcess, &$correctedToRetur, &$remainedDelivered, &$syncPayload, $bar) {
-                foreach ($shipments as $shipment) {
-                    $resi = $shipment->no_resi;
-                    if (isset($results[$resi])) {
-                        $res = $results[$resi];
+            foreach ($shipments as $shipment) {
+                $resi = $shipment->no_resi;
+                if (isset($results[$resi])) {
+                    $res = $results[$resi];
 
-                        $newStatusPos = $res['status_pos'] ?? 'IN PROSES';
-                        $newKet = $res['keterangan'] ?? 'PROSES PENGIRIMAN POS (TRANSIT)';
-                        $newCat = $res['status_kategori'] ?? $botService->categorizeStatus($newStatusPos, $newKet);
-                        $newColor = $res['color_code'] ?? $botService->determineColorCode($newCat);
-                        $newSla = $res['sla_days'] ?? $botService->extractSlaDays($res['sla'] ?? '', $shipment->tanggal_kirim);
+                    $newStatusPos = $res['status_pos'] ?? 'IN PROSES';
+                    $newKet = $res['keterangan'] ?? 'PROSES PENGIRIMAN POS (TRANSIT)';
+                    $newCat = $res['status_kategori'] ?? $botService->categorizeStatus($newStatusPos, $newKet);
+                    $newColor = $res['color_code'] ?? $botService->determineColorCode($newCat);
+                    $newSla = $res['sla_days'] ?? $botService->extractSlaDays($res['sla'] ?? '', $shipment->tanggal_kirim);
 
-                        // If force is enabled, always overwrite even if previously DELIVERED
-                        $shipment->status_pos = $newStatusPos;
-                        $shipment->keterangan = $newKet;
-                        $shipment->status_kategori = $newCat;
-                        $shipment->color_code = $newColor;
-                        $shipment->sla_days = $newSla;
-                        $shipment->last_tracked_at = $now;
+                    $kantorTujuan = !empty($res['kantor_tujuan']) ? $res['kantor_tujuan'] : $shipment->kantor_tujuan;
+                    $lastLocation = !empty($res['last_location']) ? $res['last_location'] : $shipment->last_location;
+                    $tglKirim = $shipment->tanggal_kirim ? (is_string($shipment->tanggal_kirim) ? substr($shipment->tanggal_kirim, 0, 10) : $shipment->tanggal_kirim->format('Y-m-d')) : null;
+                    $createdAtStr = $shipment->created_at ? (is_string($shipment->created_at) ? $shipment->created_at : $shipment->created_at->toDateTimeString()) : $nowStr;
 
-                        if (!empty($res['kantor_tujuan'])) {
-                            $shipment->kantor_tujuan = $res['kantor_tujuan'];
-                        }
-                        if (!empty($res['last_location'])) {
-                            $shipment->last_location = $res['last_location'];
-                        }
+                    $updateChunkPayload[] = [
+                        'nama_seller'     => $shipment->nama_seller,
+                        'no_resi'         => $shipment->no_resi,
+                        'nama_penerima'   => $shipment->nama_penerima,
+                        'no_hp'           => $shipment->no_hp,
+                        'alamat'          => $shipment->alamat,
+                        'tanggal_kirim'   => $tglKirim,
+                        'status_pos'      => $newStatusPos,
+                        'keterangan'      => $newKet,
+                        'status_kategori' => $newCat,
+                        'color_code'      => $newColor,
+                        'sla_days'        => $newSla,
+                        'kantor_tujuan'   => $kantorTujuan,
+                        'kantor_pos_id'   => $shipment->kantor_pos_id,
+                        'last_location'   => $lastLocation,
+                        'last_tracked_at' => $nowStr,
+                        'created_at'      => $createdAtStr,
+                        'updated_at'      => $nowStr,
+                    ];
 
-                        $shipment->save();
-                        $recalibratedCount++;
+                    $recalibratedCount++;
 
-                        if ($newCat === 'IN_PROCESS') {
-                            $correctedToInProcess++;
-                        } elseif ($newCat === 'RETUR') {
-                            $correctedToRetur++;
-                        } else {
-                            $remainedDelivered++;
-                        }
-
-                        $syncPayload[] = [
-                            'seller' => $shipment->nama_seller,
-                            'resi' => $shipment->no_resi,
-                            'status_pos' => $newCat === 'IN_PROCESS' ? 'IN PROSES' : $shipment->status_pos,
-                            'keterangan' => $shipment->keterangan,
-                            'status_kategori' => $shipment->status_kategori,
-                            'color_code' => $shipment->color_code,
-                            'sla' => (string)$shipment->sla_days,
-                            'sla_days' => $shipment->sla_days,
-                            'prevent_overwrite_delivered_retur' => !$force,
-                        ];
+                    if ($newCat === 'IN_PROCESS') {
+                        $correctedToInProcess++;
+                    } elseif ($newCat === 'RETUR') {
+                        $correctedToRetur++;
+                    } else {
+                        $remainedDelivered++;
                     }
-                    $bar->advance();
+
+                    $syncPayload[] = [
+                        'seller' => $shipment->nama_seller,
+                        'resi' => $shipment->no_resi,
+                        'status_pos' => $newCat === 'IN_PROCESS' ? 'IN PROSES' : $newStatusPos,
+                        'keterangan' => $newKet,
+                        'status_kategori' => $newCat,
+                        'color_code' => $newColor,
+                        'sla' => (string)$newSla,
+                        'sla_days' => $newSla,
+                        'prevent_overwrite_delivered_retur' => !$force,
+                    ];
                 }
-            });
+                $bar->advance();
+            }
+
+            // Bulk Upsert per batch chunk inside DB transaction
+            if (!empty($updateChunkPayload)) {
+                DB::transaction(function () use ($updateChunkPayload) {
+                    DB::table('outgoing_shipments')->upsert(
+                        $updateChunkPayload,
+                        ['no_resi'],
+                        [
+                            'status_pos', 'keterangan', 'status_kategori', 'color_code',
+                            'sla_days', 'kantor_tujuan', 'last_location', 'last_tracked_at', 'updated_at'
+                        ]
+                    );
+                });
+            }
         });
 
         $bar->finish();

@@ -3,12 +3,14 @@
 namespace App\Jobs;
 
 use App\Models\OutgoingShipment;
+use App\Models\PostOffice;
 use App\Services\TrackingBotService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
@@ -32,7 +34,7 @@ class ProcessNiposTrackingJob implements ShouldQueue
     }
 
     /**
-     * Execute the job in background queue worker safely.
+     * Execute the job in background queue worker safely with Bulk Upsert & In-Memory Lookup.
      */
     public function handle(TrackingBotService $botService): void
     {
@@ -48,16 +50,24 @@ class ProcessNiposTrackingJob implements ShouldQueue
                       ->limit(5000);
             }
 
-            $shipments = $query->get();
+            // Pre-select required fields to minimize memory consumption
+            $shipments = $query->select([
+                'id', 'nama_seller', 'no_resi', 'nama_penerima', 'no_hp', 'alamat',
+                'tanggal_kirim', 'status_pos', 'keterangan', 'status_kategori',
+                'color_code', 'fu_pos_date', 'noted', 'sla_days', 'kantor_tujuan',
+                'kantor_pos_id', 'last_location', 'last_tracked_at', 'created_at'
+            ])->get();
 
             if ($shipments->isEmpty()) {
                 Log::info("ProcessNiposTrackingJob: No shipments require tracking (All SUKSES/RETUR or empty).");
                 return;
             }
 
+            // Warm up in-memory PostOffice cache once before the loop
+            PostOffice::getCachedOffices();
+
             $resiList = $shipments->pluck('no_resi')->toArray();
 
-            // Try-catch around bot service call so a network issue doesn't crash the entire job
             try {
                 $results = $botService->trackResiList($resiList, $this->targetUrl);
             } catch (Throwable $e) {
@@ -65,114 +75,139 @@ class ProcessNiposTrackingJob implements ShouldQueue
                 $results = [];
             }
 
-            $updatedCount = 0;
-            $syncPayload = [];
             $now = now();
+            $nowStr = $now->toDateTimeString();
+            $fuColorCodes = ['PUTIH', 'KUNING', 'HIJAU', 'BIRU_TUA'];
 
-            \Illuminate\Support\Facades\DB::transaction(function () use ($shipments, $results, $botService, $now, &$updatedCount, &$syncPayload) {
-                // FU statuses yang bisa di-override ketika NIPOS konfirmasi final delivery
-                $fuColorCodes = ['PUTIH', 'KUNING', 'HIJAU', 'BIRU_TUA'];
+            $updateBatch = [];
+            $fallbackIds = [];
+            $syncPayload = [];
 
-                foreach ($shipments as $shipment) {
-                    try {
-                        $resi = $shipment->no_resi;
-                        if (isset($results[$resi])) {
-                            $res = $results[$resi];
-                            if (!empty($res['is_fallback'])) {
-                                // Live NIPOS query timed out or failed - reset last_tracked_at so it can be re-attempted
-                                $shipment->last_tracked_at = null;
-                                $shipment->saveQuietly();
-                                continue;
-                            }
-                            $statusPos = $res['status_pos'] ?? ($res['status'] ?? 'IN PROSES');
-                            $keterangan = $res['keterangan'] ?? ($res['penerima'] ?? 'PROSES PENGIRIMAN POS (TRANSIT)');
-
-                            $shipment->status_pos = $statusPos;
-                            $shipment->keterangan = $keterangan;
-
-                            $category = $res['status_kategori'] ?? $botService->categorizeStatus($shipment->status_pos, $shipment->keterangan);
-                            $newColorCode = $res['color_code'] ?? $botService->determineColorCode($category);
-
-                            // === FORCE OVERRIDE ===
-                            // Jika NIPOS konfirmasi DELIVERED/RETUR, override status FU apapun
-                            // (PUTIH/KUNING/HIJAU/BIRU_TUA) ke status final BIRU/ORANGE.
-                            // CS tidak bisa mempertahankan status FU jika NIPOS sudah konfirmasi selesai.
-                            $prevColorCode = $shipment->color_code;
-                            if (in_array($category, ['SUKSES', 'RETUR']) && in_array($prevColorCode, $fuColorCodes)) {
-                                $newColorCode = $botService->determineColorCode($category);
-                            }
-
-                            // === RETUR PERSISTENCE ===
-                            // Jika paket sudah RETUR / ORANGE dan NIPOS mengembalikan status operasional/transit (unBag, INVEHICLE, INLOCATION, inBag, dll),
-                            // paket ini sedang dalam perjalanan kembali ke pengirim -> TETAP RETUR & ORANGE (jangan diturunkan ke PUTIH/IN_PROCESS)
-                            if (($prevColorCode === 'ORANGE' || $shipment->status_kategori === 'RETUR' || $shipment->isReturn()) && $category !== 'SUKSES') {
-                                $category = 'RETUR';
-                                $newColorCode = 'ORANGE';
-                            }
-
-                            $shipment->status_kategori = $category;
-                            $shipment->color_code = $newColorCode;
-
-                            $rawSla = $res['sla_days'] ?? ($res['sla'] ?? ($shipment->sla_days ?: 2));
-                            $tglKirim = $shipment->tanggal_kirim ?: ($res['tanggal_kolekting'] ?? null);
-                            $shipment->sla_days = $botService->extractSlaDays((string)$rawSla, $tglKirim, $category);
-                            $shipment->last_tracked_at = $now;
-
-                            // Detect and link Kantor Pos Tujuan (Fast in-memory matching)
-                            $kantorTujuan = $res['kantor_tujuan'] ?? $shipment->kantor_tujuan;
-                            $matchedOffice = \App\Models\PostOffice::matchByDestinationOrAddress($kantorTujuan, $shipment->alamat);
-                            if ($matchedOffice) {
-                                $shipment->kantor_tujuan = $kantorTujuan ?: $matchedOffice->name;
-                                $shipment->kantor_pos_id = $matchedOffice->id;
-                            } elseif (!empty($kantorTujuan)) {
-                                $shipment->kantor_tujuan = $kantorTujuan;
-                            }
-
-                            if (!empty($res['last_location'])) {
-                                $shipment->last_location = $res['last_location'];
-                            }
-
-                            $shipment->save();
-                            $updatedCount++;
-
-                            $isInProc = $shipment->status_kategori === 'IN_PROCESS';
-                            $slaStr = $botService->formatRunningSla($shipment->tanggal_kirim, $shipment->status_kategori, $shipment->sla_days);
-
-                            // Label FU yang human-readable untuk kolom di Sheet
-                            $statusLabelMap = [
-                                'BIRU'     => 'PAKET SUKSES (DELIVERED)',
-                                'ORANGE'   => 'PAKET RETUR (RETURN)',
-                                'KUNING'   => 'SUDAH DI FU (1x)',
-                                'HIJAU'    => 'FU 2 KALI',
-                                'BIRU_TUA' => 'FU POS (ESKALASI KC/KCU)',
-                                'PUTIH'    => 'BELUM DI FOLLOW UP',
-                            ];
-                            $colorCode  = $shipment->color_code ?: 'PUTIH';
-                            $statusLabel = $statusLabelMap[$colorCode] ?? 'BELUM DI FOLLOW UP';
-
-                            $syncPayload[] = [
-                                'resi'             => $shipment->no_resi,
-                                'seller'           => $shipment->nama_seller,
-                                'status_pos'       => $shipment->status_pos,
-                                'keterangan'       => $shipment->keterangan,
-                                'status_kategori'  => $shipment->status_kategori,
-                                'color_code'       => $colorCode,
-                                'status_label'     => $statusLabel,   // untuk kolom FU di Sheet
-                                'fu_type'          => $colorCode,     // alias untuk Apps Script
-                                'sla'              => $slaStr,
-                                'sla_days'         => $slaStr,
-                                'updated_at'       => now()->toDateTimeString(),
-                                'prevent_overwrite_delivered_retur' => true,
-                            ];
-                        }
-                    } catch (Throwable $e) {
-                        Log::error("ProcessNiposTrackingJob [ERROR]: Skipped resi ID {$shipment->id} ({$shipment->no_resi}) due to error: " . $e->getMessage());
+            foreach ($shipments as $shipment) {
+                try {
+                    $resi = $shipment->no_resi;
+                    if (!isset($results[$resi])) {
                         continue;
+                    }
+
+                    $res = $results[$resi];
+                    if (!empty($res['is_fallback'])) {
+                        // Live NIPOS query timed out or failed - collect ID to reset last_tracked_at
+                        $fallbackIds[] = $shipment->id;
+                        continue;
+                    }
+
+                    $statusPos = $res['status_pos'] ?? ($res['status'] ?? 'IN PROSES');
+                    $keterangan = $res['keterangan'] ?? ($res['penerima'] ?? 'PROSES PENGIRIMAN POS (TRANSIT)');
+
+                    $category = $res['status_kategori'] ?? $botService->categorizeStatus($statusPos, $keterangan);
+                    $newColorCode = $res['color_code'] ?? $botService->determineColorCode($category);
+
+                    // === FORCE OVERRIDE ===
+                    $prevColorCode = $shipment->color_code;
+                    if (in_array($category, ['SUKSES', 'RETUR']) && in_array($prevColorCode, $fuColorCodes)) {
+                        $newColorCode = $botService->determineColorCode($category);
+                    }
+
+                    // === RETUR PERSISTENCE ===
+                    if (($prevColorCode === 'ORANGE' || $shipment->status_kategori === 'RETUR' || $shipment->isReturn()) && $category !== 'SUKSES') {
+                        $category = 'RETUR';
+                        $newColorCode = 'ORANGE';
+                    }
+
+                    $rawSla = $res['sla_days'] ?? ($res['sla'] ?? ($shipment->sla_days ?: 2));
+                    $tglKirim = $shipment->tanggal_kirim ? (is_string($shipment->tanggal_kirim) ? substr($shipment->tanggal_kirim, 0, 10) : $shipment->tanggal_kirim->format('Y-m-d')) : ($res['tanggal_kolekting'] ?? null);
+                    $slaDays = $botService->extractSlaDays((string)$rawSla, $tglKirim, $category);
+
+                    // Detect and link Kantor Pos Tujuan (In-memory lookup)
+                    $kantorTujuan = $res['kantor_tujuan'] ?? $shipment->kantor_tujuan;
+                    $kantorPosId = $shipment->kantor_pos_id;
+                    $matchedOffice = PostOffice::matchByDestinationOrAddress($kantorTujuan, $shipment->alamat);
+                    if ($matchedOffice) {
+                        $kantorTujuan = $kantorTujuan ?: $matchedOffice->name;
+                        $kantorPosId = $matchedOffice->id;
+                    }
+
+                    $lastLocation = $res['last_location'] ?? $shipment->last_location;
+                    $createdAtStr = $shipment->created_at ? (is_string($shipment->created_at) ? $shipment->created_at : $shipment->created_at->toDateTimeString()) : $nowStr;
+
+                    $updateBatch[] = [
+                        'nama_seller'     => $shipment->nama_seller,
+                        'no_resi'         => $shipment->no_resi,
+                        'nama_penerima'   => $shipment->nama_penerima,
+                        'no_hp'           => $shipment->no_hp,
+                        'alamat'          => $shipment->alamat,
+                        'tanggal_kirim'   => $tglKirim,
+                        'status_pos'      => $statusPos,
+                        'keterangan'      => $keterangan,
+                        'status_kategori' => $category,
+                        'color_code'      => $newColorCode,
+                        'fu_pos_date'     => $shipment->fu_pos_date,
+                        'noted'           => $shipment->noted,
+                        'sla_days'        => $slaDays,
+                        'kantor_tujuan'   => $kantorTujuan,
+                        'kantor_pos_id'   => $kantorPosId,
+                        'last_location'   => $lastLocation,
+                        'last_tracked_at' => $nowStr,
+                        'created_at'      => $createdAtStr,
+                        'updated_at'      => $nowStr,
+                    ];
+
+                    $slaStr = $botService->formatRunningSla($tglKirim, $category, $slaDays);
+                    $statusLabelMap = [
+                        'BIRU'     => 'PAKET SUKSES (DELIVERED)',
+                        'ORANGE'   => 'PAKET RETUR (RETURN)',
+                        'KUNING'   => 'SUDAH DI FU (1x)',
+                        'HIJAU'    => 'FU 2 KALI',
+                        'BIRU_TUA' => 'FU POS (ESKALASI KC/KCU)',
+                        'PUTIH'    => 'BELUM DI FOLLOW UP',
+                    ];
+                    $statusLabel = $statusLabelMap[$newColorCode] ?? 'BELUM DI FOLLOW UP';
+
+                    $syncPayload[] = [
+                        'resi'             => $shipment->no_resi,
+                        'seller'           => $shipment->nama_seller,
+                        'status_pos'       => $statusPos,
+                        'keterangan'       => $keterangan,
+                        'status_kategori'  => $category,
+                        'color_code'       => $newColorCode,
+                        'status_label'     => $statusLabel,
+                        'fu_type'          => $newColorCode,
+                        'sla'              => $slaStr,
+                        'sla_days'         => $slaStr,
+                        'updated_at'       => $nowStr,
+                        'prevent_overwrite_delivered_retur' => true,
+                    ];
+                } catch (Throwable $e) {
+                    Log::error("ProcessNiposTrackingJob [ERROR]: Skipped resi ID {$shipment->id} ({$shipment->no_resi}) due to error: " . $e->getMessage());
+                    continue;
+                }
+            }
+
+            // Bulk Batch Update / Upsert in Transaction (500 items per chunk)
+            $updatedCount = count($updateBatch);
+            DB::transaction(function () use ($updateBatch, $fallbackIds) {
+                if (!empty($fallbackIds)) {
+                    DB::table('outgoing_shipments')->whereIn('id', $fallbackIds)->update(['last_tracked_at' => null]);
+                }
+
+                if (!empty($updateBatch)) {
+                    foreach (array_chunk($updateBatch, 500) as $chunk) {
+                        DB::table('outgoing_shipments')->upsert(
+                            $chunk,
+                            ['no_resi'],
+                            [
+                                'nama_seller', 'nama_penerima', 'no_hp', 'alamat', 'tanggal_kirim',
+                                'status_pos', 'keterangan', 'status_kategori', 'color_code',
+                                'fu_pos_date', 'noted', 'sla_days', 'kantor_tujuan', 'kantor_pos_id',
+                                'last_location', 'last_tracked_at', 'updated_at'
+                            ]
+                        );
                     }
                 }
             });
 
-            Log::info("ProcessNiposTrackingJob finished updating {$updatedCount} of " . count($shipments) . " shipments.");
+            Log::info("ProcessNiposTrackingJob finished bulk updating {$updatedCount} of " . count($shipments) . " shipments.");
 
             // Auto-Update Back to Google Sheets (Reverse Sync via Background Queue Worker)
             if (!empty($syncPayload)) {

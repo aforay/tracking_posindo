@@ -49,7 +49,7 @@ class TrackingBotService
         }
 
         $isTesting = app()->environment('testing');
-        if ($isTesting && (str_contains($url, 'pid.posindonesia.co.id') || $url === $liveBaseUrl)) {
+        if ($isTesting) {
             foreach ($cleanResis as $resi) {
                 $results[$resi] = $this->generateSimulatedResult($resi);
             }

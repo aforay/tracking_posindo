@@ -139,7 +139,7 @@ class GoogleSheetsSyncService
                 $csvUrl = "https://docs.google.com/spreadsheets/d/{$spreadsheetId}/gviz/tq?tqx=out:csv&sheet=" . urlencode($sheetName);
                 
                 try {
-                    $response = Http::timeout(20)
+                    $response = Http::timeout(120)
                         ->withHeaders([
                             'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                             'Accept' => 'text/csv,text/plain,*/*',
@@ -153,7 +153,7 @@ class GoogleSheetsSyncService
                     $fallbackId = '1wKS0ZklbpTeLHN0APu2aIh7DBka3g4O15KNSJ0Wcdac';
                     Log::warning("GoogleSheetsSyncService: Primary Sheet ID [{$spreadsheetId}] inaccessible. Trying fallback ID [{$fallbackId}] for sheet [{$sheetName}]...");
                     $csvUrl = "https://docs.google.com/spreadsheets/d/{$fallbackId}/gviz/tq?tqx=out:csv&sheet=" . urlencode($sheetName);
-                    $response = Http::timeout(20)
+                    $response = Http::timeout(120)
                         ->withHeaders([
                             'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                             'Accept' => 'text/csv,text/plain,*/*',
@@ -311,10 +311,13 @@ class GoogleSheetsSyncService
         $headerMap = [];
         $headerFound = false;
 
+        $lineNum = 0;
         $processedCount = 0;
         $insertedCount = 0;
+        $skippedRowsLog = [];
 
         while (($rowArray = fgetcsv($stream, 0, ',', '"', '\\')) !== false) {
+            $lineNum++;
             if (empty(array_filter($rowArray))) {
                 continue;
             }
@@ -325,7 +328,7 @@ class GoogleSheetsSyncService
                 if (!empty($possibleMap)) {
                     $headerMap = $possibleMap;
                     $headerFound = true;
-                    Log::info("GoogleSheetsSyncService: Header detected on sheet [{$sheetName}]: " . json_encode($rowArray));
+                    Log::info("GoogleSheetsSyncService: Header detected at Line {$lineNum} on sheet [{$sheetName}]: " . json_encode($rowArray));
                     continue;
                 }
             }
@@ -342,6 +345,13 @@ class GoogleSheetsSyncService
                 }
                 $batchBuffer[] = $parsed;
                 $resisInBuffer[] = $parsed['no_resi'];
+            } else {
+                $rowSnippet = implode(' | ', array_slice(array_filter($rowArray), 0, 4));
+                $skippedRowsLog[] = [
+                    'line' => $lineNum,
+                    'preview' => $rowSnippet,
+                ];
+                Log::warning("GoogleSheetsSyncService [SKIPPED ROW]: Sheet [{$sheetName}] Line {$lineNum} skipped (No valid resi found): \"{$rowSnippet}\"");
             }
 
             // Upsert in 1,000-row chunks
@@ -360,9 +370,13 @@ class GoogleSheetsSyncService
 
         fclose($stream);
 
+        Log::info("GoogleSheetsSyncService Summary for [{$sheetName}]: Total Rows={$processedCount}, Valid Unique Resis Inserted/Updated={$insertedCount}, Skipped Rows=" . count($skippedRowsLog));
+
         return [
             'processed' => $processedCount,
             'inserted' => $insertedCount,
+            'skipped_count' => count($skippedRowsLog),
+            'skipped_rows' => $skippedRowsLog,
         ];
     }
 
