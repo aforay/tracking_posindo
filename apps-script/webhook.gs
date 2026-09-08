@@ -1,4 +1,4 @@
-﻿/**
+/**
  * ============================================================
  * POSINDO TRACKING - Google Apps Script Webhook
  * ============================================================
@@ -46,27 +46,65 @@ function doPost(e) {
 
 function handleFuStatusUpdate(data) {
   var resiList  = data.resis || data.resi_list || [];
-  var fuType    = data.fu_type || data.color_code || '';
-  var fuLabel   = data.status_label || fuType;
+  var fuType    = (data.fu_type || data.color_code || 'PUTIH').toUpperCase();
+  var fuLabel   = data.status_label || (
+    fuType === 'BIRU' ? 'DELIVERED (SUKSES)' :
+    (fuType === 'ORANGE' ? 'RETUR (RETURN)' :
+    (fuType === 'KUNING' ? 'FOLLOW UP' :
+    (fuType === 'HIJAU' ? 'SUDAH DIHUBUNGI' :
+    (fuType === 'BIRU_TUA' ? 'ESKALASI POS' : 'IN PROSES'))))
+  );
   var fuTime    = data.fu_timestamp || data.updated_at || '';
   var updated   = 0;
   var resiSet   = {};
-  resiList.forEach(function(r){ resiSet[r.trim().toUpperCase()] = true; });
+  resiList.forEach(function(r){ if(r) resiSet[String(r).trim().toUpperCase()] = true; });
 
-  SpreadsheetApp.getActiveSpreadsheet().getSheets().forEach(function(sheet){
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheetsToScan = [];
+  var specificSheetName = data.sheet || data.sheet_name || '';
+  if (specificSheetName) {
+    var sh = ss.getSheetByName(specificSheetName);
+    if (sh) sheetsToScan.push(sh);
+  }
+  if (sheetsToScan.length === 0) {
+    sheetsToScan = ss.getSheets();
+  }
+
+  sheetsToScan.forEach(function(sheet){
     var hdr = findHeaderRow(sheet); if(!hdr) return;
     var cResi = findCol(hdr, CONFIG.COL_RESI);     if(!cResi) return;
     var cFu   = findCol(hdr, CONFIG.COL_STATUS_FU);
     var cTgl  = findCol(hdr, CONFIG.COL_TANGGAL_FU);
     var last  = sheet.getLastRow();
     if(last <= hdr.rowIndex) return;
-    var vals  = sheet.getRange(hdr.rowIndex+1,1,last-hdr.rowIndex,sheet.getLastColumn()).getValues();
-    vals.forEach(function(row, i){
-      var resi = String(row[cResi-1]||'').trim().toUpperCase();
+
+    // Baca HANYA 1 kolom (Kolom Resi) untuk efisiensi kecepatan
+    var resiVals = sheet.getRange(hdr.rowIndex+1, cResi, last-hdr.rowIndex, 1).getValues();
+    resiVals.forEach(function(row, i){
+      var resi = String(row[0]||'').trim().toUpperCase();
       if(!resiSet[resi]) return;
       var actualRow = hdr.rowIndex + 1 + i;
-      if(cFu){ var cell=sheet.getRange(actualRow,cFu); cell.setValue(fuLabel); cell.setBackground(getFuBg(fuType)); cell.setFontColor(getFuFg(fuType)); }
-      if(cTgl && fuTime){ sheet.getRange(actualRow,cTgl).setValue(fmtDate(fuTime)); }
+      
+      // Update Status FU beserta Warna
+      if(cFu){ 
+        var cell = sheet.getRange(actualRow, cFu); 
+        cell.setValue(fuLabel); 
+        cell.setBackground(getFuBg(fuType)); 
+        cell.setFontColor(getFuFg(fuType)); 
+      }
+      if(cTgl && fuTime){ 
+        sheet.getRange(actualRow, cTgl).setValue(fmtDate(fuTime)); 
+      }
+
+      // Warnai Baris Data (Kolom C s/d Kolom J)
+      try {
+        var startCol = Math.min(3, cResi);
+        var numCols = Math.min(8, sheet.getLastColumn() - startCol + 1);
+        if (numCols > 0) {
+          sheet.getRange(actualRow, startCol, 1, numCols).setBackground(getFuBg(fuType));
+        }
+      } catch (eColor) {}
+
       updated++;
     });
   });
@@ -75,10 +113,27 @@ function handleFuStatusUpdate(data) {
 
 function handleNiposUpdate(data) {
   var items = data.items || []; if(!items.length) return {status:'success',updated_count:0};
-  var resiMap = {}; items.forEach(function(it){ resiMap[String(it.resi||'').toUpperCase()] = it; });
+  var resiMap = {}; items.forEach(function(it){ if(it && it.resi) resiMap[String(it.resi).trim().toUpperCase()] = it; });
   var updated = 0;
 
-  SpreadsheetApp.getActiveSpreadsheet().getSheets().forEach(function(sheet){
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheetsToScan = [];
+
+  // Optimasi Kecepatan: Jika payload menyebutkan nama sheet (misal: "AGUSTUS 2026 (FP ALIQA)"), hanya scan sheet tersebut
+  var specificSheetName = data.sheet || data.sheet_name || (items[0] && (items[0].sheet || items[0].sheet_name)) || '';
+  if (specificSheetName) {
+    var sh = ss.getSheetByName(specificSheetName);
+    if (sh) {
+      sheetsToScan.push(sh);
+    }
+  }
+
+  // Jika tidak ditemukan atau tidak ditentukan, scan semua sheet
+  if (sheetsToScan.length === 0) {
+    sheetsToScan = ss.getSheets();
+  }
+
+  sheetsToScan.forEach(function(sheet){
     var hdr = findHeaderRow(sheet); if(!hdr) return;
     var cResi = findCol(hdr, CONFIG.COL_RESI);   if(!cResi) return;
     var cPos  = findCol(hdr, CONFIG.COL_STATUS_POS);
@@ -87,22 +142,56 @@ function handleNiposUpdate(data) {
     var cFu   = findCol(hdr, CONFIG.COL_STATUS_FU);
     var last  = sheet.getLastRow();
     if(last <= hdr.rowIndex) return;
-    var vals  = sheet.getRange(hdr.rowIndex+1,1,last-hdr.rowIndex,sheet.getLastColumn()).getValues();
-    vals.forEach(function(row, i){
-      var resi = String(row[cResi-1]||'').trim().toUpperCase();
+
+    // Baca HANYA 1 kolom (Kolom Resi) sehingga super cepat (kurang dari 100ms per sheet)
+    var resiVals = sheet.getRange(hdr.rowIndex+1, cResi, last-hdr.rowIndex, 1).getValues();
+    resiVals.forEach(function(row, i){
+      var resi = String(row[0]||'').trim().toUpperCase();
       var item = resiMap[resi]; if(!item) return;
       var actualRow = hdr.rowIndex + 1 + i;
-      var cc = item.color_code || 'PUTIH';
-      if(cPos && item.status_pos){ sheet.getRange(actualRow,cPos).setValue(item.status_pos); }
-      if(cKet && item.keterangan){ sheet.getRange(actualRow,cKet).setValue(item.keterangan); }
-      if(cSla && item.sla){ sheet.getRange(actualRow,cSla).setValue(item.sla); }
-      // Update kolom FU hanya jika NIPOS konfirmasi DELIVERED/RETUR
-      if(cFu && (cc==='BIRU'||cc==='ORANGE')){
-        var cell=sheet.getRange(actualRow,cFu);
-        cell.setValue(item.status_label||cc);
+      var cc = (item.color_code || 'PUTIH').toUpperCase();
+      
+      // 1. Update Kolom Status POS (TRACKING) beserta Background & Warna Teks
+      if(cPos && item.status_pos){ 
+        var posCell = sheet.getRange(actualRow, cPos);
+        posCell.setValue(item.status_pos); 
+        posCell.setBackground(getFuBg(cc));
+        posCell.setFontColor(getFuFg(cc));
+      }
+      
+      // 2. Update Kolom Keterangan
+      if(cKet && item.keterangan){ 
+        sheet.getRange(actualRow, cKet).setValue(item.keterangan); 
+      }
+      
+      // 3. Update Kolom SLA
+      if(cSla && item.sla){ 
+        sheet.getRange(actualRow, cSla).setValue(item.sla); 
+      }
+      
+      // 4. Update Kolom Status FU beserta Background & Warna Teks
+      if(cFu){
+        var cell = sheet.getRange(actualRow, cFu);
+        var label = item.status_label || (
+          cc === 'BIRU' ? 'DELIVERED (SUKSES)' :
+          (cc === 'ORANGE' ? 'RETUR (RETURN)' :
+          (cc === 'KUNING' ? 'FOLLOW UP' :
+          (cc === 'HIJAU' ? 'SUDAH DIHUBUNGI' :
+          (cc === 'BIRU_TUA' ? 'ESKALASI POS' : 'IN PROSES'))))
+        );
+        cell.setValue(label);
         cell.setBackground(getFuBg(cc));
         cell.setFontColor(getFuFg(cc));
       }
+
+      // 5. Warnai Baris Data (Kolom A s/d Kolom R / batas data utama)
+      try {
+        var numCols = Math.min(18, sheet.getLastColumn());
+        if (numCols > 0) {
+          sheet.getRange(actualRow, 1, 1, numCols).setBackground(getFuBg(cc));
+        }
+      } catch (errColor) {}
+
       updated++;
     });
   });
@@ -128,7 +217,26 @@ function findCol(hdr, keywords) {
 }
 
 function getFuBg(ft){
-  return {BIRU:'#1565C0',ORANGE:'#E65100',KUNING:'#F9A825',HIJAU:'#2E7D32',BIRU_TUA:'#0D47A1'}[ft]||'#FFFFFF';
+  return {
+    BIRU: '#32B8C8',      // Cyan-Teal / Posindo Blue (Paket Sukses)
+    ORANGE: '#FFB719',    // Orange/Amber (Paket Retur)
+    KUNING: '#FFFF00',    // Bright Yellow (Sudah di FU)
+    PUTIH: '#FFFFFF',     // White (Belum di FU / In Process)
+    HIJAU: '#93C47D',     // Soft Green (Sudah Dihubungi)
+    BIRU_TUA: '#1F4E79'   // Dark Navy Blue (FU POS)
+  }[ft] || '#FFFFFF';
 }
-function getFuFg(ft){ return (ft==='PUTIH'||ft==='KUNING')?'#000000':'#FFFFFF'; }
-function fmtDate(s){ try{var d=new Date(s);var p=function(n){return n<10?'0'+n:n;}; return p(d.getDate())+'/'+p(d.getMonth()+1)+'/'+d.getFullYear()+' '+p(d.getHours())+':'+p(d.getMinutes());}catch(e){return s;} }
+
+function getFuFg(ft){ 
+  return (ft==='PUTIH'||ft==='KUNING'||ft==='HIJAU'||ft==='ORANGE') ? '#000000' : '#FFFFFF'; 
+}
+
+function fmtDate(s){ 
+  try{
+    var d=new Date(s);
+    var p=function(n){return n<10?'0'+n:n;}; 
+    return p(d.getDate())+'/'+p(d.getMonth()+1)+'/'+d.getFullYear()+' '+p(d.getHours())+':'+p(d.getMinutes());
+  }catch(e){
+    return s;
+  } 
+}

@@ -406,9 +406,12 @@ class GoogleSheetsSyncService
 
         if (!empty($webhookUrl)) {
             try {
+                $targetSheet = $trackingItems[0]['sheet_name'] ?? ($trackingItems[0]['sheet'] ?? '');
                 $payload = [
                     'action' => 'reverse_sync_nipos',
                     'spreadsheet_id' => $spreadsheetId,
+                    'sheet' => $targetSheet,
+                    'sheet_name' => $targetSheet,
                     'total_items' => count($trackingItems),
                     'items' => array_values($trackingItems),
                     'resis' => array_values(array_filter(array_column($trackingItems, 'resi'))),
@@ -426,8 +429,10 @@ class GoogleSheetsSyncService
                     curl_setopt($ch, CURLOPT_POST, true);
                     curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
                     curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
-                    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 1);
-                    curl_setopt($ch, CURLOPT_TIMEOUT, 2);
+                    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+                    curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+                    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 15);
+                    curl_setopt($ch, CURLOPT_TIMEOUT, 60);
                     $body = curl_exec($ch);
                     $statusCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
                     curl_close($ch);
@@ -514,7 +519,10 @@ class GoogleSheetsSyncService
                 curl_setopt($ch, CURLOPT_POST, true);
                 curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
                 curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
-                curl_setopt($ch, CURLOPT_TIMEOUT, 15);
+                curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+                curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+                curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 15);
+                curl_setopt($ch, CURLOPT_TIMEOUT, 45);
                 $body = curl_exec($ch);
                 $statusCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
                 curl_close($ch);

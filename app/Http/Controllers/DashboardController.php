@@ -12,6 +12,7 @@ use App\Jobs\SyncSheetFilterJob;
 use App\Jobs\UpdateSheetStatusJob;
 use App\Models\OutgoingShipment;
 use App\Models\SystemSetting;
+use App\Services\GoogleSheetsSyncService;
 use App\Services\TrackingBotService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -1184,23 +1185,42 @@ class DashboardController extends Controller
     /**
      * Trigger background Reverse Sync (Push DB -> Google Sheets)
      */
-    public function pushUpdatesToSheets(Request $request)
+    public function pushUpdatesToSheets(Request $request, GoogleSheetsSyncService $syncService)
     {
         try {
             $month = $request->input('month');
             $sheet = $request->input('sheet');
+            $seller = $request->input('seller');
+            $offset = $request->input('offset') !== null ? (int)$request->input('offset') : null;
+            $limit = min(200, max(10, (int)$request->input('limit', 100)));
+
+            $monthNames = [
+                1 => 'Januari', 2 => 'Februari', 3 => 'Maret', 4 => 'April',
+                5 => 'Mei', 6 => 'Juni', 7 => 'Juli', 8 => 'Agustus',
+                9 => 'September', 10 => 'Oktober', 11 => 'November', 12 => 'Desember'
+            ];
+
+            $monthSheetMapZaherba = [
+                1 => 'JANUARI (ZAHERBA)', 2 => 'FEBRUARI (ZAHERBA)', 3 => 'MARET (ZAHERBA)',
+                4 => 'APRIL (ZAHERBA)', 5 => 'MEI (ZAHERBA)', 6 => 'JUNI (ZAHERBA)',
+                7 => 'JULI (ZAHERBA)', 8 => 'AGUSTUS (ZAHERBA)', 9 => 'SEPTEMBER (ZAHERBA)',
+                10 => 'OKTOBER (ZAHERBA)', 11 => 'NOVEMBER (ZAHERBA)', 12 => 'DESEMBER (ZAHERBA)',
+            ];
+
+            $monthSheetMapAliqa = [
+                1 => 'JANUARI 2026 (FP ALIQA)', 2 => 'FEBRUARI 2026 (FP ALIQA)', 3 => 'MARET 2026 (FP ALIQA)',
+                4 => 'APRIL 2026 (FP ALIQA)', 5 => 'MEI 2026 (FP ALIQA)', 6 => 'JUNI 2026 (FP ALIQA).',
+                7 => 'JULI 2026 (FP ALIQA)', 8 => 'AGUSTUS 2026 (FP ALIQA)', 9 => 'SEPTEMBER 2026 (FP ALIQA)',
+                10 => 'OKTOBER 2026 (FP ALIQA)', 11 => 'NOVEMBER 2026 (FP ALIQA)', 12 => 'DESEMBER 2026 (FP ALIQA)',
+            ];
+
             $query = OutgoingShipment::query();
 
             $targetMonth = null;
             if (!empty($sheet)) {
-                $monthNames = [
-                    1 => 'JANUARI', 2 => 'FEBRUARI', 3 => 'MARET', 4 => 'APRIL',
-                    5 => 'MEI', 6 => 'JUNI', 7 => 'JULI', 8 => 'AGUSTUS',
-                    9 => 'SEPTEMBER', 10 => 'OKTOBER', 11 => 'NOVEMBER', 12 => 'DESEMBER',
-                ];
                 $sUpper = strtoupper($sheet);
                 foreach ($monthNames as $mNum => $mName) {
-                    if (str_contains($sUpper, $mName) || str_contains($sUpper, substr($mName, 0, 3))) {
+                    if (str_contains($sUpper, strtoupper($mName)) || str_contains($sUpper, strtoupper(substr($mName, 0, 3)))) {
                         $targetMonth = $mNum;
                         break;
                     }
@@ -1214,11 +1234,9 @@ class DashboardController extends Controller
             if ($targetMonth !== null && $targetMonth >= 1 && $targetMonth <= 12) {
                 $query->whereMonth('tanggal_kirim', $targetMonth);
             } elseif (empty($sheet) && (empty($month) || (string)$month === '0' || (string)$month === 'current')) {
-                // Default to current running month if no specific month or ALL specified
                 $query->whereMonth('tanggal_kirim', (int)date('n'));
             }
 
-            $seller = $request->input('seller');
             if (!empty($seller) && $seller !== 'ALL' && $seller !== 'Semua Seller') {
                 $cleanSeller = trim(preg_replace('/^Mitra\s+/i', '', $seller));
                 $query->where(function ($q) use ($seller, $cleanSeller) {
@@ -1234,47 +1252,139 @@ class DashboardController extends Controller
                   ->orWhereIn('status_kategori', ['SUKSES', 'RETUR', 'FOLLOW_UP', 'IN_PROCESS']);
             });
 
-            $shipments = $query->get();
-
-            $totalCount = $shipments->count();
+            $totalCount = $query->count();
             if ($totalCount === 0) {
                 return response()->json([
                     'success' => true,
-                    'message' => 'Tidak ada status resi yang perlu di-push ke Google Sheets untuk bulan/tab tersebut.',
+                    'total' => 0,
+                    'offset' => 0,
+                    'processed' => 0,
+                    'done' => true,
+                    'message' => 'Tidak ada status resi yang perlu di-push ke Google Sheets untuk filter tersebut.',
                     'count' => 0
                 ]);
             }
 
-            $payload = [];
+            // If offset is provided (chunked / real-time mode from frontend)
+            $isChunkMode = ($offset !== null);
+            if ($isChunkMode) {
+                $shipments = $query->orderBy('id', 'asc')->skip($offset)->take($limit)->get();
+            } else {
+                $shipments = $query->orderBy('id', 'asc')->get();
+            }
+
             $botService = app(\App\Services\TrackingBotService::class);
+            $payload = [];
+
             foreach ($shipments as $shipment) {
                 $isDelivered = $shipment->status_kategori === 'SUKSES';
                 $isRetur = $shipment->status_kategori === 'RETUR';
                 $isInProcess = !$isDelivered && !$isRetur;
 
-                $statusPosText = $isInProcess ? 'IN PROSES' : ($isRetur ? ($shipment->status_pos ?: 'DELIVERED (RETURN DELIVERY)') : 'DELIVERED');
+                $isAliqa = str_contains(strtoupper($shipment->nama_seller ?? ''), 'ALIQA') || str_contains(strtoupper($seller ?? ''), 'ALIQA');
+                $mNum = $shipment->tanggal_kirim ? (int)date('n', strtotime($shipment->tanggal_kirim)) : ($targetMonth ?: (int)date('n'));
+                $sheetName = !empty($sheet) ? $sheet : ($isAliqa
+                    ? ($monthSheetMapAliqa[$mNum] ?? 'AGUSTUS 2026 (FP ALIQA)')
+                    : ($monthSheetMapZaherba[$mNum] ?? 'AGUSTUS (ZAHERBA)'));
+
                 $slaStr = $botService->formatRunningSla($shipment->tanggal_kirim, $shipment->status_kategori ?: 'IN_PROCESS', $shipment->sla_days ?: 2);
 
+                if ($isInProcess) {
+                    $statusPosText = $shipment->status_pos ?: 'IN PROSES';
+                    $keteranganText = $shipment->keterangan ?: 'PROSES PENGIRIMAN POS';
+                    $colorCode = $shipment->color_code ?: 'PUTIH';
+                    $statusKategori = 'IN_PROCESS';
+                } elseif ($isRetur) {
+                    $statusPosText = $shipment->status_pos ?: 'DELIVERED (RETURN DELIVERY)';
+                    $keteranganText = $shipment->keterangan ?: 'DITERIMA PENGIRIM (MITRA)';
+                    $colorCode = $shipment->color_code ?: 'ORANGE';
+                    $statusKategori = 'RETUR';
+                } else {
+                    $statusPosText = $shipment->status_pos ?: 'DELIVERED';
+                    $keteranganText = $shipment->keterangan ?: 'DITERIMA YANG BERSANGKUTAN';
+                    $colorCode = $shipment->color_code ?: 'BIRU';
+                    $statusKategori = 'SUKSES';
+                }
+
+                $statusLabel = match($colorCode) {
+                    'BIRU' => 'DELIVERED (SUKSES)',
+                    'ORANGE' => 'RETUR (RETURN)',
+                    'KUNING' => 'FOLLOW UP',
+                    'HIJAU' => 'SUDAH DIHUBUNGI',
+                    'BIRU_TUA' => 'ESKALASI POS',
+                    default => ($isInProcess ? 'IN PROSES' : $statusPosText),
+                };
+
                 $payload[] = [
+                    'seller' => $shipment->nama_seller ?: ($isAliqa ? 'Mitra Aliqa' : 'Mitra Zaherba'),
                     'resi' => $shipment->no_resi,
+                    'sheet' => $sheetName,
+                    'sheet_name' => $sheetName,
                     'status_pos' => $statusPosText,
-                    'keterangan' => $shipment->keterangan ?: ($isInProcess ? 'PROSES PENGIRIMAN POS' : ($isRetur ? 'DITERIMA PENGIRIM (MITRA)' : 'DITERIMA YANG BERSANGKUTAN')),
-                    'status_kategori' => $shipment->status_kategori ?: ($isInProcess ? 'IN_PROCESS' : ($isRetur ? 'RETUR' : 'SUKSES')),
-                    'color_code' => $shipment->color_code ?: ($isInProcess ? 'PUTIH' : ($isRetur ? 'ORANGE' : 'BIRU')),
+                    'keterangan' => $keteranganText,
+                    'status_kategori' => $statusKategori,
+                    'color_code' => $colorCode,
+                    'status_label' => $statusLabel,
                     'sla' => $slaStr,
                     'sla_days' => $slaStr,
                     'prevent_overwrite_delivered_retur' => true,
                 ];
             }
 
-            // Dispatch chunked batch per 300 resis to background queue job
+            // In chunk mode: execute immediately & return real-time result
+            if ($isChunkMode) {
+                $syncRes = $syncService->reverseSyncNiposTracking($payload);
+                $updatedInGas = $syncRes['response']['updated_count'] ?? 0;
+                $processedCount = count($payload);
+                $isDone = ($offset + $processedCount) >= $totalCount;
+                $isWebhookOk = ($syncRes['webhook_success'] ?? false);
+
+                if (!$isWebhookOk) {
+                    $rawErr = is_array($syncRes['response'] ?? null) 
+                        ? ($syncRes['response']['message'] ?? 'Webhook mengembalikan status bukan success.') 
+                        : 'Webhook Google Apps Script mengembalikan error (bukan JSON valid). Periksa kode script di Google Sheets Anda.';
+                    return response()->json([
+                        'success' => false,
+                        'message' => "Google Apps Script Error: {$rawErr}",
+                        'details' => $syncRes,
+                    ], 500);
+                }
+
+                return response()->json([
+                    'success' => true,
+                    'total' => $totalCount,
+                    'offset' => $offset,
+                    'processed' => $processedCount,
+                    'updated_in_gas' => $updatedInGas,
+                    'done' => $isDone,
+                    'message' => "Berhasil memproses batch {$processedCount} resi ke Google Sheets."
+                ]);
+            }
+
+            // Fallback for non-chunked single request
+            if ($totalCount <= 150) {
+                $syncRes = $syncService->reverseSyncNiposTracking($payload);
+                return response()->json([
+                    'success' => true,
+                    'total' => $totalCount,
+                    'processed' => count($payload),
+                    'updated_in_gas' => $syncRes['response']['updated_count'] ?? 0,
+                    'done' => true,
+                    'message' => "Reverse Sync berhasil dieksekusi untuk {$totalCount} resi ke Google Sheets.",
+                    'count' => $totalCount
+                ]);
+            }
+
+            // If large dataset and no offset: dispatch background jobs
             foreach (array_chunk($payload, 300) as $chunk) {
                 ReverseSyncGoogleSheetsJob::dispatch($chunk);
             }
 
             return response()->json([
                 'success' => true,
-                'message' => "Reverse Sync berhasil dipicu untuk {$totalCount} resi di latar belakang (Queue Worker).",
+                'total' => $totalCount,
+                'done' => true,
+                'message' => "Reverse Sync berhasil dipicu untuk {$totalCount} resi di latar belakang.",
                 'count' => $totalCount
             ]);
         } catch (Throwable $e) {

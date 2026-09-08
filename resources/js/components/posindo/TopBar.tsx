@@ -103,31 +103,59 @@ export function TopBar({
   const handlePushUpdates = async () => {
     if (isPushing) return;
     setIsPushing(true);
+    const toastId = toast.loading("Menghubungkan ke Google Sheets...");
     try {
       const csrfToken = getCsrfToken();
-      const targetMonth = selectedSyncMonth === "current" ? "" : selectedSyncMonth;
-      const res = await fetch("/shipments/push-updates", {
-        method: "POST",
-        headers: {
-          "Accept": "application/json",
-          "Content-Type": "application/json",
-          "X-CSRF-TOKEN": csrfToken,
-        },
-        body: JSON.stringify({
-          month: targetMonth,
-          seller: normalizedSeller,
-        }),
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        toast.success("Memulai Reverse Sync ke Google Sheets!", {
-          description: data.message || "Status terbaru dikirim ke Google Sheets via Webhook di latar belakang.",
+      const targetMonth = selectedSyncMonth === "current" ? activeBotMonth : (selectedSyncMonth || activeBotMonth);
+      let offset = 0;
+      const limit = 100;
+      let total = 0;
+      let totalGasUpdated = 0;
+
+      while (true) {
+        const res = await fetch("/shipments/push-updates", {
+          method: "POST",
+          headers: {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "X-CSRF-TOKEN": csrfToken,
+          },
+          body: JSON.stringify({
+            month: targetMonth,
+            seller: normalizedSeller,
+            offset: offset,
+            limit: limit,
+          }),
         });
-      } else {
-        toast.error(data.message || "Gagal melakukan push status ke Google Sheets.");
+
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+          throw new Error(data.message || "Gagal melakukan push status ke Google Sheets.");
+        }
+
+        total = data.total || 0;
+        if (total === 0) {
+          toast.info(data.message || "Tidak ada resi yang perlu di-push.", { id: toastId });
+          break;
+        }
+
+        const processed = data.processed || 0;
+        offset += processed;
+        totalGasUpdated += (data.updated_in_gas || 0);
+        const percent = Math.min(100, Math.round((offset / total) * 100));
+
+        toast.loading(`Mendorong Status & Warna (${offset}/${total} resi - ${percent}%)...`, { id: toastId });
+
+        if (data.done || offset >= total || processed === 0) {
+          toast.success("Berhasil Push ke Google Sheets!", {
+            id: toastId,
+            description: `${offset} resi status dan warna telah terkirim ke Google Sheets (${activeBotMonthName}).`,
+          });
+          break;
+        }
       }
-    } catch (err) {
-      toast.error("Gagal melakukan push status: " + String(err));
+    } catch (err: any) {
+      toast.error("Gagal melakukan push status: " + (err.message || String(err)), { id: toastId });
     } finally {
       setIsPushing(false);
     }
