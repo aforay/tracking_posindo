@@ -26,6 +26,9 @@ class OutgoingShipment extends Model
         'noted',
         'sla_days',
         'last_tracked_at',
+        'kantor_tujuan',
+        'last_location',
+        'kantor_pos_id',
     ];
 
     protected $casts = [
@@ -40,6 +43,14 @@ class OutgoingShipment extends Model
     public function logs(): \Illuminate\Database\Eloquent\Relations\HasMany
     {
         return $this->hasMany(ShipmentLog::class, 'shipment_id');
+    }
+
+    /**
+     * Relationship to post office (KC / KCU contact)
+     */
+    public function postOffice(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return $this->belongsTo(PostOffice::class, 'kantor_pos_id');
     }
 
     /**
@@ -133,6 +144,12 @@ class OutgoingShipment extends Model
                           ->orWhere('status_pos', 'NOT LIKE', '%DELIVERED%')
                           ->orWhere('status_pos', 'LIKE', '%RETURN%');
                   });
+              })
+              // 6. Belum memiliki Kantor Pos Tujuan resmi dari NIPOS
+              ->orWhere(function ($kantorQ) {
+                  $kantorQ->whereNull('kantor_tujuan')
+                          ->orWhere('kantor_tujuan', '')
+                          ->orWhereIn('kantor_tujuan', ['KC TUJUAN', 'KANTOR POS TUJUAN', 'KC PENGANTARAN', 'KC POS PENGANTARAN', 'POS PENGANTARAN', 'KC POS INDONESIA', 'POS INDONESIA']);
               });
         });
     }
@@ -181,5 +198,13 @@ class OutgoingShipment extends Model
         }
 
         return false;
+    }
+
+    /**
+     * Relationship to PostOffice
+     */
+    public function kantorPos(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return $this->belongsTo(PostOffice::class, 'kantor_pos_id');
     }
 }

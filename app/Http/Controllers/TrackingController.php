@@ -4,9 +4,11 @@ namespace App\Http\Controllers;
 
 use App\Models\Shipment;
 use App\Models\OutgoingShipment;
+use App\Models\PostOffice;
 use App\Jobs\ProcessNiposTrackingJob;
 use App\Jobs\UpdateSheetStatusJob;
 use App\Services\TrackingBotService;
+use App\Services\NiposFastTracker;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
@@ -263,11 +265,91 @@ class TrackingController extends Controller
                     'keterangan' => $fresh->keterangan,
                     'color_code' => $fresh->color_code,
                     'status_kategori' => $fresh->status_kategori,
+                    'kantor_tujuan' => $fresh->kantor_tujuan,
+                    'last_location' => $fresh->last_location,
                 ],
             ]);
         }
 
         return back()->with('success', "Resi {$fresh->no_resi} berhasil diperbarui: {$fresh->status_pos}.");
+    }
+
+    /**
+     * Fast batch resolution of missing Kantor Pos (KC/KCU) from NIPOS for visible table items
+     */
+    public function resolveKantor(Request $request)
+    {
+        $ids = $request->input('ids', []);
+        $resis = $request->input('resis', []);
+
+        if (empty($ids) && empty($resis)) {
+            return response()->json(['success' => true, 'offices' => []]);
+        }
+
+        $query = OutgoingShipment::query();
+        if (!empty($ids)) {
+            $cleanIds = array_slice(array_filter(array_map('intval', (array)$ids)), 0, 50);
+            $query->whereIn('id', $cleanIds);
+        } else {
+            $cleanResis = array_slice(array_filter(array_map('trim', (array)$resis)), 0, 50);
+            $query->whereIn('no_resi', $cleanResis);
+        }
+
+        $shipments = $query->get();
+        $missingShipments = [];
+        $resolvedMap = [];
+
+        $genericNames = ['KC TUJUAN', 'KANTOR POS TUJUAN', 'KC POS PENGANTARAN', 'KC PENGANTARAN', 'POS PENGANTARAN', 'KC POS INDONESIA', 'POS INDONESIA'];
+
+        foreach ($shipments as $s) {
+            $rawKC = strtoupper(trim((string)$s->kantor_tujuan));
+            if (!empty($rawKC) && !in_array($rawKC, $genericNames)) {
+                $resolvedMap[$s->no_resi] = $s->kantor_tujuan;
+                $resolvedMap[(string)$s->id] = $s->kantor_tujuan;
+            } elseif (!empty($s->no_resi)) {
+                $missingShipments[] = $s;
+            }
+        }
+
+        if (!empty($missingShipments)) {
+            $fastTracker = app(NiposFastTracker::class);
+            $missingResis = array_values(array_unique(array_map(fn($item) => $item->no_resi, $missingShipments)));
+
+            try {
+                $niposResults = $fastTracker->trackMany($missingResis, 40);
+
+                foreach ($missingShipments as $s) {
+                    if (isset($niposResults[$s->no_resi])) {
+                        $data = $niposResults[$s->no_resi];
+                        $officeName = !empty($data['posisi_akhir']) ? trim($data['posisi_akhir']) : (!empty($data['kantor_tujuan']) ? trim($data['kantor_tujuan']) : null);
+
+                        if (!empty($officeName) && !in_array(strtoupper($officeName), $genericNames)) {
+                            $matched = PostOffice::matchByDestinationOrAddress($officeName, $s->alamat);
+                            if ($matched) {
+                                $s->kantor_pos_id = $matched->id;
+                                $s->kantor_tujuan = $matched->name;
+                                $s->last_location = $matched->name;
+                                $resolvedMap[$s->no_resi] = $matched->name;
+                                $resolvedMap[(string)$s->id] = $matched->name;
+                            } else {
+                                $s->kantor_tujuan = $officeName;
+                                $s->last_location = $officeName;
+                                $resolvedMap[$s->no_resi] = $officeName;
+                                $resolvedMap[(string)$s->id] = $officeName;
+                            }
+                            $s->saveQuietly();
+                        }
+                    }
+                }
+            } catch (\Throwable $e) {
+                Log::warning('resolveKantor failed: ' . $e->getMessage());
+            }
+        }
+
+        return response()->json([
+            'success' => true,
+            'offices' => $resolvedMap,
+        ]);
     }
 
     /**

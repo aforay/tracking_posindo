@@ -582,6 +582,55 @@ export default function Dashboard() {
       </header>
 
       <main className="space-y-4 p-5">
+        {/* Overdue SLA Proactive Alert Banner */}
+        {Number(pageProps?.stats?.overdue || 0) > 0 && !isOverdue && (
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-2xs">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-xs">
+                <AlertTriangle className="w-4 h-4" />
+              </div>
+              <div>
+                <h4 className="text-xs font-bold text-amber-950">
+                  Peringatan SLA: Ada {nf(pageProps?.stats?.overdue || 0)} Paket Macet &gt; 4 Hari Belum Selesai!
+                </h4>
+                <p className="text-[11px] text-amber-800">
+                  Paket belum berstatus final (Sukses/Retur) dan telah melebihi estimasi SLA antaran. Segera koordinasi atau eskalasi ke Kantor Pos tujuan.
+                </p>
+              </div>
+            </div>
+            <Button
+              size="sm"
+              onClick={() => {
+                setIsOverdue(true);
+                router.get("/shipments", { seller, month, color: colorFilter, search: query, sort, direction, overdue: 1 }, { preserveState: true, preserveScroll: true });
+              }}
+              className="bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold shrink-0 cursor-pointer"
+            >
+              Filter {nf(pageProps?.stats?.overdue || 0)} Paket Macet &rarr;
+            </Button>
+          </div>
+        )}
+
+        {isOverdue && (
+          <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 flex items-center justify-between shadow-2xs">
+            <div className="flex items-center gap-2 text-xs font-bold text-rose-950">
+              <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+              <span>Menampilkan filter paket macet (&gt;4 hari lewat SLA).</span>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setIsOverdue(false);
+                router.get("/shipments", { seller, month, color: colorFilter, search: query, sort, direction }, { preserveState: true, preserveScroll: true });
+              }}
+              className="text-xs font-semibold text-rose-800 border-rose-300 hover:bg-rose-100 cursor-pointer"
+            >
+              Tampilkan Semua Paket
+            </Button>
+          </div>
+        )}
+
         <section className={`grid gap-3 grid-cols-2 sm:grid-cols-3 ${isAliqa ? "lg:grid-cols-3 xl:grid-cols-6" : "lg:grid-cols-4 xl:grid-cols-7"}`}>
           {cards.map((c, i) => {
             const isSelected = c.colorKey !== null && colorFilter === c.colorKey;

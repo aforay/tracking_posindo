@@ -66,45 +66,145 @@ export const WA_TEMPLATES: { id: WaTemplateType; label: string; desc: string }[]
   },
 ];
 
+export function resolveDestinationOffice(shipment: Shipment, postOfficeName?: string): string {
+  const rawOffice = (postOfficeName || shipment.kantorTujuan || "").trim();
+  const generic = [
+    'KC TUJUAN', 'KANTOR POS TUJUAN', 'KC POS PENGANTARAN', 'KC PENGANTARAN',
+    'POS PENGANTARAN', 'KC POS INDONESIA', 'POS INDONESIA', 'KANTOR POS TERKAIT'
+  ];
+  const isGeneric = !rawOffice || generic.includes(rawOffice.toUpperCase());
+  const isTransitHub = /^(SPP|MPC|DC|SENTRAL|TRANSIT)\b/i.test(rawOffice);
+
+  // If explicit postOfficeName was selected and it's not generic/transit, use it
+  if (postOfficeName && !isGeneric && !isTransitHub) {
+    return postOfficeName;
+  }
+
+  const city = extractCityRegency(shipment.alamat || "", isGeneric || isTransitHub ? "" : rawOffice);
+
+  // If rawOffice is a transit hub (like SPP JAKARTA TIMUR 13400) or generic, and we have destination city (e.g. Mimika), use destination KC!
+  if ((isGeneric || isTransitHub) && city && city !== "-") {
+    return `KC ${city.replace(/^(Kota|Kab\.?|Kec\.?)\s+/i, "").trim().toUpperCase()}`;
+  }
+
+  if (!isGeneric && !isTransitHub) {
+    return rawOffice;
+  }
+
+  if (city && city !== "-") {
+    return `KC ${city.replace(/^(Kota|Kab\.?|Kec\.?)\s+/i, "").trim().toUpperCase()}`;
+  }
+
+  return rawOffice || "Kantor Pos Terkait";
+}
+
 export function generatePostOfficeWaMessage(
   shipment: Shipment,
   postOfficeName?: string,
   customNote?: string,
   template: WaTemplateType = "STANDAR"
 ): string {
-  const office = postOfficeName || shipment.kantorTujuan || "Kantor Pos Tujuan";
-  
-  let greetingTitle = "Mohon bantuannya untuk pengecekan / follow-up kiriman berikut:";
-  let closingMessage = "Mohon bantuannya agar dapat segera diantar / diklarifikasi ke penerima agar paket sukses terkirim dan tidak terjadi komplain ya kak. Terima kasih banyak atas kerjasamanya! 🙏✨";
+  const office = resolveDestinationOffice(shipment, postOfficeName);
+
+  let judulPermohonan = "Pengecekan Status & Update Pengantaran";
+  let penutup = "Mohon bantuannya untuk dilakukan pengecekan status dan bantuan pengantaran ke penerima ya rekan. Terima kasih atas kerjasamanya.";
 
   if (template === "ANTAR_ULANG") {
-    greetingTitle = "Mohon bantuannya untuk *PERMOHONAN PENGANTARAN ULANG* atas kiriman berikut:";
-    closingMessage = "📌 *Info Tambahan CS:* Penerima telah kami konfirmasi dan siap menerima paket di lokasi. Mohon berkenan dibantu jadwalkan antaran ulang oleh rekan kurir ya kak. Terima kasih banyak! 🙏✨";
-  } else if (template === "KONFIRMASI_ALAMAT") {
-    greetingTitle = "Mohon bantuannya untuk *KONFIRMASI NOMOR HP & DETAIL ALAMAT PENERIMA* atas kiriman berikut:";
-    closingMessage = "📌 *Info Tambahan CS:* Kami telah menghubungi pembeli untuk memastikan nomor HP dan alamat valid sesuai data di atas. Mohon dibantu teruskan ke rekan kurir antaran agar dapat segera dihubungi / diantar kembali. Terima kasih! 🙏✨";
-  } else if (template === "TAHAN_RETUR") {
-    greetingTitle = "Mohon bantuannya untuk *PERMINTAAN TAHAN RETUR SEMENTARA (HOLD RETURN)* atas kiriman berikut:";
-    closingMessage = "📌 *PENTING:* Mohon kiranya paket *JANGAN DI-RETUR TERLEBIH DAHULU* dan ditahan sementara di kantor pos tujuan. Tim CS kami sedang berkoordinasi intensif dengan pembeli/seller (maksimal 1x24 jam). Terima kasih banyak atas kerjasamanya! 🙏✨";
+    return [
+      `Halo Rekan CS/Antaran Pos Indonesia ${office},`,
+      ``,
+      `Mohon bantuannya untuk PERMOHONAN PENGANTARAN ULANG atas kiriman berikut:`,
+      ` No. Resi: ${shipment.resi}`,
+      ` Penerima: ${shipment.penerima || "-"} (${shipment.telepon || "-"})`,
+      ` Alamat: ${shipment.alamat || shipment.tujuan || "-"}`,
+      ``,
+      `Mohon berkenan dibantu jadwalkan antaran ulang oleh rekan kurir ya kak. Terima kasih.`
+    ].join("\n");
   }
 
   const lines = [
     `Halo Rekan CS/Antaran Pos Indonesia ${office},`,
     ``,
-    greetingTitle,
-    `📦 *No. Resi:* ${shipment.resi}`,
-    `👤 *Penerima:* ${shipment.penerima || "-"} (${shipment.telepon || "-"})`,
-    `📍 *Alamat:* ${shipment.alamat || shipment.tujuan || "-"}`,
-    `🏪 *Seller / Mitra:* ${shipment.seller || "Pos Indonesia"}`,
-    `📊 *Status NIPOS:* ${shipment.nipos || "ON PROCESS"}`,
-    `📝 *Keterangan:* ${shipment.keterangan || "-"}`,
+    `Mohon bantuannya untuk *${judulPermohonan}* atas kiriman berikut:`,
+    ` No. Resi: ${shipment.resi}`,
+    ` Penerima: ${shipment.penerima || "-"} (${shipment.telepon || "-"})`,
+    ` Alamat: ${shipment.alamat || shipment.tujuan || "-"}`,
   ];
 
-  if (customNote && customNote.trim()) {
-    lines.push(``, `⚠️ *Catatan Tambahan:* ${customNote.trim()}`);
+  if (shipment.seller) {
+    lines.push(` Mitra / Seller: ${shipment.seller}`);
   }
 
-  lines.push(``, closingMessage);
+  if (shipment.nipos && shipment.nipos !== "ON PROCESS") {
+    lines.push(` Status Terakhir: ${shipment.nipos}`);
+  }
+
+  if (customNote && customNote.trim()) {
+    lines.push(` Catatan Tambahan: ${customNote.trim()}`);
+  }
+
+  lines.push(``, penutup);
+
+  return lines.join("\n");
+
+}
+
+export type WaCustomerTemplateType =
+  | "ALAMAT_PATOKAN"
+  | "RUMAH_KOSONG"
+  | "KONFIRMASI_COD"
+  | "HOLD_SEBELUM_RETUR";
+
+export const WA_CUSTOMER_TEMPLATES: { id: WaCustomerTemplateType; label: string; desc: string }[] = [
+  {
+    id: "ALAMAT_PATOKAN",
+    label: "Alamat Belum Jelas / Minta Patokan",
+    desc: "Kurir kesulitan menemukan alamat penerima di lapangan",
+  },
+  {
+    id: "RUMAH_KOSONG",
+    label: "Rumah Kosong / Antar Ulang",
+    desc: "Penerima tidak di tempat saat kurir datang mengantar",
+  },
+  {
+    id: "KONFIRMASI_COD",
+    label: "Konfirmasi & Pengingat COD",
+    desc: "Mengingatkan pembeli menyiapkan dana tunai untuk kurir POS",
+  },
+  {
+    id: "HOLD_SEBELUM_RETUR",
+    label: "Pemberitahuan Darurat Retur",
+    desc: "Paket terancam diretur hari ini jika tidak ada konfirmasi pembeli",
+  },
+];
+
+export function generateCustomerWaMessage(
+  shipment: Shipment,
+  template: WaCustomerTemplateType = "ALAMAT_PATOKAN",
+  customNote?: string
+): string {
+  const buyerName = shipment.penerima || "Kak";
+  const seller = shipment.seller || "Toko Kami";
+
+  let header = `Halo Kak ${buyerName},`;
+  let body = "";
+  let closing = "Mohon balas pesan ini sesegera mungkin agar kami bisa instruksikan rekan kurir Pos Indonesia untuk segera mengantar kembali paket kakak. Terima kasih banyak! 🙏😊";
+
+  if (template === "ALAMAT_PATOKAN") {
+    body = `Kami dari Customer Service *${seller}* ingin menginformasikan terkait pesanan paket kakak dengan:\n📦 *No. Resi:* ${shipment.resi}\n📍 *Alamat:* ${shipment.alamat || shipment.tujuan || "-"}\n\nMenurut laporan rekan kurir Pos Indonesia di lapangan, kurir mengalami kendala *alamat belum ditemukan / patokan kurang jelas*. Apakah berkenan memberikan patokan rumah terdekat, warna cat/pagar, atau nomor HP aktif lainnya kak?`;
+  } else if (template === "RUMAH_KOSONG") {
+    body = `Kami dari tim CS *${seller}* mengabarkan bahwa kurir Pos Indonesia hari ini sudah mendatangi alamat kakak untuk mengantar paket:\n📦 *No. Resi:* ${shipment.resi}\n\nNamun status antaran tercatat *Rumah Kosong / Tidak Ada Orang di Tempat*. Apakah besok kakak ada di lokasi, atau paket boleh dititipkan ke tetangga/keluarga serumah jika kurir datang kembali?`;
+  } else if (template === "KONFIRMASI_COD") {
+    body = `Kami dari Customer Service *${seller}* ingin menginfokan bahwa pesanan kakak:\n📦 *No. Resi:* ${shipment.resi}\nSaat ini sudah tiba di kota tujuan dan sedang dipersiapkan untuk pengantaran oleh kurir Pos Indonesia.\n\nMohon pastikan nomor HP selalu aktif dan dana tunai COD telah disiapkan di rumah ya kak, agar proses serah terima berjalan lancar.`;
+  } else if (template === "HOLD_SEBELUM_RETUR") {
+    body = `⚠️ *PEMBERITAHUAN PENTING:* Paket pesanan kakak dari *${seller}*:\n📦 *No. Resi:* ${shipment.resi}\nSaat ini berada di Kantor Pos tujuan dan telah mengalami beberapa kali gagal serah, sehingga *terancam akan otomatis diretur/dikembalikan ke penjual hari ini*.\n\nJika kakak masih ingin menerima paket ini, mohon segera konfirmasi waktu penerimaan atau apakah paket bisa diambil mandiri di Kantor Pos terdekat?`;
+  }
+
+  const lines = [header, "", body];
+  if (customNote && customNote.trim()) {
+    lines.push("", `📝 *Catatan CS:* ${customNote.trim()}`);
+  }
+  lines.push("", closing);
 
   return lines.join("\n");
 }
@@ -129,7 +229,79 @@ export function extractCityRegency(address?: string, officeName?: string): strin
     return `Kab. ${words}`;
   }
 
-  // 3. Try matching "Kec. [Name]" if no Kab/Kota
+  // 3. Fallback to Office Name if available (e.g. "KCU SURABAYA 60000" -> "Surabaya", "KC SUMENEP 69400" -> "Sumenep")
+  if (officeName) {
+    const officeClean = officeName
+      .replace(/^(?:KCU|KC|KCP|MPC|DC|SPP|KANTOR\s+POS)\s+/i, "")
+      .replace(/\s+\d{5}[A-Za-z0-9]*$/, "")
+      .trim();
+    if (officeClean && !["TUJUAN", "PENGANTARAN", "POS PENGANTARAN", "POS", "POS INDONESIA"].includes(officeClean.toUpperCase())) {
+      return officeClean;
+    }
+  }
+
+  // 4. Try matching direct city/region names commonly present in Indonesian addresses
+  const knownCities = [
+    // Jabodetabek & Jawa Barat
+    "Jakarta", "Bogor", "Depok", "Tangerang", "Bekasi", "Bandung", "Cimahi", "Cirebon", "Sukabumi", "Tasikmalaya",
+    "Banjar", "Ciamis", "Garut", "Cianjur", "Purwakarta", "Subang", "Karawang", "Indramayu", "Majalengka", "Kuningan",
+    "Sumedang", "Pangandaran", "Serang", "Cilegon", "Lebak", "Pandeglang",
+    // Jawa Tengah & DIY
+    "Semarang", "Surakarta", "Solo", "Magelang", "Pekalongan", "Salatiga", "Tegal", "Banyumas", "Purwokerto", "Batang",
+    "Blora", "Boyolali", "Brebes", "Cilacap", "Demak", "Grobogan", "Jepara", "Karanganyar", "Kebumen", "Kendal",
+    "Klaten", "Kudus", "Pati", "Pemalang", "Purbalingga", "Purworejo", "Rembang", "Sragen", "Sukoharjo", "Temanggung",
+    "Wonogiri", "Wonosobo", "Yogyakarta", "Jogja", "Bantul", "Sleman", "Kulon Progo", "Gunungkidul",
+    // Jawa Timur
+    "Surabaya", "Malang", "Batu", "Kediri", "Blitar", "Madiun", "Mojokerto", "Pasuruan", "Probolinggo", "Banyuwangi",
+    "Bangkalan", "Sampang", "Pamekasan", "Sumenep", "Madura", "Jember", "Bondowoso", "Situbondo", "Lumajang", "Sidoarjo",
+    "Gresik", "Lamongan", "Tuban", "Bojonegoro", "Ngawi", "Magetan", "Ponorogo", "Pacitan", "Trenggalek", "Tulungagung",
+    "Nganjuk", "Jombang",
+    // Sumatera
+    "Banda Aceh", "Sabang", "Lhokseumawe", "Langsa", "Subulussalam", "Bireuen", "Takengon", "Meulaboh", "Aceh Besar",
+    "Medan", "Binjai", "Tebing Tinggi", "Pematangsiantar", "Tanjungbalai", "Sibolga", "Padang Sidempuan", "Gunungsitoli",
+    "Deli Serdang", "Karo", "Simalungun", "Asahan", "Labuhanbatu", "Rantauprapat", "Nias",
+    "Padang", "Bukittinggi", "Padang Panjang", "Pariaman", "Payakumbuh", "Sawahlunto", "Solok", "Agam", "Pasaman",
+    "Pekanbaru", "Dumai", "Bengkalis", "Kampar", "Indragiri", "Tembilahan", "Rokan Hilir", "Rokan Hulu", "Siak", "Kuantan Singingi",
+    "Batam", "Tanjungpinang", "Karimun", "Bintan", "Natuna", "Anambas", "Lingga",
+    "Jambi", "Sungai Penuh", "Batanghari", "Bungo", "Kerinci", "Merangin", "Muaro Jambi", "Sarolangun", "Tanjung Jabung", "Tebo",
+    "Palembang", "Prabumulih", "Pagar Alam", "Lubuklinggau", "Banyuasin", "Empat Lawang", "Lahat", "Muara Enim", "Musi Banyuasin", "Musi Rawas", "Ogan Ilir", "Ogan Komering",
+    "Bengkulu", "Curup", "Rejang Lebong", "Argamakmur", "Mukomuko", "Manna",
+    "Bandar Lampung", "Metro", "Lampung", "Tulang Bawang", "Menggala", "Pringsewu", "Pesawaran", "Tanggamus",
+    "Pangkalpinang", "Bangka", "Belitung", "Tanjung Pandan",
+    // Bali & Nusa Tenggara
+    "Denpasar", "Badung", "Bangli", "Buleleng", "Gianyar", "Jembrana", "Karangasem", "Klungkung", "Tabanan",
+    "Mataram", "Bima", "Dompu", "Lombok", "Sumbawa",
+    "Kupang", "Ende", "Flores", "Alor", "Belu", "Manggarai", "Ngada", "Rote Ndao", "Sikka", "Sumba", "Timor Tengah",
+    // Kalimantan
+    "Pontianak", "Singkawang", "Sambas", "Bengkayang", "Landak", "Mempawah", "Sanggau", "Ketapang", "Sintang", "Kapuas Hulu",
+    "Banjarmasin", "Banjarbaru", "Banjar", "Martapura", "Barito Kuala", "Tapin", "Hulu Sungai", "Tabalong", "Tanah Laut", "Kotabaru", "Tanah Bumbu",
+    "Palangka Raya", "Barito", "Muara Teweh", "Kapuas", "Katingan", "Kotawaringin", "Sampit", "Pangkalan Bun", "Lamandau", "Seruyan", "Sukamara",
+    "Samarinda", "Balikpapan", "Bontang", "Kutai Kartanegara", "Tenggarong", "Kutai Barat", "Kutai Timur", "Berau", "Penajam Paser", "Paser",
+    "Tarakan", "Bulungan", "Tanjung Selor", "Malinau", "Nunukan", "Tana Tidung",
+    // Sulawesi
+    "Makassar", "Palopo", "Parepare", "Bantaeng", "Barru", "Bone", "Bulukumba", "Enrekang", "Gowa", "Jeneponto", "Luwu", "Maros", "Pangkep", "Pinrang", "Selayar", "Sinjai", "Soppeng", "Takalar", "Tana Toraja", "Toraja Utara", "Wajo",
+    "Manado", "Bitung", "Kotamobagu", "Tomohon", "Bolaang Mongondow", "Minahasa", "Sangihe", "Talaud",
+    "Palu", "Banggai", "Luwuk", "Buol", "Donggala", "Morowali", "Parigi Moutong", "Poso", "Sigi", "Tojo Una-Una", "Tolitoli",
+    "Kendari", "Baubau", "Bombana", "Buton", "Kolaka", "Konawe", "Muna", "Raha", "Wakatobi",
+    "Gorontalo", "Boalemo", "Bone Bolango", "Pohuwato",
+    "Mamuju", "Majene", "Polewali Mandar", "Pasangkayu",
+    // Maluku & Papua
+    "Ambon", "Tual", "Buru", "Maluku Tengah", "Masohi", "Maluku Tenggara", "Kepulauan Aru", "Seram",
+    "Ternate", "Tidore", "Halmahera", "Tobelo", "Morotai", "Sula",
+    "Jayapura", "Keerom", "Sarmi", "Mamberamo", "Sentani",
+    "Sorong", "Raja Ampat", "Fakfak", "Kaimana", "Manokwari", "Maybrat", "Tambrauw", "Bintuni", "Wondama",
+    "Merauke", "Boven Digoel", "Mappi", "Asmat",
+    "Nabire", "Paniai", "Mimika", "Timika", "Intan Jaya", "Deiyai", "Dogiyai", "Puncak", "Puncak Jaya",
+    "Wamena", "Jayawijaya", "Lanny Jaya", "Nduga", "Tolikara", "Yahukimo", "Yalimo", "Pegunungan Bintang", "Biak", "Yapen"
+  ];
+  for (const c of knownCities) {
+    const reg = new RegExp(`\\b${c}\\b`, "i");
+    if (reg.test(text)) {
+      return c;
+    }
+  }
+
+  // 5. Try matching "Kec. [Name]" if no Kab/Kota
   const kecMatch = text.match(/\b(?:Kecamatan|Kec\.?)\s+([A-Za-z\s]+?)(?=[,\.\n\r]|\s+(?:Kab|Kota|Desa|Kel|Rt|Rw|\d{5})|$)/i);
   if (kecMatch && kecMatch[1].trim()) {
     const clean = kecMatch[1].trim().replace(/\s+/g, " ");
@@ -137,25 +309,7 @@ export function extractCityRegency(address?: string, officeName?: string): strin
     return `Kec. ${words}`;
   }
 
-  // 4. Fallback to Office Name if available (e.g. "KCU SURABAYA 60000" -> "Surabaya", "KC SUMENEP 69400" -> "Sumenep")
-  if (officeName) {
-    const officeClean = officeName.replace(/^(?:KCU|KC|KCP|KANTOR\s+POS)\s+/i, "").replace(/\s+\d{5}$/, "").trim();
-    if (officeClean && officeClean !== "TUJUAN") {
-      return officeClean;
-    }
-  }
-
-  // 5. Short snippet of destination if short
-  if (text.length <= 35) {
-    return text;
-  }
-
-  const firstComma = text.split(",")[0].trim();
-  if (firstComma.length > 0 && firstComma.length <= 30) {
-    return firstComma;
-  }
-
-  return text.substring(0, 28) + "...";
+  return "-";
 }
 
 export const SELLERS = [

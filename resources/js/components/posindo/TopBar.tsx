@@ -1,7 +1,7 @@
 import { useMemo, useEffect, useState } from "react";
 import { router } from "@inertiajs/react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Truck, Upload, Bot, Loader2, CheckCircle2, FileUp, Zap, RefreshCw, Send, Building2, AlertCircle, Check, ArrowUpRight, Search, Cookie, LogOut, ShieldCheck, User } from "lucide-react";
+import { Truck, Bot, Loader2, CheckCircle2, Zap, RefreshCw, Send, Building2, AlertCircle, Check, ArrowUpRight, Search, Cookie, LogOut, ShieldCheck, User, Users, KeyRound, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,6 +16,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Progress } from "@/components/ui/progress";
 import { SELLERS, nf } from "@/lib/posindo";
 import { NiposCookieModal } from "./NiposCookieModal";
+import { UserManagerModal } from "./UserManagerModal";
+import { UserProfileModal } from "./UserProfileModal";
 
 export function TopBar({
   seller,
@@ -79,7 +81,6 @@ export function TopBar({
     return "Mitra Aliqa";
   }, [seller]);
   const [selectedSyncMonth, setSelectedSyncMonth] = useState<string>("current");
-  const [uploadOpen, setUploadOpen] = useState(false);
   const [sheetSyncOpen, setSheetSyncOpen] = useState(false);
   const [sheetUrlInput, setSheetUrlInput] = useState(
     googleSheetUrl || "https://docs.google.com/spreadsheets/d/1EeckOBzI5EPNTT1bHsqu6kar9asKD6Ifar2CpTkSnBg/edit"
@@ -147,12 +148,12 @@ export function TopBar({
     inserted_rows: 0,
     message: "",
   });
-  const [file, setFile] = useState<File | null>(null);
-  const [isUploading, setIsUploading] = useState(false);
   const [botState, setBotState] = useState<"idle" | "running" | "done">("idle");
   const [progress, setProgress] = useState(0);
   const [niposModalOpen, setNiposModalOpen] = useState(false);
   const [niposConnected, setNiposConnected] = useState<boolean | null>(null);
+  const [userManagerOpen, setUserManagerOpen] = useState(false);
+  const [userProfileOpen, setUserProfileOpen] = useState(false);
 
   useEffect(() => {
     fetch("/settings/nipos-cookie/status")
@@ -343,35 +344,6 @@ export function TopBar({
     }
   };
 
-  const handleUploadSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!file) {
-      toast.error("Silakan pilih file Excel / CSV terlebih dahulu.");
-      return;
-    }
-    setIsUploading(true);
-    const formData = new FormData();
-    formData.append("excel_file", file);
-    formData.append("default_seller", normalizedSeller);
-
-    router.post("/process", formData, {
-      forceFormData: true,
-      onSuccess: () => {
-        setIsUploading(false);
-        setUploadOpen(false);
-        setFile(null);
-        toast.success("File Excel FU berhasil diunggah!", {
-          description: "Data follow-up dari Kantor Pos tersimpan & perubahan status warna otomatis disinkronkan ke Google Sheets.",
-        });
-      },
-      onError: () => {
-        setIsUploading(false);
-        setUploadOpen(false);
-        setFile(null);
-        toast.error("Gagal mengunggah file Excel.");
-      },
-    });
-  };
 
   const handleSyncSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -573,18 +545,8 @@ export function TopBar({
             </div>
           )}
 
-          {/* Grup 2: Quick Tools (Upload Excel FU, Kontak KC Pos, Cookie NIPOS) */}
+          {/* Grup 2: Quick Tools (Kontak KC Pos, Cookie NIPOS) */}
           <div className="flex items-center gap-1.5">
-            {isAdmin && (
-              <Button
-                variant="outline"
-                className="gap-1.5 text-xs h-9 font-semibold border-amber-300/80 bg-amber-50/70 hover:bg-amber-100 cursor-pointer shadow-xs text-amber-950 rounded-lg"
-                onClick={() => setUploadOpen(true)}
-                title="Unggah file Excel hasil follow up dari Kantor Pos untuk update status & warna ke spreadsheet"
-              >
-                <Upload className="h-3.5 w-3.5 text-amber-600" /> Upload Excel FU
-              </Button>
-            )}
 
             <Button
               variant="outline"
@@ -650,7 +612,7 @@ export function TopBar({
             </Button>
           </div>
 
-          {/* Grup 4: User Profile & Logout */}
+          {/* Grup 4: User Profile & Actions */}
           {currentUser && (
             <div className="flex items-center gap-2 pl-2.5 border-l border-slate-200">
               <div className="text-right hidden sm:block">
@@ -667,6 +629,32 @@ export function TopBar({
                   {currentUser.role}
                 </span>
               </div>
+
+              {/* Admin: Tombol Kelola Pengguna */}
+              {isAdmin && (
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={() => setUserManagerOpen(true)}
+                  className="h-8 w-8 text-purple-700 bg-purple-50 hover:bg-purple-100 border-purple-200 rounded-lg cursor-pointer transition shadow-2xs"
+                  title="Manajemen Pengguna & Tim CS"
+                >
+                  <Users className="h-3.5 w-3.5" />
+                </Button>
+              )}
+
+              {/* Ganti Password Mandiri */}
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => setUserProfileOpen(true)}
+                className="h-8 w-8 text-slate-600 bg-slate-50 hover:bg-slate-100 border-slate-200 rounded-lg cursor-pointer transition shadow-2xs"
+                title="Ubah Kata Sandi Akun"
+              >
+                <KeyRound className="h-3.5 w-3.5" />
+              </Button>
+
+              {/* Logout */}
               <Button
                 variant="ghost"
                 size="icon"
@@ -680,6 +668,25 @@ export function TopBar({
           )}
         </div>
       </div>
+
+      {/* Peringatan Kritis Cookie NIPOS Mati / Expired */}
+      {niposConnected === false && isAdmin && (
+        <div className="bg-rose-600 text-white px-5 py-2 text-xs flex items-center justify-between font-semibold shadow-xs">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-amber-300 shrink-0" />
+            <span>
+              <strong>Peringatan Sistem:</strong> Sesi Cookie NIPOS tidak aktif atau kedaluwarsa! Bot pelacakan otomatis tidak dapat melacak status kiriman.
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setNiposModalOpen(true)}
+            className="underline hover:text-amber-200 font-bold ml-4 cursor-pointer shrink-0"
+          >
+            Perbarui Cookie Sekarang &rarr;
+          </button>
+        </div>
+      )}
 
       <AnimatePresence>
         {sheetSyncState !== "idle" && (
@@ -867,58 +874,6 @@ export function TopBar({
         </DialogContent>
       </Dialog>
 
-      <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle className="text-orange-950 font-bold flex items-center gap-2">
-              <Upload className="h-5 w-5 text-orange-600" />
-              Upload Excel Hasil Follow Up Kantor Pos
-            </DialogTitle>
-            <DialogDescription className="text-xs text-slate-500">
-              File Excel dari Kantor Pos berisi status FU terbaru akan otomatis diimpor ke database dan langsung disinkronkan warnanya ke Google Spreadsheet via Webhook.
-            </DialogDescription>
-          </DialogHeader>
-          <form onSubmit={handleUploadSubmit} className="space-y-4">
-            <label className="grid w-full place-items-center gap-2 rounded-xl border-2 border-dashed border-orange-400/50 bg-orange-50/40 px-6 py-10 transition hover:border-[#F97316] cursor-pointer">
-              <FileUp className="h-8 w-8 text-[#F97316]" />
-              <span className="text-sm font-semibold text-slate-800">
-                {file ? file.name : "Klik untuk memilih file Excel / CSV dari Kantor Pos"}
-              </span>
-              <span className="text-xs text-muted-foreground">
-                Mendukung file .xlsx / .xls / .csv (Multi-sheet, streaming &lt; 20MB RAM)
-              </span>
-              <input
-                type="file"
-                accept=".xlsx,.xls,.csv"
-                onChange={(e) => setFile(e.target.files?.[0] || null)}
-                className="hidden"
-              />
-            </label>
-            {isUploading && (
-              <div className="space-y-1">
-                <Progress value={50} className="h-2" />
-                <p className="text-center font-mono text-xs text-muted-foreground">
-                  Mengunggah, memperbarui data &amp; mensinkronkan warna ke spreadsheet...
-                </p>
-              </div>
-            )}
-            <div className="flex justify-end gap-2">
-              <Button type="button" variant="outline" onClick={() => setUploadOpen(false)}>
-                Batal
-              </Button>
-              <Button
-                type="submit"
-                disabled={!file || isUploading}
-                className="bg-[#F97316] hover:bg-orange-600 text-white font-bold cursor-pointer"
-              >
-                {isUploading ? <Loader2 className="h-4 w-4 animate-spin mr-1.5" /> : null}
-                Impor &amp; Sinkronkan ke Spreadsheet
-              </Button>
-            </div>
-          </form>
-        </DialogContent>
-      </Dialog>
-
       <Dialog open={botResultModalOpen} onOpenChange={setBotResultModalOpen}>
         <DialogContent className="max-w-3xl max-h-[85vh] flex flex-col bg-white border border-slate-200 shadow-2xl rounded-2xl p-0 overflow-hidden">
           <DialogHeader className="p-5 pb-3 border-b border-slate-100 bg-slate-50/80">
@@ -1092,6 +1047,20 @@ export function TopBar({
         isOpen={niposModalOpen}
         onClose={() => setNiposModalOpen(false)}
         onStatusChange={setNiposConnected}
+      />
+
+      {/* Manajemen Pengguna Modal (Admin) */}
+      <UserManagerModal
+        isOpen={userManagerOpen}
+        onClose={() => setUserManagerOpen(false)}
+        currentUserId={currentUser?.id}
+      />
+
+      {/* Ubah Password Mandiri Modal */}
+      <UserProfileModal
+        isOpen={userProfileOpen}
+        onClose={() => setUserProfileOpen(false)}
+        currentUser={currentUser}
       />
     </div>
   );

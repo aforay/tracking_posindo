@@ -4,6 +4,8 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 
 class SystemSetting extends Model
 {
@@ -62,16 +64,29 @@ class SystemSetting extends Model
     }
 
     /**
-     * Get active NIPOS session cookie with database priority and .env fallback
+     * Get active NIPOS session cookie with database priority, auto-refresh, and .env fallback
      */
-    public static function getNiposCookie(): string
+    public static function getNiposCookie(bool $autoRefreshIfEmpty = true): string
     {
         $cookie = static::get('nipos_session_cookie');
         if (!empty($cookie) && is_string($cookie) && trim($cookie) !== '') {
             return trim($cookie);
         }
 
-        return (string)(config('services.nipos.cookie') ?: env('NIPOS_SESSION_COOKIE', ''));
+        $envCookie = (string)(config('services.nipos.cookie') ?: env('NIPOS_SESSION_COOKIE', ''));
+        if (!empty($envCookie) && trim($envCookie) !== '') {
+            return trim($envCookie);
+        }
+
+        // Otomatis minta cookie baru langsung dari server NIPOS jika belum ada
+        if ($autoRefreshIfEmpty) {
+            $freshCookie = static::refreshNiposCookie(true);
+            if (!empty($freshCookie)) {
+                return $freshCookie;
+            }
+        }
+
+        return '';
     }
 
     /**
@@ -80,5 +95,48 @@ class SystemSetting extends Model
     public static function setNiposCookie(string $cookie): void
     {
         static::set('nipos_session_cookie', trim($cookie));
+    }
+
+    /**
+     * Fetch fresh session cookie directly from NIPOS server without manual intervention
+     */
+    public static function refreshNiposCookie(bool $saveToDb = true): ?string
+    {
+        try {
+            $url = config('services.nipos.url') ?: (env('NIPOS_URL') ?: 'https://pid.posindonesia.co.id/lacak/admin/lacak_item_banyakzaref.php');
+
+            $response = Http::withoutVerifying()
+                ->timeout(15)
+                ->withHeaders([
+                    'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                ])
+                ->get($url);
+
+            if ($response->successful()) {
+                $cookies = $response->cookies()->toArray();
+                $cookieParts = [];
+                foreach ($cookies as $c) {
+                    if (!empty($c['Name']) && isset($c['Value'])) {
+                        $cookieParts[] = $c['Name'] . '=' . $c['Value'];
+                    }
+                }
+
+                if (!empty($cookieParts)) {
+                    $cookieString = implode('; ', $cookieParts);
+                    if ($saveToDb) {
+                        static::setNiposCookie($cookieString);
+                    }
+                    Log::info("SystemSetting: Berhasil refresh cookie NIPOS otomatis (" . strlen($cookieString) . " chars)");
+                    return $cookieString;
+                }
+            } else {
+                Log::warning("SystemSetting: Gagal request cookie NIPOS, status: " . $response->status());
+            }
+        } catch (\Throwable $e) {
+            Log::error("SystemSetting: Exception saat refresh cookie NIPOS: " . $e->getMessage());
+        }
+
+        return null;
     }
 }

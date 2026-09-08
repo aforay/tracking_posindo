@@ -4,7 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="csrf-token" content="{{ csrf_token() }}">
-    <title>Pengaturan Cookie Session NIPOS - Posindo Tracking</title>
+    <title>Pengaturan Cookie Session NIPOS - TRACKO</title>
+    <link rel="icon" type="image/svg+xml" href="{{ asset('favicon.svg') }}?v=2">
+    <link rel="icon" type="image/png" sizes="64x64" href="{{ asset('favicon.png') }}?v=2">
+    <link rel="shortcut icon" href="{{ asset('favicon.ico') }}?v=2">
+    <link rel="apple-touch-icon" href="{{ asset('favicon.png') }}?v=2">
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
@@ -102,19 +106,24 @@
                         </div>
                     </div>
 
-                    <button type="button" id="btnTestLive" onclick="testConnectionLive()" class="w-full mt-5 py-2.5 px-4 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer shadow-sm">
+                    <button type="button" id="btnAutoRefresh" onclick="autoRefreshCookie()" class="w-full mt-5 py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer shadow-md shadow-emerald-600/20">
+                        <i id="autoRefreshIcon" class="fa-solid fa-bolt"></i>
+                        <span id="autoRefreshBtnText">⚡ Perbarui Cookie Otomatis</span>
+                    </button>
+
+                    <button type="button" id="btnTestLive" onclick="testConnectionLive()" class="w-full mt-2 py-2.5 px-4 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer shadow-sm">
                         <i id="testIcon" class="fa-solid fa-satellite-dish"></i>
                         <span id="testBtnText">Uji Koneksi Realtime</span>
                     </button>
                 </div>
 
                 <!-- Guidance Box -->
-                <div class="bg-blue-50/70 border border-blue-200/80 rounded-2xl p-5 text-xs text-blue-950 space-y-2">
-                    <div class="font-bold flex items-center gap-1.5 text-blue-800">
-                        <i class="fa-solid fa-circle-info text-sm"></i> Kapan Perlu Update Cookie?
+                <div class="bg-emerald-50/80 border border-emerald-200 rounded-2xl p-5 text-xs text-emerald-950 space-y-2">
+                    <div class="font-bold flex items-center gap-1.5 text-emerald-800">
+                        <i class="fa-solid fa-wand-magic-sparkles text-sm"></i> Otomatis & Tanpa Login!
                     </div>
-                    <p class="leading-relaxed text-blue-900/90">
-                        Sesi login portal NIPOS Pos Indonesia umumnya memiliki masa aktif berkala. Jika bot pelacakan menghasilkan status kosong atau peringatan sesi kedaluwarsa, salin cookie baru dan tempel di form ini.
+                    <p class="leading-relaxed text-emerald-900/90">
+                        Portal tracking NIPOS tidak membutuhkan login. Sistem sekarang <strong>secara otomatis meminta dan memperbarui session cookie</strong> langsung ke server Posindo saat pelacakan bot berjalan. Anda juga bisa menekan tombol <strong>⚡ Perbarui Cookie Otomatis</strong> untuk memperbarui cookie secara instan kapan saja.
                     </p>
                 </div>
 
@@ -157,16 +166,23 @@
                         <div class="mt-6 flex flex-wrap items-center justify-end gap-3">
                             <button 
                                 type="button" 
+                                onclick="autoRefreshCookie()"
+                                class="py-2.5 px-4 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
+                            >
+                                <i class="fa-solid fa-bolt text-emerald-600"></i> Ambil Otomatis dari NIPOS
+                            </button>
+                            <button 
+                                type="button" 
                                 onclick="testConnectionWithInput()"
                                 class="py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
                             >
-                                <i class="fa-solid fa-vial"></i> Test Input Ini Dulu
+                                <i class="fa-solid fa-vial"></i> Test Input
                             </button>
                             <button 
                                 type="submit" 
                                 class="py-2.5 px-5 bg-[#1E40AF] hover:bg-blue-800 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-md shadow-blue-500/20 cursor-pointer"
                             >
-                                <i class="fa-solid fa-floppy-disk"></i> Simpan Cookie ke Database
+                                <i class="fa-solid fa-floppy-disk"></i> Simpan Manual
                             </button>
                         </div>
                     </form>
@@ -197,6 +213,49 @@
 
     <script>
         const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+
+        async function autoRefreshCookie() {
+            const btn = document.getElementById('btnAutoRefresh');
+            const icon = document.getElementById('autoRefreshIcon');
+            const btnText = document.getElementById('autoRefreshBtnText');
+            const textarea = document.getElementById('cookieInput');
+
+            if (btn) btn.disabled = true;
+            if (icon) icon.className = 'fa-solid fa-spinner fa-spin';
+            if (btnText) btnText.innerText = 'Mengambil dari NIPOS...';
+
+            try {
+                const res = await fetch('{{ route("settings.nipos_cookie.auto_refresh") }}', {
+                    method: 'POST',
+                    headers: {
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/json',
+                        'X-CSRF-TOKEN': csrfToken,
+                    },
+                });
+
+                const data = await res.json();
+                if (data.success) {
+                    if (textarea && data.cookie) {
+                        textarea.value = data.cookie;
+                    }
+                    const lengthInfo = document.getElementById('cookieLengthInfo');
+                    if (lengthInfo && data.cookie_length) {
+                        lengthInfo.innerText = data.cookie_length + ' karakter';
+                    }
+                    updateStatusUI(data.test_result || data);
+                    alert('BERHASIL! ' + data.message + (data.test_result?.latency_ms ? ` (Latensi: ${data.test_result.latency_ms}ms)` : ''));
+                } else {
+                    alert('GAGAL: ' + data.message);
+                }
+            } catch (err) {
+                alert('Gagal mengambil cookie otomatis: ' + err.message);
+            } finally {
+                if (btn) btn.disabled = false;
+                if (icon) icon.className = 'fa-solid fa-bolt';
+                if (btnText) btnText.innerText = '⚡ Perbarui Cookie Otomatis';
+            }
+        }
 
         async function testConnectionLive() {
             const btn = document.getElementById('btnTestLive');

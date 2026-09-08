@@ -5,6 +5,7 @@ use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\NiposSettingController;
 use App\Http\Controllers\PostOfficeController;
 use App\Http\Controllers\TrackingController;
+use App\Http\Controllers\UserController;
 use Illuminate\Support\Facades\Route;
 
 // --- 1. Public & Authentication Routes ---
@@ -26,9 +27,14 @@ Route::middleware(['role:admin,cs'])->group(function () {
     Route::post('/shipments/bulk-action', [DashboardController::class, 'bulkAction'])->name('shipments.bulk_action');
     Route::post('/shipments/{id}/color', [DashboardController::class, 'updateColor'])->name('shipments.color');
     Route::post('/shipments/{id}/update-color', [DashboardController::class, 'updateColor'])->name('shipments.update_color');
+    Route::get('/shipments/{id}/logs', [DashboardController::class, 'shipmentLogs'])->name('shipments.logs');
+
+    // Profile & Password self-update
+    Route::post('/profile/password', [UserController::class, 'updatePassword'])->name('profile.password');
 
     // Tracking Bot (CS & Admin can run tracking bot and view progress)
     Route::post('/shipments/{id}/track', [TrackingController::class, 'trackSingle'])->name('shipments.track_single');
+    Route::post('/shipments/resolve-kantor', [TrackingController::class, 'resolveKantor'])->name('shipments.resolve_kantor');
     Route::post('/bot/start-tracking', [TrackingController::class, 'startBotTracking'])->name('bot.start_tracking');
     Route::get('/bot/progress', [TrackingController::class, 'progress'])->name('bot.progress');
 
@@ -59,6 +65,7 @@ Route::middleware(['role:admin'])->group(function () {
     Route::get('/settings/nipos-cookie/status', [NiposSettingController::class, 'status'])->name('settings.nipos_cookie.status');
     Route::post('/settings/nipos-cookie', [NiposSettingController::class, 'store'])->name('settings.nipos_cookie.store');
     Route::post('/settings/nipos-cookie/test', [NiposSettingController::class, 'testConnection'])->name('settings.nipos_cookie.test');
+    Route::post('/settings/nipos-cookie/auto-refresh', [NiposSettingController::class, 'autoRefresh'])->name('settings.nipos_cookie.auto_refresh');
 
     // Sensitive Data Export & Downloads
     Route::post('/export-colored-excel', [TrackingController::class, 'exportColoredExcel'])->name('tracking.export_colored');
@@ -70,4 +77,10 @@ Route::middleware(['role:admin'])->group(function () {
     Route::put('/post-offices/{id}', [PostOfficeController::class, 'update'])->name('post_offices.update');
     Route::delete('/post-offices/{id}', [PostOfficeController::class, 'destroy'])->name('post_offices.destroy');
     Route::post('/post-offices/import', [PostOfficeController::class, 'bulkImport'])->name('post_offices.import');
+
+    // Master User Management CRUD (Admin Only)
+    Route::get('/users', [UserController::class, 'index'])->name('users.index');
+    Route::post('/users', [UserController::class, 'store'])->name('users.store');
+    Route::put('/users/{id}', [UserController::class, 'update'])->name('users.update');
+    Route::delete('/users/{id}', [UserController::class, 'destroy'])->name('users.destroy');
 });

@@ -299,6 +299,23 @@ class DashboardController extends Controller
 
         $paginatedShipments = $query->paginate(50)->withQueryString();
 
+        // Dispatch non-blocking background queue job for missing kantor_tujuan (instant response < 50ms)
+        $missingKantorIds = collect($paginatedShipments->items())
+            ->filter(function ($s) {
+                return empty($s->kantor_tujuan) && empty($s->last_location) && !empty($s->no_resi);
+            })
+            ->pluck('id')
+            ->values()
+            ->all();
+
+        if (!empty($missingKantorIds)) {
+            try {
+                \App\Jobs\ProcessNiposTrackingJob::dispatch($missingKantorIds);
+            } catch (\Throwable $e) {
+                // Ignore queue dispatch error
+            }
+        }
+
         $formattedShipmentsData = collect($paginatedShipments->items())->map(function ($s) use ($officeMapById) {
             $fu = 'PUTIH';
             if (!empty($s->color_code)) {
@@ -330,13 +347,23 @@ class DashboardController extends Controller
                 $office = \App\Models\PostOffice::matchByDestinationOrAddress($s->kantor_tujuan, $s->alamat);
             }
 
+            $genericNames = ['KC TUJUAN', 'KANTOR POS TUJUAN', 'KC PENGANTARAN', 'KC POS PENGANTARAN', 'POS PENGANTARAN', 'KC POS INDONESIA', 'POS INDONESIA'];
             $kantorTujuan = null;
-            if (!empty($s->kantor_tujuan) && strtoupper(trim($s->kantor_tujuan)) !== 'KC TUJUAN') {
-                $kantorTujuan = strtoupper(trim($s->kantor_tujuan));
-            } elseif ($office && !empty($office->name)) {
+            if ($office && !empty($office->name)) {
                 $kantorTujuan = strtoupper(trim($office->name));
+            } elseif (!empty($s->kantor_tujuan) && !in_array(strtoupper(trim($s->kantor_tujuan)), $genericNames)) {
+                $kantorTujuan = strtoupper(trim($s->kantor_tujuan));
+            } elseif (!empty($s->last_location) && !in_array(strtoupper(trim($s->last_location)), $genericNames)) {
+                $kantorTujuan = strtoupper(trim($s->last_location));
             } else {
-                $kantorTujuan = self::deriveKantorPosFromAddress($s->alamat);
+                // Try extracting from status_pos or keterangan if it mentions "di KC ..." or "tujuan KC ..."
+                $fromStatus = $this->botService->extractKantorTujuan($s->status_pos ?? '', $s->keterangan ?? '');
+                if (!empty($fromStatus) && !in_array(strtoupper(trim($fromStatus)), $genericNames)) {
+                    $kantorTujuan = strtoupper(trim($fromStatus));
+                } else {
+                    $derived = self::deriveKantorPosFromAddress($s->alamat);
+                    $kantorTujuan = (!empty($derived) && !in_array(strtoupper(trim($derived)), $genericNames)) ? $derived : null;
+                }
             }
 
             $sellerRaw = $s->nama_seller;
@@ -722,6 +749,44 @@ class DashboardController extends Controller
         }
 
         return back()->with('success', $successMsg);
+    }
+
+    /**
+     * Get audit trail logs for a shipment
+     */
+    public function shipmentLogs(int $id)
+    {
+        $shipment = OutgoingShipment::findOrFail($id);
+
+        $logs = \App\Models\ShipmentLog::where('shipment_id', $shipment->id)
+            ->with(['user:id,name,email,role'])
+            ->orderBy('id', 'desc')
+            ->get()
+            ->map(function ($log) {
+                return [
+                    'id' => $log->id,
+                    'action' => $log->action,
+                    'note' => $log->note,
+                    'created_at' => $log->created_at ? $log->created_at->format('Y-m-d H:i:s') : null,
+                    'user' => $log->user ? [
+                        'id' => $log->user->id,
+                        'name' => $log->user->name,
+                        'role' => $log->user->role,
+                    ] : null,
+                ];
+            });
+
+        return response()->json([
+            'success' => true,
+            'shipment' => [
+                'id' => $shipment->id,
+                'no_resi' => $shipment->no_resi,
+                'nama_penerima' => $shipment->nama_penerima,
+                'status_pos' => $shipment->status_pos,
+                'color_code' => $shipment->color_code,
+            ],
+            'logs' => $logs,
+        ]);
     }
 
     /**
@@ -1187,45 +1252,33 @@ class DashboardController extends Controller
     {
         $addr = trim((string)$alamat);
         if (empty($addr)) {
-            return 'KC PENGANTARAN';
+            return '';
         }
 
-        // 1. Try matching against master PostOffice database (e.g. KCU BOGOR 16000)
+        // 1. Match against master PostOffice database
         $matched = \App\Models\PostOffice::matchByDestinationOrAddress(null, $addr);
         if ($matched && !empty($matched->name)) {
             return strtoupper(trim($matched->name));
         }
 
-        // 2. Match Kota / Kotamadya
-        if (preg_match('/\b(?:Kota|Kotamadya)\s+([A-Za-z\s]+?)(?=[,\.\n\r]|\s+(?:Kec|Desa|Kel|Rt|Rw|Prov|Jawa|Sumatera|Kalimantan|Sulawesi|Bali|Papua|\d{5})|$)/i', $addr, $m)) {
-            $words = array_slice(explode(' ', trim(preg_replace('/\s+/', ' ', $m[1]))), 0, 2);
-            return 'KC ' . strtoupper(implode(' ', $words));
+        // 2. Extract Kota / Kabupaten / Kecamatan from address text
+        if (preg_match('/\b(?:Kota|Kab(?:upaten)?\.?)\s+([A-Za-z\s]+?)(?=[,\.\n\r]|\s+(?:Kab|Kota|Desa|Kel|Rt|Rw|\d{5})|$)/i', $addr, $m)) {
+            $cleanCity = trim(preg_replace('/\s+/', ' ', $m[1]));
+            $firstWord = explode(' ', $cleanCity)[0];
+            if (strlen($firstWord) >= 3 && !in_array(strtoupper($firstWord), ['INDONESIA', 'TUJUAN', 'POS', 'PENGANTARAN'])) {
+                return 'KC ' . strtoupper($cleanCity);
+            }
         }
 
-        // 3. Match Kabupaten
-        if (preg_match('/\b(?:Kabupaten|Kab\.?)\s+([A-Za-z\s]+?)(?=[,\.\n\r]|\s+(?:Kec|Desa|Kel|Rt|Rw|Prov|Jawa|Sumatera|Kalimantan|Sulawesi|Bali|Papua|\d{5})|$)/i', $addr, $m)) {
-            $words = array_slice(explode(' ', trim(preg_replace('/\s+/', ' ', $m[1]))), 0, 2);
-            return 'KC ' . strtoupper(implode(' ', $words));
-        }
-
-        // 4. Match Kecamatan
         if (preg_match('/\b(?:Kecamatan|Kec\.?)\s+([A-Za-z\s]+?)(?=[,\.\n\r]|\s+(?:Kab|Kota|Desa|Kel|Rt|Rw|\d{5})|$)/i', $addr, $m)) {
-            $words = array_slice(explode(' ', trim(preg_replace('/\s+/', ' ', $m[1]))), 0, 2);
-            return 'KC ' . strtoupper(implode(' ', $words));
+            $cleanKec = trim(preg_replace('/\s+/', ' ', $m[1]));
+            $words = explode(' ', $cleanKec);
+            $kecName = implode(' ', array_slice($words, 0, 2));
+            if (strlen($kecName) >= 3 && !in_array(strtoupper($kecName), ['INDONESIA', 'TUJUAN', 'POS'])) {
+                return 'KC KEC. ' . strtoupper($kecName);
+            }
         }
 
-        // 5. Match 5-digit postal code
-        if (preg_match('/\b(\d{5})\b/', $addr, $m)) {
-            return 'KC POS ' . $m[1];
-        }
-
-        // 6. Short address snippet
-        $parts = explode(',', $addr);
-        $firstPart = trim($parts[0]);
-        if (strlen($firstPart) >= 3 && strlen($firstPart) <= 25) {
-            return 'KC ' . strtoupper($firstPart);
-        }
-
-        return 'KC PENGANTARAN';
+        return '';
     }
 }

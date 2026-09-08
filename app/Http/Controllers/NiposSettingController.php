@@ -112,6 +112,36 @@ class NiposSettingController extends Controller
     }
 
     /**
+     * Automatically fetch fresh cookie directly from NIPOS server and test it
+     */
+    public function autoRefresh(Request $request)
+    {
+        $cookie = SystemSetting::refreshNiposCookie(true);
+
+        if (empty($cookie)) {
+            return response()->json([
+                'success' => false,
+                'connected' => false,
+                'message' => 'Gagal mengambil cookie baru dari server Posindo secara otomatis. Periksa koneksi internet server.',
+                'cookie' => null,
+            ], 500);
+        }
+
+        $testResult = $this->pingNipos($cookie);
+        Cache::put('nipos_connection_status', $testResult, now()->addMinutes(15));
+
+        return response()->json([
+            'success' => true,
+            'connected' => $testResult['connected'],
+            'message' => 'Cookie NIPOS berhasil diperbarui secara otomatis dari server Posindo!',
+            'cookie' => $cookie,
+            'cookie_length' => strlen($cookie),
+            'cookie_preview' => substr($cookie, 0, 15) . '...' . substr($cookie, -10),
+            'test_result' => $testResult,
+        ]);
+    }
+
+    /**
      * Probe NIPOS endpoint to validate cookie validity and latency
      */
     protected function pingNipos(string $cookie): array

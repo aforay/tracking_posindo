@@ -1,66 +1,163 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# 📦 Posindo Tracking & CS Follow-Up System
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+Sistem manajemen dan pelacakan resi Pos Indonesia (NIPOS) terintegrasi dengan Google Spreadsheet dua arah (*bidirectional sync*), dashboard operasional Customer Service (CS), notifikasi WhatsApp otomatis, riwayat audit aktivitas (*audit trail*), serta deteksi keterlambatan SLA.
 
-## About Laravel
+---
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+## 🌟 Fitur Utama Sistem
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+1. **Pelacakan NIPOS Otomatis & Cerdas:**
+   - Melacak ratusan hingga ribuan nomor resi Pos Indonesia menggunakan bot latar belakang (*Laravel Queue Worker*).
+   - Klasifikasi otomatis status pengiriman: `SUKSES`, `RETUR`, `FOLLOW_UP`, dan `IN_PROCESS`.
+   - Mengabaikan resi final agar tidak membebani server logistik.
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+2. **Sinkronisasi Dua Arah Google Sheets (*Bidirectional Sync*):**
+   - **Pull:** Mengambil resi baru dari Google Sheets per tab bulan secara berkala (*chunking* anti-timeout).
+   - **Push:** Mengirim kembali pembaruan status, warna baris, dan catatan CS ke Google Sheets secara real-time via Google Apps Script Webhook.
 
-## Learning Laravel
+3. **WhatsApp Follow-Up CS (2 Target):**
+   - **🏢 Ke Kantor Pos (KC Tujuan):** Template permohonan antaran ulang, konfirmasi alamat, atau tahan retur ke petugas helpdesk/kurir KC tujuan.
+   - **👤 Ke Penerima / Pembeli (Customer):** Template chat kendala kurir (*Alamat Belum Jelas/Patokan*, *Rumah Kosong/Antar Ulang*, *Konfirmasi Uang Tunai COD*, dan *Pemberitahuan Darurat Retur*).
+   - Otomatis memperbarui status warna resi setelah WhatsApp dibuka.
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
+4. **Timeline Pelacakan Internal & Audit Trail (Shipment Logs):**
+   - **Internal Tracking Modal:** Klik nomor resi untuk melihat rute milestone perjalanan paket tanpa perlu login ke web NIPOS eksternal.
+   - **Audit Trail CS:** Mencatat siapa staf CS yang memperbarui status, tanggal/jam perubahan, dan riwayat catatan penanganan komplain.
 
-You may also try the [Laravel Bootcamp](https://bootcamp.laravel.com), where you will be guided through building a modern Laravel application from scratch.
+5. **Peringatan Proaktif & Notifikasi Sistem:**
+   - **Peringatan Cookie NIPOS Mati:** Banner otomatis jika session cookie NIPOS kedaluwarsa agar Admin segera memperbaruinya.
+   - **Peringatan Overdue SLA:** Notifikasi cerdas paket macet (>4 hari belum terkirim) lengkap dengan tombol 1-klik filter.
 
-If you don't feel like reading, [Laracasts](https://laracasts.com) can help. Laracasts contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+6. **Manajemen Pengguna & Keamanan:**
+   - Otorisasi Role: **Administrator** vs **Customer Service (CS)**.
+   - Menu kelola pengguna (Admin dapat menambah staf CS, mengubah role, mereset password, dan menghapus akun).
+   - Fitur ganti password mandiri untuk seluruh pengguna.
 
-## Laravel Sponsors
+7. **Pencadangan Database Otomatis (Auto Backup):**
+   - Perintah `php artisan db:backup --compress` menyimpan arsip database MySQL terkompresi gzip ke `storage/backups/`.
 
-We would like to extend our thanks to the following sponsors for funding Laravel development. If you are interested in becoming a sponsor, please visit the [Laravel Partners program](https://partners.laravel.com).
+---
 
-### Premium Partners
+## 🎨 Standar Warna & Aturan Bisnis Klasifikasi
 
-- **[Vehikl](https://vehikl.com/)**
-- **[Tighten Co.](https://tighten.co)**
-- **[WebReinvent](https://webreinvent.com/)**
-- **[Kirschbaum Development Group](https://kirschbaumdevelopment.com)**
-- **[64 Robots](https://64robots.com)**
-- **[Curotec](https://www.curotec.com/services/technologies/laravel/)**
-- **[Cyber-Duck](https://cyber-duck.co.uk)**
-- **[DevSquad](https://devsquad.com/hire-laravel-developers)**
-- **[Jump24](https://jump24.co.uk)**
-- **[Redberry](https://redberry.international/laravel/)**
-- **[Active Logic](https://activelogic.com)**
-- **[byte5](https://byte5.de)**
-- **[OP.GG](https://op.gg)**
+| Kategori Sistem | Warna Badge | Kode Hex | Arti Bisnis & Aksi CS |
+|---|---|---|---|
+| **`SUKSES`** | **BIRU** | `#46BDC6` | Paket berhasil diserahkan ke penerima / keluarga serumah. Status final. |
+| **`RETUR`** | **ORANGE** | `#FBBC04` | Paket gagal serah & dalam proses / telah kembali ke pengirim (*Hold/Return Delivery*). Status final. |
+| **`FOLLOW_UP`** | **KUNING** | `#FFFF00` | Sudah di-follow up 1 kali oleh tim CS ke kurir / pembeli. |
+| **`FOLLOW_UP`** | **HIJAU** | `#93C47D` | Telah di-follow up 2 kali karena masih ada kendala lanjutan. |
+| **`FOLLOW_UP`** | **BIRU TUA** | `#1C4587` | Sudah dieskalasi ke Kantor Pos Pusat / KC Tujuan (*FU POS*). |
+| **`IN_PROCESS`** | **PUTIH** | `#FFFFFF` | Paket sedang dalam perjalanan logistik POS (*Manifest / Runsheet / In Location*). |
 
-## Contributing
+---
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+## 💻 Kebutuhan Lingkungan Sistem
 
-## Code of Conduct
+- **PHP**: 8.2 atau lebih baru (ekstensi `pdo_mysql`, `curl`, `mbstring`, `openssl`, `xml`, `zip` aktif).
+- **Database Engine**: **MySQL / MariaDB** (Default di XAMPP port `3306`).
+- **Node.js**: v18.x atau v20.x dan **NPM**.
+- **Composer**: Dependency manager PHP.
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+---
 
-## Security Vulnerabilities
+## 🚀 Cara Menjalankan Aplikasi
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+### Metode 1: Otomatis via `run.bat` (Rekomendasi di Windows)
+Cukup klik dua kali file `run.bat` di root direktori proyek. Skrip ini otomatis:
+1. Mendeteksi PHP di sistem atau folder XAMPP.
+2. Memastikan file `.env` dan `APP_KEY` terkonfigurasi.
+3. Menjalankan migrasi database MySQL (`php artisan migrate --force`).
+4. Membangun aset frontend jika belum ada.
+5. Menjalankan Queue Worker di background (`php artisan queue:work`).
+6. Membuka browser otomatis ke `http://localhost:8000`.
 
-## License
+---
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+### Metode 2: Menjalankan Secara Manual
+
+1. **Clone dan Install Dependencies:**
+   ```bash
+   composer install
+   npm install
+   ```
+
+2. **Konfigurasi File `.env`:**
+   Salin file `.env.example` ke `.env`:
+   ```env
+   APP_NAME="Tracking Posindo"
+   APP_ENV=local
+   APP_KEY=base64:...
+   APP_DEBUG=true
+   APP_URL=http://localhost:8000
+
+   DB_CONNECTION=mysql
+   DB_HOST=127.0.0.1
+   DB_PORT=3306
+   DB_DATABASE=tracking_posindo
+   DB_USERNAME=root
+   DB_PASSWORD=
+
+   QUEUE_CONNECTION=database
+   ```
+
+3. **Migrasi Database & Seeding Akun Awal:**
+   ```bash
+   php artisan migrate --seed
+   ```
+
+4. **Kompilasi Aset Frontend (Vite):**
+   ```bash
+   npm run build
+   # Atau mode development:
+   # npm run dev
+   ```
+
+5. **Jalankan Background Worker & Web Server (2 Terminal):**
+   - **Terminal 1 (Queue Worker):**
+     ```bash
+     php artisan queue:work --timeout=300 --tries=3
+     ```
+   - **Terminal 2 (Web Server):**
+     ```bash
+     php artisan serve --port=8000
+     ```
+
+---
+
+## 🔑 Akun Login Default
+
+| Role Pengguna | Email Login | Kata Sandi Awal | Hak Akses |
+|---|---|---|---|
+| **Administrator** | `admin@posindo.com` | `password` | Akses penuh: manajemen user, sync Google Sheets, upload Excel, bot pelacakan, kontak KC pos. |
+| **Customer Service** | `cs@posindo.com` | `password` | Akses operasional: follow-up WA, update status & warna, catatan resi, timeline, direktori KC pos. |
+
+> **Catatan:** Kata sandi dapat segera diubah melalui menu profil pengguna (ikon kunci) di pojok kanan atas setelah login.
+
+---
+
+## ⏰ Konfigurasi Otomasi Jadwal (Cron Scheduler)
+
+Jalankan perintah ini di background atau jadwalkan via **Windows Task Scheduler**:
+```bash
+php artisan schedule:work
+```
+
+Daftar tugas otomatis yang berjalan:
+- **`sheets:sync`** (Setiap 5 menit) — Menarik data resi baru dari Google Sheets.
+- **`sheets:push-updates`** (Setiap 5 menit) — Mengirim status update dari database ke Google Sheets.
+- **`nipos:track-all`** (Setiap 15 menit) — Bot pelacakan otomatis NIPOS.
+- **`db:backup --compress`** (Setiap hari pukul 02:00) — Backup database MySQL ke `storage/backups`.
+
+---
+
+## 🧪 Pengujian Sistem (Automated Tests)
+
+Jalankan rangkaian test otomatis dengan perintah:
+```bash
+php artisan test
+```
+Seluruh skenario pengujian autentikasi, hak akses role, parsing resi NIPOS, sinkronisasi Google Sheets, audit log, dan pencadangan database berstatus **100% PASS**.
+
+---
+
+*Dikembangkan untuk efisiensi logistik, akurasi data pengiriman, dan akselerasi penanganan komplain COD Pos Indonesia.*

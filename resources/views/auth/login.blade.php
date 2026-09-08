@@ -3,7 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login - Posindo Tracking & CS Portal</title>
+    <title>Login - TRACKO Posindo Tracking Portal</title>
+    <link rel="icon" type="image/svg+xml" href="{{ asset('favicon.svg') }}?v=2">
+    <link rel="icon" type="image/png" sizes="64x64" href="{{ asset('favicon.png') }}?v=2">
+    <link rel="shortcut icon" href="{{ asset('favicon.ico') }}?v=2">
+    <link rel="apple-touch-icon" href="{{ asset('favicon.png') }}?v=2">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -16,12 +20,8 @@
     <div class="w-full max-w-md bg-white rounded-3xl shadow-xl border border-slate-200/80 overflow-hidden">
         <!-- Header Banner -->
         <div class="bg-gradient-to-r from-[#1C4587] to-blue-900 px-8 pt-8 pb-6 text-white text-center relative">
-            <div class="w-14 h-14 bg-white/10 backdrop-blur-md rounded-2xl mx-auto flex items-center justify-center mb-3 shadow-inner border border-white/20">
-                <svg class="w-8 h-8 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
-                </svg>
-            </div>
-            <h1 class="text-xl font-extrabold tracking-tight">Posindo Tracking Portal</h1>
+            <img src="{{ asset('favicon.svg') }}" alt="TRACKO" class="w-14 h-14 mx-auto mb-3 drop-shadow-md rounded-2xl" />
+            <h1 class="text-xl font-extrabold tracking-tight">TRACKO Portal</h1>
             <p class="text-xs text-blue-200 mt-1">Sistem Pemantauan & Follow-Up CS Pos Indonesia</p>
         </div>
 

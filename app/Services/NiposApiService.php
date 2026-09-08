@@ -75,6 +75,27 @@ class NiposApiService
                     'vBarcode' => $vBarcode,
                 ]);
 
+            $rawBody = (string)$response->body();
+            if (!$response->successful() || $response->status() === 401 || $response->status() === 403 || str_contains($rawBody, 'login.php') || str_contains(strtolower($rawBody), 'masuk ke sistem')) {
+                Log::info("NiposApiService: Sesi NIPOS kedaluwarsa/ditolak, mengambil cookie baru secara otomatis...");
+                $freshCookie = \App\Models\SystemSetting::refreshNiposCookie(true);
+                if (!empty($freshCookie)) {
+                    $this->cookie = $freshCookie;
+                    $response = Http::withoutVerifying()
+                        ->timeout(25)
+                        ->withHeaders([
+                            'Cookie' => $this->cookie,
+                            'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                            'X-Requested-With' => 'XMLHttpRequest',
+                            'Accept' => 'application/json, text/javascript, */*; q=0.01',
+                        ])
+                        ->asForm()
+                        ->post($this->url, [
+                            'vBarcode' => $vBarcode,
+                        ]);
+                }
+            }
+
             if ($response->successful()) {
                 $json = $response->json();
                 $html = $json['desk_mess'] ?? (string)$response->body();

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { router } from "@inertiajs/react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -16,11 +16,15 @@ import {
   ArrowUpDown,
   RefreshCw,
   Bot,
+  History,
+  Loader2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ShipmentTimelineModal } from "./ShipmentTimelineModal";
+import { ShipmentLogsModal } from "./ShipmentLogsModal";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -93,6 +97,56 @@ export function DataTable({
   const [escalateFor, setEscalateFor] = useState<string | null>(null);
   const [escDate, setEscDate] = useState<Date | undefined>(new Date());
   const [loadingTrackId, setLoadingTrackId] = useState<string | null>(null);
+  const [timelineShipment, setTimelineShipment] = useState<Shipment | null>(null);
+  const [logShipment, setLogShipment] = useState<Shipment | null>(null);
+  const [resolvedOffices, setResolvedOffices] = useState<Record<string, string>>({});
+  const resolvingRef = useRef<Set<string>>(new Set());
+
+  // Automatically resolve missing KC / KCU from NIPOS in the background for visible rows without blocking UI
+  useEffect(() => {
+    const generic = ['KC TUJUAN', 'KANTOR POS TUJUAN', 'KC POS PENGANTARAN', 'KC PENGANTARAN', 'POS PENGANTARAN', 'KC POS INDONESIA', 'POS INDONESIA'];
+    const missingResis = rows
+      .filter((r) => {
+        const existing = resolvedOffices[r.resi] || resolvedOffices[r.id] || r.kantorTujuan;
+        return (
+          r.resi &&
+          (!existing || generic.includes(existing.trim().toUpperCase())) &&
+          !resolvingRef.current.has(r.resi)
+        );
+      })
+      .map((r) => r.resi)
+      .slice(0, 40);
+
+    if (missingResis.length === 0) return;
+
+    missingResis.forEach((r) => resolvingRef.current.add(r));
+
+    const csrfToken =
+      document.querySelector('meta[name="csrf-token"]')?.getAttribute("content") ||
+      (document.cookie.match(/XSRF-TOKEN=([^;]+)/)?.[1]
+        ? decodeURIComponent(document.cookie.match(/XSRF-TOKEN=([^;]+)/)![1])
+        : "");
+
+    fetch('/shipments/resolve-kantor', {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'X-CSRF-TOKEN': csrfToken,
+        'X-XSRF-TOKEN': csrfToken,
+      },
+      body: JSON.stringify({ resis: missingResis }),
+    })
+      .then((res) => res.json())
+      .then((res) => {
+        if (res.success && res.offices) {
+          setResolvedOffices((prev) => ({ ...prev, ...res.offices }));
+        }
+      })
+      .catch((err) => {
+        console.warn('Failed to resolve missing KC from NIPOS:', err);
+      });
+  }, [rows]);
 
   const handleSingleTrack = async (id: string) => {
     try {
@@ -168,9 +222,9 @@ export function DataTable({
                   <ArrowUpDown className="h-3 w-3 opacity-80" />
                 </button>
               </th>
-              <th className="min-w-[200px] max-w-[260px] whitespace-normal">Tujuan Kirim &amp; KC</th>
+              <th className="min-w-[190px] max-w-[260px] whitespace-normal">Kantor Pos (KC / KCU)</th>
               <th className="min-w-[250px] max-w-[320px] whitespace-normal">
-                Penerima &amp; Keterangan (K)
+                Penerima &amp; Alamat (K)
               </th>
               <th className="w-36 whitespace-nowrap">Status NIPOS (L)</th>
               <th className="w-20 whitespace-nowrap">SLA (M)</th>
@@ -227,15 +281,14 @@ export function DataTable({
                           const detailUrl = `https://pid.posindonesia.co.id/lacak/admin/detail_lacak_banyak.php?id=${encryptedResi}`;
                           return (
                             <>
-                              <a
-                                href={detailUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="font-mono text-xs font-bold underline-offset-2 hover:underline text-[#1E40AF]"
-                                title="Buka Detail Lacak NIPOS"
+                              <button
+                                type="button"
+                                onClick={() => setTimelineShipment(row)}
+                                className="font-mono text-xs font-bold underline-offset-2 hover:underline text-[#1E40AF] cursor-pointer text-left"
+                                title="Klik untuk melihat Detail Timeline Pelacakan Resi"
                               >
                                 {row.resi}
-                              </a>
+                              </button>
                               <button
                                 onClick={() => copy(row.resi)}
                                 className="rounded p-1 opacity-60 transition hover:opacity-100 cursor-pointer"
@@ -260,33 +313,51 @@ export function DataTable({
                     <td className="px-3 py-2 whitespace-nowrap tabular-nums">
                       {formatDate(row.tanggalKirim)}
                     </td>
-                    <td className="px-3 py-2 min-w-[200px] max-w-[260px] whitespace-normal">
+                    <td className="px-3 py-2 min-w-[190px] max-w-[260px] whitespace-normal">
                       {(() => {
-                        const cityRegency = extractCityRegency(row.alamat || row.tujuan, row.kantorTujuan);
-                        const cleanCityName = cityRegency.replace(/^(Kota|Kab\.?|Kec\.?)\s+/i, "").trim();
-                        const rawKC = row.kantorTujuan ? row.kantorTujuan.trim() : "";
-                        const isGenericKC = !rawKC || ['KC TUJUAN', 'KC', 'KC POS PENGANTARAN', 'KC PENGANTARAN', 'POS PENGANTARAN'].includes(rawKC.toUpperCase());
-                        const displayKC = isGenericKC
-                          ? (cleanCityName && cleanCityName !== "-" ? `KC ${cleanCityName.toUpperCase()}` : "KC PENGANTARAN")
-                          : rawKC;
+                        const rawKC = (resolvedOffices[row.resi] || resolvedOffices[row.id] || row.kantorTujuan || "").trim();
+                        const isGenericKC = !rawKC || ['KC TUJUAN', 'KC', 'KANTOR POS TUJUAN', 'KC POS PENGANTARAN', 'KC PENGANTARAN', 'POS PENGANTARAN', 'KC POS INDONESIA', 'POS INDONESIA'].includes(rawKC.toUpperCase());
+                        const cityRegency = extractCityRegency(row.alamat || "", rawKC);
+                        
+                        let displayKC = "";
+                        let isResolving = false;
+                        if (!isGenericKC) {
+                          displayKC = rawKC;
+                        } else if (cityRegency && cityRegency !== "-") {
+                          displayKC = `KC ${cityRegency.replace(/^(Kota|Kab\.?|Kec\.?)\s+/i, "").trim().toUpperCase()}`;
+                        } else {
+                          displayKC = "Sedang Membaca NIPOS...";
+                          isResolving = true;
+                        }
 
                         return (
                           <div className="space-y-1.5">
-                            {/* 1. Kota / Kabupaten Tujuan */}
-                            <div className="flex items-center gap-1.5">
-                              <MapPin className="h-3.5 w-3.5 shrink-0 text-rose-500" />
-                              <span className="font-bold text-xs leading-snug break-words" title={row.alamat || row.tujuan}>
-                                {cityRegency}
-                              </span>
+                            {/* 1. Nama Kantor Pos Resmi dari NIPOS (Posisi Akhir) */}
+                            <div className="flex items-start gap-1.5 font-bold text-xs leading-snug" style={{ color: dark ? "#93C5FD" : "#1E40AF" }}>
+                              {isResolving ? (
+                                <>
+                                  <Loader2 className="h-3.5 w-3.5 shrink-0 text-blue-500 animate-spin mt-0.5" />
+                                  <span className="italic text-blue-500 font-medium animate-pulse" title="Mengambil nama KC resmi dari API NIPOS...">
+                                    {displayKC}
+                                  </span>
+                                </>
+                              ) : (
+                                <>
+                                  <Building2 className="h-4 w-4 shrink-0 text-blue-600 mt-0.5" />
+                                  <span className="break-words" title={`Kantor Pos Tujuan (NIPOS): ${displayKC}`}>
+                                    {displayKC}
+                                  </span>
+                                </>
+                              )}
                             </div>
 
-                            {/* 2. Tulisan KC di bawahnya */}
-                            <div className="flex items-center gap-1 text-[11px] font-semibold" style={{ color: dark ? "#FFFFFF" : "#1E40AF" }}>
-                              <Building2 className="h-3 w-3 shrink-0 text-blue-600" />
-                              <span className="truncate" title={displayKC}>
-                                {displayKC}
-                              </span>
-                            </div>
+                            {/* 2. Kota / Wilayah Tujuan (Hanya jika terdeteksi Kota/Kab valid yang belum ada di nama KC) */}
+                            {cityRegency && cityRegency !== "-" && (!displayKC || !displayKC.toUpperCase().includes(cityRegency.toUpperCase())) ? (
+                              <div className="flex items-center gap-1 text-[11px] font-medium opacity-80">
+                                <MapPin className="h-3 w-3 shrink-0 text-rose-500" />
+                                <span className="truncate" title={`Wilayah Tujuan: ${cityRegency}`}>{cityRegency}</span>
+                              </div>
+                            ) : null}
 
                             {/* 3. Tombol Chat KC jika non-final, atau status Paket Sukses/Retur jika final */}
                             {isFinal ? (
@@ -443,6 +514,15 @@ export function DataTable({
                             </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
+
+                        <button
+                          type="button"
+                          onClick={() => setLogShipment(row)}
+                          className="p-1 rounded-md border border-black/10 bg-white/70 hover:bg-white text-slate-700 transition cursor-pointer shadow-2xs"
+                          title="Lihat Riwayat Log Aktivitas & Catatan CS"
+                        >
+                          <History className="h-3.5 w-3.5" />
+                        </button>
                       </div>
                       {noteFor === row.id && (
                         <div className="mt-1.5 flex items-center gap-1">
@@ -529,6 +609,19 @@ export function DataTable({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ShipmentTimelineModal
+        isOpen={!!timelineShipment}
+        onClose={() => setTimelineShipment(null)}
+        shipment={timelineShipment}
+        onOpenWhatsApp={onOpenWhatsApp}
+      />
+
+      <ShipmentLogsModal
+        isOpen={!!logShipment}
+        onClose={() => setLogShipment(null)}
+        shipment={logShipment}
+      />
     </>
   );
 }

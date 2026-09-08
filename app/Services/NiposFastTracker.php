@@ -21,13 +21,13 @@ class NiposFastTracker
     }
 
     /**
-     * Track list of resis chunked into 40 per request
+     * Track list of resis chunked into safe 20 per request to avoid Posindo gateway timeouts
      *
      * @param array $resis
      * @param int $chunkSize
      * @return array Map of [resi => ['resi' => ..., 'status_akhir' => ...]]
      */
-    public function trackMany(array $resis, int $chunkSize = 40): array
+    public function trackMany(array $resis, int $chunkSize = 20): array
     {
         $cleanResis = array_values(array_unique(array_filter(array_map('trim', $resis))));
         if (empty($cleanResis)) {
@@ -132,12 +132,30 @@ class NiposFastTracker
             }
 
             $response = Http::withoutVerifying()
-                ->timeout(20)
+                ->timeout(30)
                 ->asForm()
                 ->withHeaders($headers)
                 ->post($this->url, [
                     'vBarcode' => $vBarcode,
                 ]);
+
+            // Auto-heal session: jika session kedaluwarsa atau ditolak, auto refresh cookie & coba ulang
+            $rawBody = (string)$response->body();
+            if (!$response->successful() || $response->status() === 401 || $response->status() === 403 || str_contains($rawBody, 'login.php') || str_contains(strtolower($rawBody), 'masuk ke sistem')) {
+                Log::info("NiposFastTracker: Sesi NIPOS kedaluwarsa/ditolak, mengambil cookie baru secara otomatis...");
+                $freshCookie = \App\Models\SystemSetting::refreshNiposCookie(true);
+                if (!empty($freshCookie)) {
+                    $headers['Cookie'] = $freshCookie;
+                    $response = Http::withoutVerifying()
+                        ->timeout(30)
+                        ->asForm()
+                        ->withHeaders($headers)
+                        ->post($this->url, [
+                            'vBarcode' => $vBarcode,
+                        ]);
+                    $rawBody = (string)$response->body();
+                }
+            }
 
             if (!$response->successful()) {
                 Log::warning("NiposFastTracker: HTTP error {$response->status()} for chunk of " . count($cleanChunk) . " resis.");
@@ -213,9 +231,29 @@ class NiposFastTracker
                     $barcodeColIndex = $index;
                 }
 
+                // Find EXTID column
+                if (!isset($extIdColIndex) && str_contains($headerText, 'EXTID')) {
+                    $extIdColIndex = $index;
+                }
+
                 // Find STATUS AKHIR column
                 if ($statusAkhirColIndex === null && str_contains($headerText, 'STATUS AKHIR')) {
                     $statusAkhirColIndex = $index;
+                }
+
+                // Find POSISI AKHIR column (Kantor Pos Tujuan / Lokasi Akhir)
+                if (!isset($posisiAkhirColIndex) && (str_contains($headerText, 'POSISI AKHIR') || str_contains($headerText, 'POSISI') || str_contains($headerText, 'KANTOR TUJUAN'))) {
+                    $posisiAkhirColIndex = $index;
+                }
+
+                // Find KANTOR KIRIM column
+                if (!isset($kantorKirimColIndex) && str_contains($headerText, 'KANTOR KIRIM')) {
+                    $kantorKirimColIndex = $index;
+                }
+
+                // Find PENERIMA column
+                if (!isset($penerimaColIndex) && str_contains($headerText, 'PENERIMA') && !str_contains($headerText, 'TLP')) {
+                    $penerimaColIndex = $index;
                 }
 
                 // Find SLA column
@@ -233,17 +271,33 @@ class NiposFastTracker
         // Fallbacks if headers were not explicitly matched:
         // Default Pos Indonesia table layout:
         // Index 1 = Barcode
+        // Index 2 = ExtID
         // Index 4 = Tanggal Kolekting
+        // Index 5 = Kantor Kirim
         // Index 7 or Index 5 = Status Akhir
+        // Index 9 = Posisi Akhir (Kantor Tujuan)
+        // Index 12 = Penerima
         // Index 14 = SLA
         if ($barcodeColIndex === null) {
             $barcodeColIndex = 1;
         }
+        if (!isset($extIdColIndex)) {
+            $extIdColIndex = 2;
+        }
         if (!isset($tglKolektingColIndex)) {
             $tglKolektingColIndex = 4;
         }
+        if (!isset($kantorKirimColIndex)) {
+            $kantorKirimColIndex = 5;
+        }
         if ($statusAkhirColIndex === null) {
             $statusAkhirColIndex = 7;
+        }
+        if (!isset($posisiAkhirColIndex)) {
+            $posisiAkhirColIndex = 9;
+        }
+        if (!isset($penerimaColIndex)) {
+            $penerimaColIndex = 12;
         }
         if ($slaColIndex === null) {
             $slaColIndex = 14;
@@ -260,12 +314,36 @@ class NiposFastTracker
             }
 
             $resiRaw = $cols->item($barcodeColIndex)?->textContent ?? '';
+
+            // Jika cell Barcode kosong (sering terjadi pada format Posindo), ambil dari kolom ExtID
+            if (empty(trim($resiRaw)) && isset($extIdColIndex) && $cols->length > $extIdColIndex) {
+                $resiRaw = $cols->item($extIdColIndex)?->textContent ?? '';
+            }
+            if (empty(trim($resiRaw)) && $cols->length > 2) {
+                $resiRaw = $cols->item(2)?->textContent ?? '';
+            }
+
             $statusAkhirRaw = $cols->item($statusAkhirColIndex)?->textContent ?? '';
 
             // Fallback for compact table where Status Akhir might be at index 5
             if (empty(trim($statusAkhirRaw)) && $cols->length > 5) {
                 $statusAkhirRaw = $cols->item(5)?->textContent ?? '';
             }
+
+            // Extract Posisi Akhir (Kantor Tujuan dari NIPOS)
+            $posisiAkhirRaw = (isset($posisiAkhirColIndex) && $cols->length > $posisiAkhirColIndex)
+                ? ($cols->item($posisiAkhirColIndex)?->textContent ?? '')
+                : ($cols->length > 9 ? ($cols->item(9)?->textContent ?? '') : '');
+
+            // Extract Kantor Kirim
+            $kantorKirimRaw = (isset($kantorKirimColIndex) && $cols->length > $kantorKirimColIndex)
+                ? ($cols->item($kantorKirimColIndex)?->textContent ?? '')
+                : '';
+
+            // Extract Penerima
+            $penerimaRaw = (isset($penerimaColIndex) && $cols->length > $penerimaColIndex)
+                ? ($cols->item($penerimaColIndex)?->textContent ?? '')
+                : '';
 
             // Extract SLA raw text from mapped column
             $slaRaw = ($slaColIndex !== null && $cols->length > $slaColIndex)
@@ -279,6 +357,9 @@ class NiposFastTracker
 
             $resi = $this->sanitizeText($resiRaw);
             $statusAkhir = $this->sanitizeText($statusAkhirRaw);
+            $posisiAkhir = $this->sanitizeText($posisiAkhirRaw);
+            $kantorKirim = $this->sanitizeText($kantorKirimRaw);
+            $penerima = $this->sanitizeText($penerimaRaw);
             $sla = $this->sanitizeText($slaRaw);
             $tglKolekting = $this->sanitizeText($tglKolektingRaw);
 
@@ -286,10 +367,16 @@ class NiposFastTracker
                 $results[$resi] = [
                     'resi' => $resi,
                     'status_akhir' => $statusAkhir,
+                    'posisi_akhir' => $posisiAkhir,
+                    'kantor_tujuan' => $posisiAkhir,
+                    'last_location' => $posisiAkhir,
+                    'kantor_kirim' => $kantorKirim,
+                    'penerima' => $penerima,
                     'sla' => $sla,
                     'tanggal_kolekting' => $tglKolekting,
                     'barcode_index' => $barcodeColIndex,
                     'status_akhir_index' => $statusAkhirColIndex,
+                    'posisi_akhir_index' => $posisiAkhirColIndex,
                     'sla_index' => $slaColIndex,
                 ];
             }

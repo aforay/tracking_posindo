@@ -119,16 +119,25 @@ class ProcessNiposTrackingJob implements ShouldQueue
                     $tglKirim = $shipment->tanggal_kirim ? (is_string($shipment->tanggal_kirim) ? substr($shipment->tanggal_kirim, 0, 10) : $shipment->tanggal_kirim->format('Y-m-d')) : ($res['tanggal_kolekting'] ?? null);
                     $slaDays = $botService->extractSlaDays((string)$rawSla, $tglKirim, $category);
 
-                    // Detect and link Kantor Pos Tujuan (In-memory lookup)
-                    $kantorTujuan = $res['kantor_tujuan'] ?? $shipment->kantor_tujuan;
+                    // Prioritize real Kantor Pos / Posisi Akhir directly from NIPOS
+                    $genericNames = ['KC PENGANTARAN', 'KC TUJUAN', 'POS PENGANTARAN', 'KC POS PENGANTARAN', 'KC POS INDONESIA', 'POS INDONESIA'];
+                    $resTujuan = !empty($res['kantor_tujuan']) ? trim((string)$res['kantor_tujuan']) : (!empty($res['posisi_akhir']) ? trim((string)$res['posisi_akhir']) : null);
+                    if ($resTujuan && in_array(strtoupper($resTujuan), $genericNames)) {
+                        $resTujuan = null;
+                    }
+                    $currentTujuan = $shipment->kantor_tujuan;
+                    if ($currentTujuan && in_array(strtoupper(trim((string)$currentTujuan)), $genericNames)) {
+                        $currentTujuan = null;
+                    }
+                    $kantorTujuan = $resTujuan ?: $currentTujuan;
                     $kantorPosId = $shipment->kantor_pos_id;
                     $matchedOffice = PostOffice::matchByDestinationOrAddress($kantorTujuan, $shipment->alamat);
                     if ($matchedOffice) {
-                        $kantorTujuan = $kantorTujuan ?: $matchedOffice->name;
+                        $kantorTujuan = $matchedOffice->name;
                         $kantorPosId = $matchedOffice->id;
                     }
 
-                    $lastLocation = $res['last_location'] ?? $shipment->last_location;
+                    $lastLocation = $resTujuan ?: ($res['last_location'] ?? $shipment->last_location);
                     $createdAtStr = $shipment->created_at ? (is_string($shipment->created_at) ? $shipment->created_at : $shipment->created_at->toDateTimeString()) : $nowStr;
 
                     $updateBatch[] = [

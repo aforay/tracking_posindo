@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2563EB" />
+      <stop offset="100%" stop-color="#1E40AF" />
+    </linearGradient>
+  </defs>
+
+  <!-- Blue Squircle Base -->
+  <rect x="2" y="2" width="60" height="60" rx="16" fill="url(#bgGrad)" />
+
+  <!-- Delivery Truck (White) -->
+  <g transform="translate(10, 11) scale(1.65)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Cargo Box -->
+    <path d="M14 17V5a1.5 1.5 0 0 0-1.5-1.5H3A1.5 1.5 0 0 0 1.5 5v11a1 1 0 0 0 1 1h2" />
+    <path d="M14 17H8.5" />
+    <!-- Cab -->
+    <path d="M14 8h3.2a1 1 0 0 1 .78.38l3.4 4.25a1 1 0 0 1 .22.62V16a1 1 0 0 1-1 1h-2.1" />
+    <!-- Wheels -->
+    <circle cx="6.5" cy="17" r="2" fill="#2563EB" stroke="#FFFFFF" stroke-width="2" />
+    <circle cx="17.5" cy="17" r="2" fill="#2563EB" stroke="#FFFFFF" stroke-width="2" />
+  </g>
+
+  <!-- Orange Lightning Badge (Bottom-Right) -->
+  <circle cx="48" cy="48" r="13" fill="#F97316" stroke="#FFFFFF" stroke-width="2.5" />
+  <g transform="translate(48, 48) scale(0.9) translate(-12, -12)">
+    <path d="M13 3 L4 14 h7 l-1 7 9-11 h-7 l1-7 z" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="1" stroke-linejoin="round" />
+  </g>
+</svg>

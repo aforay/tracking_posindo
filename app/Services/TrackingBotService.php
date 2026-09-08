@@ -69,18 +69,20 @@ class TrackingBotService
                         $rawSla = $data['sla'] ?? null;
                         $tglKolekting = $data['tanggal_kolekting'] ?? null;
                         $parsedSla = $this->extractSlaDays((string)$rawSla, $tglKolekting, $cat);
+                        $posisiAkhir = !empty($data['kantor_tujuan']) ? $data['kantor_tujuan'] : (!empty($data['posisi_akhir']) ? $data['posisi_akhir'] : null);
+                        $keterangan = !empty($data['penerima']) ? $data['penerima'] : $rawStatus;
                         $results[$resi] = [
                             'resi' => $resi,
                             'status_pos' => $rawStatus,
                             'status' => $rawStatus,
-                            'keterangan' => $rawStatus,
+                            'keterangan' => $keterangan,
                             'status_kategori' => $cat,
                             'color_code' => $color,
                             'sla_days' => $parsedSla,
                             'sla' => (string)$parsedSla,
                             'tanggal_kolekting' => $tglKolekting,
-                            'kantor_tujuan' => null,
-                            'last_location' => null,
+                            'kantor_tujuan' => $posisiAkhir,
+                            'last_location' => $posisiAkhir,
                             'raw' => $rawStatus,
                         ];
                     }

@@ -43,6 +43,9 @@ class QuickTestNiposCommand extends Command
         $this->line("--------------------------------------------------");
         $this->line("No Resi           : " . ($result['resi'] ?? $resi));
         $this->line("Status Akhir      : " . ($result['status_akhir'] ?? '-'));
+        $this->line("Posisi Akhir (KC) : " . ($result['posisi_akhir'] ?? '-'));
+        $this->line("Kantor Kirim      : " . ($result['kantor_kirim'] ?? '-'));
+        $this->line("Penerima          : " . ($result['penerima'] ?? '-'));
         $this->line("SLA               : " . ($result['sla'] ?? '-'));
         $this->line("Index Kolom Resi  : " . ($result['barcode_index'] ?? '-'));
         $this->line("Index Kolom Status: " . ($result['status_akhir_index'] ?? '-'));

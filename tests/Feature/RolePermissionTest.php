@@ -54,7 +54,7 @@ class RolePermissionTest extends TestCase
     {
         // Failed login
         $failResponse = $this->post('/login', [
-            'email' => 'admin_test@posindo.com',
+            'email' => $this->adminUser->email,
             'password' => 'wrongpassword',
         ]);
         $failResponse->assertSessionHasErrors('email');
@@ -62,8 +62,8 @@ class RolePermissionTest extends TestCase
 
         // Successful login
         $successResponse = $this->post('/login', [
-            'email' => 'admin_test@posindo.com',
-            'password' => 'secret123',
+            'email' => $this->adminUser->email,
+            'password' => 'AADDMMIINN123',
         ]);
         $successResponse->assertRedirect('/');
         $this->assertAuthenticatedAs($this->adminUser);
