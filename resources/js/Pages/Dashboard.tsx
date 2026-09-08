@@ -782,22 +782,46 @@ export default function Dashboard() {
 
         {/* Baris Pencarian, Mitra, & Sorting */}
         <section className="grid grid-cols-1 md:grid-cols-12 gap-3 rounded-2xl border border-slate-200/90 bg-white p-3.5 shadow-xs items-center">
-          <div className="relative md:col-span-7">
-            <Search className="absolute top-3 left-3.5 h-4 w-4 text-slate-400 pointer-events-none" />
-            <Input
-              value={query}
-              onChange={(e) => {
-                setQuery(e.target.value);
+          <div className="relative md:col-span-7 flex items-center gap-1.5">
+            <div className="relative flex-1">
+              <Search className="absolute top-3 left-3.5 h-4 w-4 text-slate-400 pointer-events-none" />
+              <Input
+                value={query}
+                onChange={(e) => {
+                  setQuery(e.target.value);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    router.get("/shipments", { seller, month, color: colorFilter, search: query, sort, direction, overdue: isOverdue ? 1 : undefined }, { preserveState: true, preserveScroll: true });
+                  }
+                }}
+                placeholder="Cari nama penerima, nomor resi, no. HP, alamat tujuan... (tekan Enter)"
+                className="h-10 pl-10 pr-9 text-xs bg-slate-50/50 border-slate-200 focus:bg-white focus:ring-1 focus:ring-blue-600 rounded-xl"
+              />
+              {query && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setQuery("");
+                    router.get("/shipments", { seller, month, color: colorFilter, search: "", sort, direction, overdue: isOverdue ? 1 : undefined }, { preserveState: true, preserveScroll: true });
+                  }}
+                  className="absolute right-2.5 top-2.5 p-1 text-slate-400 hover:text-slate-600 rounded-md transition cursor-pointer"
+                  title="Hapus pencarian"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+            <Button
+              type="button"
+              onClick={() => {
+                router.get("/shipments", { seller, month, color: colorFilter, search: query, sort, direction, overdue: isOverdue ? 1 : undefined }, { preserveState: true, preserveScroll: true });
               }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  router.get("/shipments", { seller, month, color: colorFilter, search: query, sort, direction, overdue: isOverdue ? 1 : undefined }, { preserveState: true, preserveScroll: true });
-                }
-              }}
-              placeholder="Cari nomor resi, nama penerima, no. HP, kota/alamat tujuan... (tekan Enter)"
-              className="h-10 pl-10 text-xs bg-slate-50/50 border-slate-200 focus:bg-white focus:ring-1 focus:ring-blue-600 rounded-xl"
-            />
+              className="h-10 px-4 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-xl shadow-2xs shrink-0 cursor-pointer"
+            >
+              Cari
+            </Button>
           </div>
           <div className="md:col-span-3">
             <Select value={seller} onValueChange={handleSellerChange}>

@@ -658,7 +658,13 @@ export function TopBar({
               <Button
                 variant="ghost"
                 size="icon"
-                onClick={() => router.post("/logout")}
+                onClick={() => {
+                  router.post("/logout", {}, {
+                    onFinish: () => {
+                      window.location.href = "/login";
+                    },
+                  });
+                }}
                 className="h-8 w-8 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg cursor-pointer transition"
                 title="Keluar / Logout"
               >

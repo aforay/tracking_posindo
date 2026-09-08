@@ -18,14 +18,14 @@ class RoleMiddleware
     public function handle(Request $request, Closure $next, ...$roles): Response
     {
         if (!Auth::check()) {
-            if ($request->expectsJson() || $request->wantsJson()) {
+            if ($request->expectsJson() || $request->wantsJson() || $request->ajax() || $request->is('sync/*', 'bot/*', 'shipments/*')) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Unauthenticated. Silakan login terlebih dahulu.',
                 ], 401);
             }
 
-            return redirect()->guest(route('login'))
+            return redirect()->route('login')
                 ->with('error', 'Sesi Anda belum aktif atau telah berakhir. Silakan login.');
         }
 

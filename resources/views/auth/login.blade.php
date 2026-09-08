@@ -57,8 +57,9 @@
                         name="email" 
                         id="email" 
                         required 
-                        value="{{ old('email') }}" 
-                        placeholder="admin@posindo.com / cs@posindo.com"
+                        autocomplete="username"
+                        value="{{ old('email', 'admin@posindo.com') }}" 
+                        placeholder="admin@posindo.com"
                         class="w-full px-4 py-2.5 rounded-xl border @error('email') border-rose-500 @else border-slate-300 @enderror text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-blue-600 transition"
                     >
                     @error('email')
@@ -75,6 +76,7 @@
                         name="password" 
                         id="password" 
                         required 
+                        autocomplete="current-password"
                         placeholder="••••••••"
                         class="w-full px-4 py-2.5 rounded-xl border @error('password') border-rose-500 @else border-slate-300 @enderror text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-blue-600 transition"
                     >
@@ -100,23 +102,18 @@
 
             <!-- Quick Demo Login Helper -->
             <div class="pt-2 border-t border-slate-200 text-center">
-                <p class="text-[11px] font-semibold text-slate-500 mb-2.5">Opsi Cepat Masuk (Pilih Role):</p>
-                <div class="grid grid-cols-2 gap-2">
+                <p class="text-[11px] font-semibold text-slate-500 mb-2.5">Opsi Cepat Masuk:</p>
+                <div>
                     <button 
                         type="button" 
                         onclick="quickLogin('admin@posindo.com', 'password')"
-                        class="px-3 py-2 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-xl text-left transition cursor-pointer group"
+                        class="w-full px-4 py-2.5 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-xl text-left transition cursor-pointer flex items-center justify-between group"
                     >
-                        <span class="block text-[10px] font-black text-blue-700 uppercase">Role Admin</span>
-                        <span class="block text-[11px] font-bold text-slate-800">admin@posindo.com</span>
-                    </button>
-                    <button 
-                        type="button" 
-                        onclick="quickLogin('cs@posindo.com', 'password')"
-                        class="px-3 py-2 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 rounded-xl text-left transition cursor-pointer group"
-                    >
-                        <span class="block text-[10px] font-black text-emerald-700 uppercase">Role CS</span>
-                        <span class="block text-[11px] font-bold text-slate-800">cs@posindo.com</span>
+                        <div>
+                            <span class="block text-[10px] font-black text-blue-700 uppercase">Role Admin</span>
+                            <span class="block text-[11px] font-bold text-slate-800">admin@posindo.com</span>
+                        </div>
+                        <span class="text-xs font-semibold text-slate-500 group-hover:text-blue-700">Masuk Cepat &rarr;</span>
                     </button>
                 </div>
             </div>
@@ -132,9 +129,12 @@
 
     <script>
         function quickLogin(email, password) {
-            document.getElementById('email').value = email;
-            document.getElementById('password').value = password;
-            document.getElementById('loginForm').submit();
+            var emailInput = document.getElementById('email');
+            var passInput = document.getElementById('password');
+            if (emailInput) emailInput.value = email;
+            if (passInput) passInput.value = password;
+            var form = document.getElementById('loginForm');
+            if (form) form.submit();
         }
     </script>
 </body>

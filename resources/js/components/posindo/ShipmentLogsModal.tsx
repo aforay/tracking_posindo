@@ -37,15 +37,30 @@ export function ShipmentLogsModal({ isOpen, onClose, shipment }: Props) {
   useEffect(() => {
     if (isOpen && shipment?.id) {
       setLoading(true);
+      setLogs([]);
       axios
-        .get(`/shipments/${shipment.id}/logs`)
+        .get(`/shipments/${shipment.id}/logs`, {
+          headers: {
+            Accept: "application/json",
+            "X-Requested-With": "XMLHttpRequest",
+          },
+          withCredentials: true,
+        })
         .then((res) => {
           if (res.data?.success) {
             setLogs(res.data.logs || []);
           }
         })
         .catch((err) => {
-          toast.error("Gagal mengambil riwayat log resi: " + (err.response?.data?.message || err.message));
+          // If redirect to login (HTML response), show session expired message
+          const contentType = err.response?.headers?.["content-type"] || "";
+          const isHtmlRedirect = contentType.includes("text/html");
+          if (isHtmlRedirect || err.response?.status === 401 || err.response?.status === 302) {
+            toast.error("Sesi telah berakhir. Silakan refresh halaman dan login ulang.");
+          } else {
+            const msg = err.response?.data?.message || err.message;
+            toast.error("Gagal mengambil riwayat log resi: " + msg);
+          }
         })
         .finally(() => {
           setLoading(false);

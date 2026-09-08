@@ -177,22 +177,64 @@ class DashboardController extends Controller
             $query->where('status_kategori', strtoupper($selectedKategori));
         }
 
-        // 4. Multi-resi Search Query
-        if (!empty($searchQuery)) {
-            $terms = preg_split('/[\s,\n;]+/', $searchQuery);
-            $terms = array_filter(array_map('trim', $terms));
+        // 4. Multi-resi, Fuzzy Name, & Multi-field Search Query
+        $applySearchQuery = function ($builder, $rawSearch) {
+            $raw = trim((string)$rawSearch);
+            if ($raw === '') {
+                return;
+            }
 
-            $query->where(function ($q) use ($terms, $searchQuery) {
-                if (count($terms) > 1) {
+            // Split into tokens by comma, whitespace, semicolon, newline
+            $terms = preg_split('/[\s,\n;]+/', $raw);
+            $terms = array_values(array_filter(array_map('trim', $terms)));
+
+            // Clean keywords: only letters and numbers, length >= 2
+            $words = array_values(array_filter(array_map(function ($w) {
+                return trim(preg_replace('/[^\p{L}\p{N}]/u', '', $w));
+            }, $terms), function ($w) {
+                return mb_strlen($w) >= 2;
+            }));
+
+            $builder->where(function ($q) use ($raw, $terms, $words) {
+                // 1. Resi match (exact list if pasted multiple, or partial)
+                if (!empty($terms)) {
                     $q->whereIn('no_resi', $terms);
-                } else {
-                    $q->where('no_resi', 'LIKE', "%{$searchQuery}%")
-                      ->orWhere('nama_penerima', 'LIKE', "%{$searchQuery}%")
-                      ->orWhere('no_hp', 'LIKE', "%{$searchQuery}%")
-                      ->orWhere('alamat', 'LIKE', "%{$searchQuery}%")
-                      ->orWhere('status_pos', 'LIKE', "%{$searchQuery}%");
+                }
+                $q->orWhere('no_resi', 'LIKE', "%{$raw}%");
+
+                // 2. Direct partial match on customer name, phone, address, office, status
+                $q->orWhere('nama_penerima', 'LIKE', "%{$raw}%")
+                  ->orWhere('no_hp', 'LIKE', "%{$raw}%")
+                  ->orWhere('alamat', 'LIKE', "%{$raw}%")
+                  ->orWhere('kantor_tujuan', 'LIKE', "%{$raw}%")
+                  ->orWhere('last_location', 'LIKE', "%{$raw}%")
+                  ->orWhere('status_pos', 'LIKE', "%{$raw}%");
+
+                // 3. Multi-word name match: ALL words present in nama_penerima (regardless of order!)
+                // e.g. "Rina Taruk" or "Taruk Rina" matches "Rina Tarukbua"
+                if (count($words) > 1) {
+                    $q->orWhere(function ($allWordsQ) use ($words) {
+                        foreach ($words as $w) {
+                            $allWordsQ->where('nama_penerima', 'LIKE', "%{$w}%");
+                        }
+                    });
+                }
+
+                // 4. Fuzzy fallback: ANY significant word (>= 3 chars) in nama_penerima or alamat
+                // e.g. "Tarukbua" or "Sukahar" or "Ningsih"
+                if (count($words) > 1) {
+                    foreach ($words as $w) {
+                        if (mb_strlen($w) >= 3 && !is_numeric($w)) {
+                            $q->orWhere('nama_penerima', 'LIKE', "%{$w}%")
+                              ->orWhere('alamat', 'LIKE', "%{$w}%");
+                        }
+                    }
                 }
             });
+        };
+
+        if (!empty($searchQuery)) {
+            $applySearchQuery($query, $searchQuery);
         }
 
         // Summary Statistics Cards (calculated respecting seller/month/year/search filters, but independent of color filter so all card counters reflect the full breakdown)
@@ -213,20 +255,7 @@ class DashboardController extends Controller
             });
         }
         if (!empty($searchQuery)) {
-            $terms = preg_split('/[\s,\n;]+/', $searchQuery);
-            $terms = array_filter(array_map('trim', $terms));
-
-            $statsBaseQuery->where(function ($q) use ($terms, $searchQuery) {
-                if (count($terms) > 1) {
-                    $q->whereIn('no_resi', $terms);
-                } else {
-                    $q->where('no_resi', 'LIKE', "%{$searchQuery}%")
-                      ->orWhere('nama_penerima', 'LIKE', "%{$searchQuery}%")
-                      ->orWhere('no_hp', 'LIKE', "%{$searchQuery}%")
-                      ->orWhere('alamat', 'LIKE', "%{$searchQuery}%")
-                      ->orWhere('status_pos', 'LIKE', "%{$searchQuery}%");
-                }
-            });
+            $applySearchQuery($statsBaseQuery, $searchQuery);
         }
 
         // 5. Overdue / Lewat SLA / Macet > 4 Hari Filter
@@ -756,37 +785,45 @@ class DashboardController extends Controller
      */
     public function shipmentLogs(int $id)
     {
-        $shipment = OutgoingShipment::findOrFail($id);
+        try {
+            $shipment = OutgoingShipment::findOrFail($id);
 
-        $logs = \App\Models\ShipmentLog::where('shipment_id', $shipment->id)
-            ->with(['user:id,name,email,role'])
-            ->orderBy('id', 'desc')
-            ->get()
-            ->map(function ($log) {
-                return [
-                    'id' => $log->id,
-                    'action' => $log->action,
-                    'note' => $log->note,
-                    'created_at' => $log->created_at ? $log->created_at->format('Y-m-d H:i:s') : null,
-                    'user' => $log->user ? [
-                        'id' => $log->user->id,
-                        'name' => $log->user->name,
-                        'role' => $log->user->role,
-                    ] : null,
-                ];
-            });
+            $logs = \App\Models\ShipmentLog::where('shipment_id', $shipment->id)
+                ->with(['user:id,name,email,role'])
+                ->orderBy('id', 'desc')
+                ->get()
+                ->map(function ($log) {
+                    return [
+                        'id' => $log->id,
+                        'action' => $log->action,
+                        'note' => $log->note,
+                        'created_at' => $log->created_at ? $log->created_at->format('Y-m-d H:i:s') : null,
+                        'user' => $log->user ? [
+                            'id' => $log->user->id,
+                            'name' => $log->user->name,
+                            'role' => $log->user->role,
+                        ] : null,
+                    ];
+                });
 
-        return response()->json([
-            'success' => true,
-            'shipment' => [
-                'id' => $shipment->id,
-                'no_resi' => $shipment->no_resi,
-                'nama_penerima' => $shipment->nama_penerima,
-                'status_pos' => $shipment->status_pos,
-                'color_code' => $shipment->color_code,
-            ],
-            'logs' => $logs,
-        ]);
+            return response()->json([
+                'success' => true,
+                'shipment' => [
+                    'id' => $shipment->id,
+                    'no_resi' => $shipment->no_resi,
+                    'nama_penerima' => $shipment->nama_penerima,
+                    'status_pos' => $shipment->status_pos,
+                    'color_code' => $shipment->color_code,
+                ],
+                'logs' => $logs,
+            ])->header('Content-Type', 'application/json');
+        } catch (\Throwable $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal memuat log: ' . $e->getMessage(),
+                'logs' => [],
+            ], 500)->header('Content-Type', 'application/json');
+        }
     }
 
     /**
