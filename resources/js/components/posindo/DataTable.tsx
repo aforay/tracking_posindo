@@ -100,6 +100,7 @@ export function DataTable({
   const [timelineShipment, setTimelineShipment] = useState<Shipment | null>(null);
   const [logShipment, setLogShipment] = useState<Shipment | null>(null);
   const [resolvedOffices, setResolvedOffices] = useState<Record<string, string>>({});
+  const [resolvedDates, setResolvedDates] = useState<Record<string, string>>({});
   const resolvingRef = useRef<Set<string>>(new Set());
 
   // Automatically resolve missing KC / KCU from NIPOS in the background for visible rows without blocking UI
@@ -141,6 +142,9 @@ export function DataTable({
       .then((res) => {
         if (res.success && res.offices) {
           setResolvedOffices((prev) => ({ ...prev, ...res.offices }));
+        }
+        if (res.success && res.dates) {
+          setResolvedDates((prev) => ({ ...prev, ...res.dates }));
         }
       })
       .catch((err) => {
@@ -311,7 +315,7 @@ export function DataTable({
                       </div>
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap tabular-nums">
-                      {formatDate(row.tanggalKirim)}
+                      {formatDate(resolvedDates[row.resi] || resolvedDates[row.id] || row.tanggalKirim)}
                     </td>
                     <td className="px-3 py-2 min-w-[190px] max-w-[260px] whitespace-normal">
                       {(() => {

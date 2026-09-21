@@ -374,6 +374,7 @@ class NiposFastTracker
                     'penerima' => $penerima,
                     'sla' => $sla,
                     'tanggal_kolekting' => $tglKolekting,
+                    'tanggal_kirim' => $tglKolekting,
                     'barcode_index' => $barcodeColIndex,
                     'status_akhir_index' => $statusAkhirColIndex,
                     'posisi_akhir_index' => $posisiAkhirColIndex,

@@ -116,7 +116,9 @@ class ProcessNiposTrackingJob implements ShouldQueue
                     }
 
                     $rawSla = $res['sla_days'] ?? ($res['sla'] ?? ($shipment->sla_days ?: 2));
-                    $tglKirim = $shipment->tanggal_kirim ? (is_string($shipment->tanggal_kirim) ? substr($shipment->tanggal_kirim, 0, 10) : $shipment->tanggal_kirim->format('Y-m-d')) : ($res['tanggal_kolekting'] ?? null);
+                    $niposRawDate = $res['tanggal_kirim'] ?? ($res['tanggal_kolekting'] ?? null);
+                    $niposParsedDate = !empty($niposRawDate) ? TrackingBotService::parseDateOnly($niposRawDate) : null;
+                    $tglKirim = $niposParsedDate ?: ($shipment->tanggal_kirim ? (is_string($shipment->tanggal_kirim) ? substr($shipment->tanggal_kirim, 0, 10) : $shipment->tanggal_kirim->format('Y-m-d')) : null);
                     $slaDays = $botService->extractSlaDays((string)$rawSla, $tglKirim, $category);
 
                     // Prioritize real Kantor Pos / Posisi Akhir directly from NIPOS

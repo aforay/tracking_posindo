@@ -480,7 +480,8 @@ export function generateShipments(count = 4800): Shipment[] {
 
 export function formatDate(iso?: string | null) {
   if (!iso || typeof iso !== "string") return "-";
-  const parts = iso.split("-");
+  const datePart = iso.includes("T") ? iso.split("T")[0] : (iso.includes(" ") ? iso.split(" ")[0] : iso);
+  const parts = datePart.split("-");
   if (parts.length !== 3) return iso;
   const [y, m, d] = parts;
   return `${d}/${m}/${y}`;

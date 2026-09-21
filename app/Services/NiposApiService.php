@@ -169,6 +169,7 @@ class NiposApiService
                 'DELIVERYRUNSHEET', 'MISROUTE', 'ANTAR ULANG'
             ]) ? $col7Raw : (!empty($col5Raw) ? $col5Raw : $col7Raw);
 
+            $tglKolekting = $cols->item(4) ? self::sanitizeText($cols->item(4)->textContent) : '';
             $posisiAkhir = $cols->item(9) ? self::sanitizeText($cols->item(9)->textContent) : '';
             $tglUpdate = $cols->item(10) ? self::sanitizeText($cols->item(10)->textContent) : '';
             $petugasUpdate = $cols->item(11) ? self::sanitizeText($cols->item(11)->textContent) : '';
@@ -181,6 +182,8 @@ class NiposApiService
                 'status_pos' => $statusAkhirNipos,
                 'keterangan' => $penerima ? "{$statusAkhirNipos} - {$penerima}" : $statusAkhirNipos,
                 'posisi_akhir' => $posisiAkhir,
+                'tanggal_kirim' => $tglKolekting,
+                'tanggal_kolekting' => $tglKolekting,
                 'tanggal_update' => $tglUpdate,
                 'petugas_update' => $petugasUpdate,
                 'penerima' => $penerima,

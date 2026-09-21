@@ -81,6 +81,7 @@ class TrackingBotService
                             'sla_days' => $parsedSla,
                             'sla' => (string)$parsedSla,
                             'tanggal_kolekting' => $tglKolekting,
+                            'tanggal_kirim' => $tglKolekting,
                             'kantor_tujuan' => $posisiAkhir,
                             'last_location' => $posisiAkhir,
                             'raw' => $rawStatus,
@@ -195,6 +196,48 @@ class TrackingBotService
         }
         $decoded = html_entity_decode((string)$raw, ENT_QUOTES | ENT_HTML5, 'UTF-8');
         return strtoupper(trim(preg_replace('/\s+/', ' ', $decoded)));
+    }
+
+    /**
+     * Parse date string from NIPOS (e.g. '2026-04-02 21:23:49' or '2026-04-02') to clean 'YYYY-MM-DD'
+     */
+    public static function parseDateOnly(?string $dateStr): ?string
+    {
+        if (empty($dateStr)) {
+            return null;
+        }
+
+        $trimmed = trim(str_replace(["\xc2\xa0", '&nbsp;', '"', "'"], ' ', $dateStr));
+        $trimmed = preg_replace('/\s+/', ' ', $trimmed);
+
+        // Pattern 1: YYYY-MM-DD or YYYY/MM/DD (with optional time HH:MM:SS)
+        if (preg_match('/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/', $trimmed, $m)) {
+            $y = (int)$m[1];
+            $mo = (int)$m[2];
+            $d = (int)$m[3];
+            if ($mo >= 1 && $mo <= 12 && $d >= 1 && $d <= 31) {
+                return sprintf('%04d-%02d-%02d', $y, $mo, $d);
+            }
+        }
+
+        // Pattern 2: DD-MM-YYYY or DD/MM/YYYY (with optional time HH:MM:SS)
+        if (preg_match('/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})/', $trimmed, $m)) {
+            $d = (int)$m[1];
+            $mo = (int)$m[2];
+            $y = (int)$m[3];
+            if ($mo >= 1 && $mo <= 12 && $d >= 1 && $d <= 31) {
+                return sprintf('%04d-%02d-%02d', $y, $mo, $d);
+            }
+        }
+
+        try {
+            $parsed = \Illuminate\Support\Carbon::parse($trimmed);
+            if ($parsed && $parsed->year >= 2020 && $parsed->year <= 2035) {
+                return $parsed->format('Y-m-d');
+            }
+        } catch (\Throwable $e) {}
+
+        return null;
     }
 
     /**
@@ -390,6 +433,7 @@ class TrackingBotService
                 $statusNode = $crawler->filterXPath("//tr[td[contains(., 'STATUS AKHIR')]]/td[2]");
                 $nomorKirimanNode = $crawler->filterXPath("//tr[td[contains(., 'Nomor Kiriman')]]/td[2]");
                 $slaNode = $crawler->filterXPath("//tr[td[contains(., 'SLA') or contains(., 'MASA TAHAN')]]/td[2]");
+                $tanggalKirimNode = $crawler->filterXPath("//tr[td[contains(., 'Tanggal Kirim') or contains(., 'Tanggal Kolekting') or contains(., 'Tgl Kirim')]]/td[2]");
 
                 $rawStatusText = '';
                 if ($statusNode->count() > 0) {
@@ -406,9 +450,14 @@ class TrackingBotService
                     $rawSlaText = $slaNode->first()->text();
                 }
 
+                $rawTanggalKirimText = '';
+                if ($tanggalKirimNode->count() > 0) {
+                    $rawTanggalKirimText = $tanggalKirimNode->first()->text();
+                }
+
                 // If not found via exact XPath, scan 2-column key-value rows
-                if (empty($rawStatusText)) {
-                    $crawler->filter('tr')->each(function (Crawler $tr) use (&$rawStatusText, &$rawNomorKirimanText, &$rawSlaText) {
+                if (empty($rawStatusText) || empty($rawTanggalKirimText)) {
+                    $crawler->filter('tr')->each(function (Crawler $tr) use (&$rawStatusText, &$rawNomorKirimanText, &$rawSlaText, &$rawTanggalKirimText) {
                         $tds = $tr->filter('td, th');
                         if ($tds->count() >= 2) {
                             $label = strtoupper(trim($tds->eq(0)->text()));
@@ -419,6 +468,8 @@ class TrackingBotService
                                 $rawNomorKirimanText = $val;
                             } elseif (str_contains($label, 'SLA') || str_contains($label, 'MASA TAHAN')) {
                                 $rawSlaText = $val;
+                            } elseif (str_contains($label, 'TANGGAL KIRIM') || str_contains($label, 'TGL KIRIM') || str_contains($label, 'TANGGAL KOLEKTING') || str_contains($label, 'TGL KOLEKTING')) {
+                                $rawTanggalKirimText = $val;
                             }
                         }
                     });
@@ -429,6 +480,9 @@ class TrackingBotService
                     $cleanStatus = trim(str_replace(["\xc2\xa0", '"', "'", '&nbsp;', "\r", "\n", "\t"], ' ', $rawStatusText));
                     $cleanStatus = strtoupper(preg_replace('/\s+/', ' ', $cleanStatus));
 
+                    $cleanTanggalKirim = trim(str_replace(["\xc2\xa0", '"', "'", '&nbsp;', "\r", "\n", "\t"], ' ', $rawTanggalKirimText));
+                    $cleanTanggalKirim = preg_replace('/\s+/', ' ', $cleanTanggalKirim);
+
                     // Klasifikasi Status & Kategori langsung dari teks utuh
                     $statusNipos = $this->determineStatusNipos($cleanStatus);
                     $statusKategori = $this->categorizeStatus($cleanStatus, '');
@@ -436,7 +490,7 @@ class TrackingBotService
 
                     // Ekstraksi SLA dari baris SLA atau Nomor Kiriman
                     $slaTargetText = !empty($rawSlaText) ? $rawSlaText : (!empty($rawNomorKirimanText) ? $rawNomorKirimanText : '');
-                    $parsedSla = !empty($slaTargetText) ? $this->extractSlaDays($slaTargetText) : 2;
+                    $parsedSla = !empty($slaTargetText) ? $this->extractSlaDays($slaTargetText, $cleanTanggalKirim, $statusKategori) : 2;
 
                     // Ekstraksi Kantor Pos / Lokasi
                     $kantorTujuan = $this->extractKantorTujuan($cleanStatus, $rawHtml);
@@ -450,9 +504,11 @@ class TrackingBotService
                         'color_code' => $colorCode,
                         'sla_days' => $parsedSla,
                         'sla' => (string)$parsedSla,
+                        'tanggal_kirim' => $cleanTanggalKirim ?: null,
+                        'tanggal_kolekting' => $cleanTanggalKirim ?: null,
                         'kantor_tujuan' => $kantorTujuan,
                         'last_location' => $kantorTujuan,
-                        'raw' => "STATUS: {$cleanStatus} | NOMOR_KIRIMAN: {$rawNomorKirimanText} | SLA: {$rawSlaText}",
+                        'raw' => "STATUS: {$cleanStatus} | NOMOR_KIRIMAN: {$rawNomorKirimanText} | SLA: {$rawSlaText} | TGL_KIRIM: {$cleanTanggalKirim}",
                     ];
                 }
             } catch (Throwable $e) {

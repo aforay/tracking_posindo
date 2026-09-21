@@ -267,6 +267,7 @@ class TrackingController extends Controller
                     'status_kategori' => $fresh->status_kategori,
                     'kantor_tujuan' => $fresh->kantor_tujuan,
                     'last_location' => $fresh->last_location,
+                    'tanggal_kirim' => $fresh->tanggal_kirim ? (is_string($fresh->tanggal_kirim) ? substr($fresh->tanggal_kirim, 0, 10) : $fresh->tanggal_kirim->format('Y-m-d')) : null,
                 ],
             ]);
         }
@@ -283,7 +284,7 @@ class TrackingController extends Controller
         $resis = $request->input('resis', []);
 
         if (empty($ids) && empty($resis)) {
-            return response()->json(['success' => true, 'offices' => []]);
+            return response()->json(['success' => true, 'offices' => [], 'dates' => []]);
         }
 
         $query = OutgoingShipment::query();
@@ -298,6 +299,7 @@ class TrackingController extends Controller
         $shipments = $query->get();
         $missingShipments = [];
         $resolvedMap = [];
+        $resolvedDates = [];
 
         $genericNames = ['KC TUJUAN', 'KANTOR POS TUJUAN', 'KC POS PENGANTARAN', 'KC PENGANTARAN', 'POS PENGANTARAN', 'KC POS INDONESIA', 'POS INDONESIA'];
 
@@ -322,6 +324,7 @@ class TrackingController extends Controller
                     if (isset($niposResults[$s->no_resi])) {
                         $data = $niposResults[$s->no_resi];
                         $officeName = !empty($data['posisi_akhir']) ? trim($data['posisi_akhir']) : (!empty($data['kantor_tujuan']) ? trim($data['kantor_tujuan']) : null);
+                        $hasChanges = false;
 
                         if (!empty($officeName) && !in_array(strtoupper($officeName), $genericNames)) {
                             $matched = PostOffice::matchByDestinationOrAddress($officeName, $s->alamat);
@@ -337,6 +340,19 @@ class TrackingController extends Controller
                                 $resolvedMap[$s->no_resi] = $officeName;
                                 $resolvedMap[(string)$s->id] = $officeName;
                             }
+                            $hasChanges = true;
+                        }
+
+                        $niposRawDate = $data['tanggal_kirim'] ?? ($data['tanggal_kolekting'] ?? null);
+                        $niposParsedDate = !empty($niposRawDate) ? TrackingBotService::parseDateOnly($niposRawDate) : null;
+                        if ($niposParsedDate) {
+                            $s->tanggal_kirim = $niposParsedDate;
+                            $resolvedDates[$s->no_resi] = $niposParsedDate;
+                            $resolvedDates[(string)$s->id] = $niposParsedDate;
+                            $hasChanges = true;
+                        }
+
+                        if ($hasChanges) {
                             $s->saveQuietly();
                         }
                     }
@@ -349,6 +365,7 @@ class TrackingController extends Controller
         return response()->json([
             'success' => true,
             'offices' => $resolvedMap,
+            'dates' => $resolvedDates,
         ]);
     }
 

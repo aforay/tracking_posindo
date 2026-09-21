@@ -60,7 +60,7 @@ class OutgoingShipment extends Model
     protected static function booted()
     {
         static::saving(function (OutgoingShipment $shipment) {
-            if (!empty($shipment->no_resi)) {
+            if (empty($shipment->tanggal_kirim) && !empty($shipment->no_resi)) {
                 $resiDate = \App\Imports\ShipmentsImport::extractDateFromResi($shipment->no_resi);
                 if ($resiDate) {
                     $shipment->tanggal_kirim = $resiDate;

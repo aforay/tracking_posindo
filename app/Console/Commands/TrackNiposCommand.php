@@ -84,6 +84,7 @@ class TrackNiposCommand extends Command
             DB::transaction(function () use ($chunk, $results, $botService, &$updatedCount, &$syncPayload, &$tableRows, $bar) {
                 $now = now()->toDateTimeString();
                 $updatedIds = [];
+                $casesTanggalKirim = [];
                 $casesStatusPos = [];
                 $casesKeterangan = [];
                 $casesKategori = [];
@@ -111,12 +112,17 @@ class TrackNiposCommand extends Command
                             $color = 'ORANGE';
                         }
 
-                        // Ekstraksi SLA asli dari hasil NIPOS
+                        // Ekstraksi SLA asli dari hasil NIPOS & tanggal kirim NIPOS
                         $rawSla = $res['sla'] ?? null;
-                        $tglKirim = $shipment->tanggal_kirim ?: ($res['tanggal_kolekting'] ?? null);
+                        $niposRawDate = $res['tanggal_kirim'] ?? ($res['tanggal_kolekting'] ?? null);
+                        $niposParsedDate = !empty($niposRawDate) ? TrackingBotService::parseDateOnly($niposRawDate) : null;
+                        $tglKirim = $niposParsedDate ?: ($shipment->tanggal_kirim ? (is_string($shipment->tanggal_kirim) ? substr($shipment->tanggal_kirim, 0, 10) : $shipment->tanggal_kirim->format('Y-m-d')) : null);
                         $slaDays = $botService->extractSlaDays((string)$rawSla, $tglKirim, $category);
 
                         $updatedIds[] = $shipment->id;
+                        if ($tglKirim) {
+                            $casesTanggalKirim[] = "WHEN id = {$shipment->id} THEN " . DB::getPdo()->quote($tglKirim);
+                        }
                         $casesStatusPos[] = "WHEN id = {$shipment->id} THEN " . DB::getPdo()->quote($statusPos);
                         $casesKeterangan[] = "WHEN id = {$shipment->id} THEN " . DB::getPdo()->quote($keterangan);
                         $casesKategori[] = "WHEN id = {$shipment->id} THEN " . DB::getPdo()->quote($category);
@@ -164,8 +170,10 @@ class TrackNiposCommand extends Command
                 // Batch update ke MySQL agar cepat dan tidak N+1
                 if (!empty($updatedIds)) {
                     $idList = implode(',', $updatedIds);
+                    $tglKirimSql = !empty($casesTanggalKirim) ? "tanggal_kirim = CASE " . implode(' ', $casesTanggalKirim) . " ELSE tanggal_kirim END," : "";
                     DB::statement("
                         UPDATE outgoing_shipments SET
+                            {$tglKirimSql}
                             status_pos = CASE " . implode(' ', $casesStatusPos) . " END,
                             keterangan = CASE " . implode(' ', $casesKeterangan) . " END,
                             status_kategori = CASE " . implode(' ', $casesKategori) . " END,

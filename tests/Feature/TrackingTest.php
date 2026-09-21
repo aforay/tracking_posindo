@@ -865,6 +865,54 @@ HTML;
         $this->assertEquals('RETUR', $fresh->status_kategori);
         $this->assertEquals('ORANGE', $fresh->color_code);
     }
+
+    /**
+     * Test bahwa Tanggal Kirim dari web NIPOS secara akurat meng-update kolom tanggal_kirim di database.
+     */
+    public function test_nipos_tanggal_kirim_updates_shipment_date(): void
+    {
+        $this->assertEquals('2026-04-02', TrackingBotService::parseDateOnly('2026-04-02 21:23:49'));
+        $this->assertEquals('2026-04-21', TrackingBotService::parseDateOnly('2026-04-21 21:12:03'));
+        $this->assertEquals('2026-04-02', TrackingBotService::parseDateOnly('02-04-2026 21:23:49'));
+
+        $shipment = OutgoingShipment::create([
+            'nama_seller' => 'Mitra Aliqa',
+            'no_resi' => 'BAC02042653393BA756E_TEST',
+            'nama_penerima' => 'M.Asep',
+            'alamat' => 'Cilacap',
+            'tanggal_kirim' => '2026-09-21', // Tanggal salah sebelum pelacakan NIPOS
+            'status_pos' => 'ON PROCESS',
+            'keterangan' => 'PROSES PENGIRIMAN',
+            'status_kategori' => 'IN_PROCESS',
+            'color_code' => 'PUTIH',
+        ]);
+
+        $botService = $this->createMock(TrackingBotService::class);
+        $botService->method('trackResiList')->willReturn([
+            'BAC02042653393BA756E_TEST' => [
+                'resi' => 'BAC02042653393BA756E_TEST',
+                'status_pos' => 'DELIVERED',
+                'keterangan' => 'DITERIMA YANG BERSANGKUTAN',
+                'status_kategori' => 'SUKSES',
+                'color_code' => 'BIRU',
+                'sla_days' => 10,
+                'tanggal_kirim' => '2026-04-02 21:23:49',
+                'tanggal_kolekting' => '2026-04-02 21:23:49',
+            ]
+        ]);
+        $botService->method('categorizeStatus')->willReturn('SUKSES');
+        $botService->method('determineColorCode')->willReturn('BIRU');
+        $botService->method('extractSlaDays')->willReturn(10);
+
+        $job = new ProcessNiposTrackingJob([$shipment->id]);
+        $job->handle($botService);
+
+        $fresh = $shipment->fresh();
+        $this->assertEquals('2026-04-02', $fresh->tanggal_kirim->format('Y-m-d'));
+        $this->assertEquals('DELIVERED', $fresh->status_pos);
+        $this->assertEquals('SUKSES', $fresh->status_kategori);
+        $this->assertEquals('BIRU', $fresh->color_code);
+    }
 }
 
 
