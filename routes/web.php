@@ -21,6 +21,7 @@ Route::match(['get', 'post'], '/mock-nipos/lacak_item_banyakzaref.php', [Trackin
 Route::middleware(['role:admin,cs'])->group(function () {
     Route::get('/', [DashboardController::class, 'index'])->name('dashboard.index');
     Route::get('/shipments', [DashboardController::class, 'index'])->name('shipments.index');
+    Route::get('/shipments/live-version', [DashboardController::class, 'liveVersion'])->name('shipments.live_version');
 
     // Status Update & Bulk Action Endpoints (Inertia & AJAX)
     Route::post('/shipments/update-status', [DashboardController::class, 'updateStatusBulk'])->name('shipments.update_status');

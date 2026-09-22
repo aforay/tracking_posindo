@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from "react";
 import { router } from "@inertiajs/react";
-import { motion, AnimatePresence } from "framer-motion";
 import {
   Copy,
   ExternalLink,
@@ -100,7 +99,6 @@ export function DataTable({
   const [timelineShipment, setTimelineShipment] = useState<Shipment | null>(null);
   const [logShipment, setLogShipment] = useState<Shipment | null>(null);
   const [resolvedOffices, setResolvedOffices] = useState<Record<string, string>>({});
-  const [resolvedDates, setResolvedDates] = useState<Record<string, string>>({});
   const resolvingRef = useRef<Set<string>>(new Set());
 
   // Automatically resolve missing KC / KCU from NIPOS in the background for visible rows without blocking UI
@@ -142,9 +140,6 @@ export function DataTable({
       .then((res) => {
         if (res.success && res.offices) {
           setResolvedOffices((prev) => ({ ...prev, ...res.offices }));
-        }
-        if (res.success && res.dates) {
-          setResolvedDates((prev) => ({ ...prev, ...res.dates }));
         }
       })
       .catch((err) => {
@@ -236,31 +231,25 @@ export function DataTable({
             </tr>
           </thead>
           <tbody>
-            <AnimatePresence initial={false}>
-              {(Array.isArray(rows) ? rows : []).map((row, i) => {
-                if (!row) return null;
-                const meta = fuMeta[row.fu] || fuMeta["PUTIH"];
-                const dark = row.fu === "BIRU_TUA";
-                const isChecked = Boolean(selected && typeof selected.has === "function" && selected.has(row.id));
-                const niposUpper = (row.nipos || "").toUpperCase();
-                const isRetur = row.fu === "ORANGE" || niposUpper.includes("RETURN") || niposUpper === "DELIVERED (RETURN DELIVERY)";
-                const isDelivered = !isRetur && (row.fu === "BIRU" || niposUpper === "DELIVERED");
-                const isFinal = isDelivered || isRetur;
-                const slaNum = typeof row.sla === "number" ? row.sla : parseInt(String(row.sla || "0"), 10);
-                const isOverdue = isNaN(slaNum) ? false : (slaNum < 0 || Math.abs(slaNum) > 4);
+            {(Array.isArray(rows) ? rows : []).map((row, i) => {
+              if (!row) return null;
+              const meta = fuMeta[row.fu] || fuMeta["PUTIH"];
+              const dark = row.fu === "BIRU_TUA";
+              const isChecked = Boolean(selected && typeof selected.has === "function" && selected.has(row.id));
+              const niposUpper = (row.nipos || "").toUpperCase();
+              const isRetur = row.fu === "ORANGE" || niposUpper.includes("RETURN") || niposUpper === "DELIVERED (RETURN DELIVERY)";
+              const isDelivered = !isRetur && (row.fu === "BIRU" || niposUpper === "DELIVERED");
+              const isFinal = isDelivered || isRetur;
+              const slaNum = typeof row.sla === "number" ? row.sla : parseInt(String(row.sla || "0"), 10);
+              const isOverdue = isNaN(slaNum) ? false : (slaNum < 0 || Math.abs(slaNum) > 4);
 
-                return (
-                  <motion.tr
-                    key={row.id || `row-${i}`}
-                    layout
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: 0.15 }}
-                    style={{ backgroundColor: meta.bg, color: dark ? "#FFFFFF" : "#111827" }}
-                    className="border-b border-border/70 align-top transition-colors duration-200"
-                  >
-                    <td className="px-3 py-2">
+              return (
+                <tr
+                  key={row.id || `row-${i}`}
+                  style={{ backgroundColor: meta.bg, color: dark ? "#FFFFFF" : "#111827" }}
+                  className="border-b border-border/70 align-top hover:opacity-95"
+                >
+                  <td className="px-3 py-2">
                       <Checkbox
                         checked={isChecked}
                         onCheckedChange={() => row.id && onToggle(row.id)}
@@ -315,7 +304,7 @@ export function DataTable({
                       </div>
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap tabular-nums">
-                      {formatDate(resolvedDates[row.resi] || resolvedDates[row.id] || row.tanggalKirim)}
+                      {formatDate(row.tanggalKirim)}
                     </td>
                     <td className="px-3 py-2 min-w-[190px] max-w-[260px] whitespace-normal">
                       {(() => {
@@ -556,10 +545,9 @@ export function DataTable({
                         </div>
                       )}
                     </td>
-                  </motion.tr>
+                  </tr>
                 );
               })}
-            </AnimatePresence>
             {(!rows || !Array.isArray(rows) || rows.length === 0) && (
               <tr>
                 <td colSpan={10} className="px-4 py-16 text-center text-sm text-muted-foreground">

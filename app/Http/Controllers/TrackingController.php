@@ -284,7 +284,7 @@ class TrackingController extends Controller
         $resis = $request->input('resis', []);
 
         if (empty($ids) && empty($resis)) {
-            return response()->json(['success' => true, 'offices' => [], 'dates' => []]);
+            return response()->json(['success' => true, 'offices' => []]);
         }
 
         $query = OutgoingShipment::query();
@@ -299,7 +299,6 @@ class TrackingController extends Controller
         $shipments = $query->get();
         $missingShipments = [];
         $resolvedMap = [];
-        $resolvedDates = [];
 
         $genericNames = ['KC TUJUAN', 'KANTOR POS TUJUAN', 'KC POS PENGANTARAN', 'KC PENGANTARAN', 'POS PENGANTARAN', 'KC POS INDONESIA', 'POS INDONESIA'];
 
@@ -343,15 +342,6 @@ class TrackingController extends Controller
                             $hasChanges = true;
                         }
 
-                        $niposRawDate = $data['tanggal_kirim'] ?? ($data['tanggal_kolekting'] ?? null);
-                        $niposParsedDate = !empty($niposRawDate) ? TrackingBotService::parseDateOnly($niposRawDate) : null;
-                        if ($niposParsedDate) {
-                            $s->tanggal_kirim = $niposParsedDate;
-                            $resolvedDates[$s->no_resi] = $niposParsedDate;
-                            $resolvedDates[(string)$s->id] = $niposParsedDate;
-                            $hasChanges = true;
-                        }
-
                         if ($hasChanges) {
                             $s->saveQuietly();
                         }
@@ -365,7 +355,6 @@ class TrackingController extends Controller
         return response()->json([
             'success' => true,
             'offices' => $resolvedMap,
-            'dates' => $resolvedDates,
         ]);
     }
 

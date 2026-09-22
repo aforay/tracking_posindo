@@ -182,12 +182,12 @@ export function PostOfficesManagerModal({
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto p-6 rounded-2xl">
-        <DialogHeader className="border-b pb-3 flex flex-row items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-[#1E40AF] text-white flex items-center justify-center font-bold text-xl shadow-md">
+        <DialogHeader className="border-b pb-3 pr-12 sm:pr-14 flex flex-row items-center justify-between gap-4">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-10 h-10 rounded-xl bg-[#1E40AF] text-white flex items-center justify-center font-bold text-xl shadow-md shrink-0">
               <Building2 className="w-5 h-5" />
             </div>
-            <div>
+            <div className="min-w-0">
               <DialogTitle className="text-lg font-bold text-slate-900">
                 Database Kontak WhatsApp Kantor Pos (KC / KCU)
               </DialogTitle>
@@ -199,7 +199,7 @@ export function PostOfficesManagerModal({
           <Button
             type="button"
             onClick={handleStartAdd}
-            className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5 shadow"
+            className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5 shadow shrink-0"
           >
             <Plus className="w-4 h-4" /> Tambah Kontak KC
           </Button>

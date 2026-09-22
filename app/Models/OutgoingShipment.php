@@ -53,10 +53,6 @@ class OutgoingShipment extends Model
         return $this->belongsTo(PostOffice::class, 'kantor_pos_id');
     }
 
-    /**
-     * The "booted" method of the model.
-     * Enforce strict date alignment based on resi barcode pattern.
-     */
     protected static function booted()
     {
         static::saving(function (OutgoingShipment $shipment) {
@@ -66,6 +62,14 @@ class OutgoingShipment extends Model
                     $shipment->tanggal_kirim = $resiDate;
                 }
             }
+        });
+
+        static::saved(function () {
+            \Illuminate\Support\Facades\Cache::forever('shipments_data_version', (string) microtime(true));
+        });
+
+        static::deleted(function () {
+            \Illuminate\Support\Facades\Cache::forever('shipments_data_version', (string) microtime(true));
         });
     }
 

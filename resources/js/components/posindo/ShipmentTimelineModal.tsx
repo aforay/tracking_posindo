@@ -96,16 +96,16 @@ export function ShipmentTimelineModal({
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto p-6 rounded-2xl bg-white border border-slate-200">
-        <DialogHeader className="border-b pb-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-[#1E40AF] text-white flex items-center justify-center font-bold text-xl shadow-md">
+        <DialogHeader className="border-b pb-3 pr-12 sm:pr-14">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-10 h-10 rounded-xl bg-[#1E40AF] text-white flex items-center justify-center font-bold text-xl shadow-md shrink-0">
                 <Package className="w-5 h-5" />
               </div>
-              <div>
-                <DialogTitle className="text-lg font-bold text-slate-900 flex items-center gap-2">
-                  Timeline Pelacakan Resi Pos
-                  <span className="text-xs font-mono font-bold px-2 py-0.5 bg-blue-100 text-blue-900 rounded-md">
+              <div className="min-w-0">
+                <DialogTitle className="text-lg font-bold text-slate-900 flex items-center gap-2 flex-wrap">
+                  <span>Timeline Pelacakan Resi Pos</span>
+                  <span className="text-xs font-mono font-bold px-2 py-0.5 bg-blue-100 text-blue-900 rounded-md shrink-0">
                     {shipment.resi}
                   </span>
                 </DialogTitle>
@@ -119,7 +119,7 @@ export function ShipmentTimelineModal({
               variant="outline"
               size="sm"
               onClick={copyResi}
-              className="text-xs flex items-center gap-1.5"
+              className="text-xs flex items-center gap-1.5 shrink-0"
             >
               <Copy className="w-3.5 h-3.5" />
               Salin

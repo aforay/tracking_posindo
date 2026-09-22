@@ -14,6 +14,13 @@ import {
 } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { SELLERS, nf } from "@/lib/posindo";
 import { NiposCookieModal } from "./NiposCookieModal";
 import { UserManagerModal } from "./UserManagerModal";
@@ -63,6 +70,15 @@ export function TopBar({
   }, [month]);
 
   const activeBotMonthName = monthNames[activeBotMonth - 1] || "Agustus";
+
+  const userInitials = useMemo(() => {
+    if (!currentUser?.name) return "AP";
+    const parts = currentUser.name.trim().split(/\s+/).filter(Boolean);
+    if (parts.length >= 2) {
+      return (parts[0][0] + parts[1][0]).toUpperCase();
+    }
+    return currentUser.name.slice(0, 2).toUpperCase();
+  }, [currentUser?.name]);
 
   const targetMonthPending = useMemo(() => {
     if (monthPendingCounts && Array.isArray(monthPendingCounts) && monthPendingCounts[activeBotMonth - 1] !== undefined) {
@@ -183,15 +199,22 @@ export function TopBar({
   const [userManagerOpen, setUserManagerOpen] = useState(false);
   const [userProfileOpen, setUserProfileOpen] = useState(false);
 
+  // Background check status Cookie NIPOS secara otomatis
   useEffect(() => {
-    fetch("/settings/nipos-cookie/status")
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.status) {
-          setNiposConnected(Boolean(data.status.connected));
-        }
-      })
-      .catch(() => setNiposConnected(false));
+    const checkCookieStatus = () => {
+      fetch("/settings/nipos-cookie/status")
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.status) {
+            setNiposConnected(Boolean(data.status.connected));
+          }
+        })
+        .catch(() => setNiposConnected(false));
+    };
+
+    checkCookieStatus();
+    const cookieInterval = setInterval(checkCookieStatus, 5 * 60 * 1000);
+    return () => clearInterval(cookieInterval);
   }, []);
   const [syncData, setSyncData] = useState<{
     is_syncing: boolean;
@@ -573,9 +596,8 @@ export function TopBar({
             </div>
           )}
 
-          {/* Grup 2: Quick Tools (Kontak KC Pos, Cookie NIPOS) */}
+          {/* Grup 2: Quick Tools (Kontak KC Pos) */}
           <div className="flex items-center gap-1.5">
-
             <Button
               variant="outline"
               className="gap-1.5 text-xs h-9 font-semibold border-slate-200 bg-white hover:bg-slate-50 cursor-pointer shadow-xs text-slate-700 hover:text-slate-900 rounded-lg"
@@ -584,38 +606,6 @@ export function TopBar({
             >
               <Building2 className="h-3.5 w-3.5 text-blue-600" /> Kontak KC Pos
             </Button>
-
-            {isAdmin && (
-              <Button
-                variant="outline"
-                className="gap-1.5 text-xs h-9 font-semibold border-slate-200 bg-white hover:bg-slate-50 cursor-pointer shadow-xs text-slate-700 hover:text-slate-900 rounded-lg"
-                onClick={() => setNiposModalOpen(true)}
-                title="Pengaturan Session Cookie & Uji Koneksi NIPOS"
-              >
-                <span className="relative flex h-2 w-2">
-                  <span
-                    className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
-                      niposConnected === true
-                        ? "bg-emerald-400"
-                        : niposConnected === false
-                        ? "bg-rose-400"
-                        : "bg-amber-400"
-                    }`}
-                  />
-                  <span
-                    className={`relative inline-flex rounded-full h-2 w-2 ${
-                      niposConnected === true
-                        ? "bg-emerald-600"
-                        : niposConnected === false
-                        ? "bg-rose-600"
-                        : "bg-amber-500"
-                    }`}
-                  />
-                </span>
-                <Cookie className="h-3.5 w-3.5 text-amber-600" />
-                <span>Cookie NIPOS</span>
-              </Button>
-            )}
           </div>
 
           {/* Grup 3: Bot NIPOS Action Button */}
@@ -642,62 +632,132 @@ export function TopBar({
 
           {/* Grup 4: User Profile & Actions */}
           {currentUser && (
-            <div className="flex items-center gap-2 pl-2.5 border-l border-slate-200">
-              <div className="text-right hidden sm:block">
-                <span className="block text-[11px] font-bold text-slate-800 leading-tight">
-                  {currentUser.name}
-                </span>
-                <span
-                  className={`inline-block text-[9px] font-black uppercase px-1.5 py-0.2 rounded-md ${
-                    isAdmin
-                      ? "bg-purple-100 text-purple-800 border border-purple-200"
-                      : "bg-emerald-100 text-emerald-800 border border-emerald-200"
-                  }`}
-                >
-                  {currentUser.role}
-                </span>
-              </div>
+            <div className="flex items-center pl-2.5 border-l border-slate-200">
+              {/* Avatar Bulat Inisial dengan Menu Dropdown Lengkap */}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    className="flex items-center gap-2.5 p-1 rounded-xl hover:bg-slate-100/80 transition-all cursor-pointer outline-none group select-none"
+                    title={`Menu Akun: ${currentUser.name}`}
+                  >
+                    <div className="text-right hidden sm:block">
+                      <span className="block text-[11px] font-bold text-slate-800 leading-tight group-hover:text-blue-900 transition-colors">
+                        {currentUser.name}
+                      </span>
+                      <span
+                        className={`inline-block text-[9px] font-black uppercase px-1.5 py-0.2 rounded-md ${
+                          isAdmin
+                            ? "bg-purple-100 text-purple-800 border border-purple-200"
+                            : "bg-emerald-100 text-emerald-800 border border-emerald-200"
+                        }`}
+                      >
+                        {currentUser.role}
+                      </span>
+                    </div>
 
-              {/* Admin: Tombol Kelola Pengguna */}
-              {isAdmin && (
-                <Button
-                  variant="outline"
-                  size="icon"
-                  onClick={() => setUserManagerOpen(true)}
-                  className="h-8 w-8 text-purple-700 bg-purple-50 hover:bg-purple-100 border-purple-200 rounded-lg cursor-pointer transition shadow-2xs"
-                  title="Manajemen Pengguna & Tim CS"
-                >
-                  <Users className="h-3.5 w-3.5" />
-                </Button>
-              )}
+                    <div
+                      className="h-8.5 w-8.5 rounded-full bg-gradient-to-tr from-[#6366f1] via-[#7c3aed] to-[#818cf8] text-white font-black text-xs flex items-center justify-center shadow-xs group-hover:scale-105 group-active:scale-95 transition-all select-none shrink-0 ring-2 ring-indigo-100"
+                    >
+                      {userInitials}
+                    </div>
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56 p-2 rounded-xl border-slate-200 shadow-xl bg-white">
+                  {/* Header Informasi Akun */}
+                  <div className="flex items-center gap-2.5 p-2 rounded-lg bg-slate-50 border border-slate-100 mb-1">
+                    <div className="h-8 w-8 rounded-full bg-gradient-to-tr from-[#6366f1] via-[#7c3aed] to-[#818cf8] text-white font-black text-xs flex items-center justify-center shrink-0 ring-1 ring-indigo-200">
+                      {userInitials}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-bold text-slate-800 truncate leading-tight">
+                        {currentUser.name}
+                      </p>
+                      <p className="text-[10px] font-mono text-slate-500 truncate leading-tight mt-0.5">
+                        {currentUser.email}
+                      </p>
+                      <span
+                        className={`inline-block text-[8px] font-black uppercase px-1.5 py-0.2 rounded mt-1 ${
+                          isAdmin
+                            ? "bg-purple-100 text-purple-800 border border-purple-200"
+                            : "bg-emerald-100 text-emerald-800 border border-emerald-200"
+                        }`}
+                      >
+                        {currentUser.role}
+                      </span>
+                    </div>
+                  </div>
 
-              {/* Ganti Password Mandiri */}
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={() => setUserProfileOpen(true)}
-                className="h-8 w-8 text-slate-600 bg-slate-50 hover:bg-slate-100 border-slate-200 rounded-lg cursor-pointer transition shadow-2xs"
-                title="Ubah Kata Sandi Akun"
-              >
-                <KeyRound className="h-3.5 w-3.5" />
-              </Button>
+                  <DropdownMenuSeparator />
 
-              {/* Logout */}
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => {
-                  router.post("/logout", {}, {
-                    onFinish: () => {
-                      window.location.href = "/login";
-                    },
-                  });
-                }}
-                className="h-8 w-8 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg cursor-pointer transition"
-                title="Keluar / Logout"
-              >
-                <LogOut className="h-4 w-4" />
-              </Button>
+                  {/* Menu: Ubah Kata Sandi */}
+                  <DropdownMenuItem
+                    onClick={() => setUserProfileOpen(true)}
+                    className="gap-2.5 text-xs font-semibold text-slate-700 hover:text-slate-900 hover:bg-slate-100 rounded-lg p-2 cursor-pointer transition"
+                  >
+                    <KeyRound className="h-3.5 w-3.5 text-slate-500" />
+                    <span>Ubah Kata Sandi</span>
+                  </DropdownMenuItem>
+
+                  {/* Menu: Kelola Pengguna (Admin) */}
+                  {isAdmin && (
+                    <DropdownMenuItem
+                      onClick={() => setUserManagerOpen(true)}
+                      className="gap-2.5 text-xs font-semibold text-purple-700 hover:text-purple-900 hover:bg-purple-50 rounded-lg p-2 cursor-pointer transition"
+                    >
+                      <Users className="h-3.5 w-3.5 text-purple-600" />
+                      <span>Manajemen Pengguna</span>
+                    </DropdownMenuItem>
+                  )}
+
+                  {/* Menu: Pengaturan Cookie NIPOS (Admin) */}
+                  {isAdmin && (
+                    <DropdownMenuItem
+                      onClick={() => setNiposModalOpen(true)}
+                      className="gap-2.5 text-xs font-semibold text-amber-800 hover:text-amber-950 hover:bg-amber-50 rounded-lg p-2 cursor-pointer transition justify-between"
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <Cookie className="h-3.5 w-3.5 text-amber-600" />
+                        <span>Cookie NIPOS</span>
+                      </div>
+                      <span className="flex items-center gap-1.5 pl-2">
+                        <span
+                          className={`h-2 w-2 rounded-full ${
+                            niposConnected === true
+                              ? "bg-emerald-500 ring-2 ring-emerald-200"
+                              : niposConnected === false
+                              ? "bg-rose-500 ring-2 ring-rose-200 animate-pulse"
+                              : "bg-amber-400 ring-2 ring-amber-200"
+                          }`}
+                        />
+                        <span className="text-[10px] font-medium text-slate-500">
+                          {niposConnected === true
+                            ? "Aktif"
+                            : niposConnected === false
+                            ? "Mati"
+                            : "Cek..."}
+                        </span>
+                      </span>
+                    </DropdownMenuItem>
+                  )}
+
+                  <DropdownMenuSeparator />
+
+                  {/* Menu: Lambang Log Out */}
+                  <DropdownMenuItem
+                    onClick={() => {
+                      router.post("/logout", {}, {
+                        onFinish: () => {
+                          window.location.href = "/login";
+                        },
+                      });
+                    }}
+                    className="gap-2.5 text-xs font-bold text-rose-600 hover:text-rose-700 hover:bg-rose-50 rounded-lg p-2 cursor-pointer transition"
+                  >
+                    <LogOut className="h-3.5 w-3.5 text-rose-600" />
+                    <span>Keluar / Logout</span>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           )}
         </div>

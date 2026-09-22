@@ -25,3 +25,6 @@ yarn-error.log
 *.xls
 *.csv
 ~$*
+cloudflared.exe
+cf_session.log
+cf*.log

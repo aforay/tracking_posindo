@@ -92,20 +92,25 @@ export function UserProfileModal({ isOpen, onClose, currentUser }: Props) {
         </DialogHeader>
 
         {currentUser && (
-          <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 text-xs space-y-1">
-            <div className="flex items-center justify-between">
-              <span className="text-slate-500">Nama Pengguna:</span>
-              <span className="font-bold text-slate-800">{currentUser.name}</span>
+          <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 flex items-center gap-3">
+            <div className="h-11 w-11 rounded-full bg-gradient-to-tr from-[#6366f1] via-[#7c3aed] to-[#818cf8] text-white font-black text-sm flex items-center justify-center shadow-xs select-none shrink-0 ring-2 ring-indigo-100">
+              {currentUser.name
+                .trim()
+                .split(/\s+/)
+                .filter(Boolean)
+                .slice(0, 2)
+                .map((n) => n[0])
+                .join("")
+                .toUpperCase() || "AP"}
             </div>
-            <div className="flex items-center justify-between">
-              <span className="text-slate-500">Email Akun:</span>
-              <span className="font-mono text-slate-700">{currentUser.email}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-slate-500">Hak Akses:</span>
-              <span className="font-semibold uppercase text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
-                {currentUser.role}
-              </span>
+            <div className="min-w-0 flex-1 space-y-0.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-bold text-slate-800 text-xs truncate">{currentUser.name}</span>
+                <span className="font-bold uppercase text-[9px] text-purple-700 bg-purple-50 px-1.5 py-0.5 rounded border border-purple-200 shrink-0">
+                  {currentUser.role}
+                </span>
+              </div>
+              <p className="font-mono text-slate-500 text-[11px] truncate">{currentUser.email}</p>
             </div>
           </div>
         )}

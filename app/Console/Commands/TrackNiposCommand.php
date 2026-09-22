@@ -116,7 +116,14 @@ class TrackNiposCommand extends Command
                         $rawSla = $res['sla'] ?? null;
                         $niposRawDate = $res['tanggal_kirim'] ?? ($res['tanggal_kolekting'] ?? null);
                         $niposParsedDate = !empty($niposRawDate) ? TrackingBotService::parseDateOnly($niposRawDate) : null;
-                        $tglKirim = $niposParsedDate ?: ($shipment->tanggal_kirim ? (is_string($shipment->tanggal_kirim) ? substr($shipment->tanggal_kirim, 0, 10) : $shipment->tanggal_kirim->format('Y-m-d')) : null);
+                        
+                        $resiExtractedDate = \App\Imports\ShipmentsImport::extractDateFromResi($shipment->no_resi);
+                        $currentDateStr = $shipment->tanggal_kirim 
+                            ? (is_string($shipment->tanggal_kirim) ? substr($shipment->tanggal_kirim, 0, 10) : $shipment->tanggal_kirim->format('Y-m-d')) 
+                            : null;
+
+                        $tglKirim = $niposParsedDate ?: ($resiExtractedDate ?: $currentDateStr);
+
                         $slaDays = $botService->extractSlaDays((string)$rawSla, $tglKirim, $category);
 
                         $updatedIds[] = $shipment->id;

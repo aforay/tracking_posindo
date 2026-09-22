@@ -38,9 +38,24 @@ if not exist ".env" (
     php artisan key:generate
 )
 
-:: 3. Jalankan Migrasi Database MySQL
+:: 3. Periksa Status Database MySQL (Port 3306)
+netstat -ano | findstr :3306 >nul 2>nul
+if %ERRORLEVEL% NEQ 0 (
+    echo [WARNING] Database MySQL belum menyala di port 3306!
+    if exist "C:\xampp\mysql\bin\mysqld.exe" (
+        echo [INFO] Menyalakan MySQL XAMPP secara otomatis...
+        start "MySQL Server (XAMPP)" /min "C:\xampp\mysql\bin\mysqld.exe" --defaults-file=C:\xampp\mysql\bin\my.ini --standalone
+        timeout /t 3 >nul
+    ) else (
+        echo [PERINGATAN] Silakan buka XAMPP Control Panel dan klik START pada MySQL!
+    )
+)
+
+:: Jalankan Migrasi Database MySQL
 echo [INFO] Memeriksa migrasi database...
 php artisan migrate --force
+php artisan tracker:fix-september >nul 2>nul
+
 
 :: 4. Cek apakah frontend build sudah ada
 if not exist "public\build\manifest.json" (
@@ -54,12 +69,21 @@ if not exist "public\build\manifest.json" (
     )
 )
 
+:: 4.5 Deteksi IP Jaringan Lokal (Wi-Fi / LAN)
+set "LOCAL_IP=localhost"
+for /f "tokens=*" %%i in ('powershell -NoProfile -Command "(Get-NetIPAddress -AddressFamily IPv4 -InterfaceAlias 'Wi-Fi*','Ethernet*' -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -notmatch '^(127|169)' } | Select-Object -First 1).IPAddress"') do (
+    if not "%%i"=="" set "LOCAL_IP=%%i"
+)
+
 echo.
 echo =======================================================
 echo  Server & Queue Worker siap berjalan!
-echo  - Web Server   : http://localhost:8000
-echo  - Queue Worker : Berjalan otomatis di background
-echo                   (timeout=300, tries=3)
+echo  - Komputer Ini         : http://localhost:8000
+echo  - Teman Satu Wi-Fi/LAN : http://!LOCAL_IP!:8000
+echo  - Queue Worker         : Berjalan otomatis di background
+echo.
+echo  TIPS: Untuk akses domain publik internet tanpa batas Wi-Fi,
+echo        jalankan: run-online.bat
 echo.
 echo  Tekan Ctrl+C di jendela ini untuk mematikan server.
 echo =======================================================
@@ -72,8 +96,8 @@ start "Tracking Posindo - Queue Worker" /min cmd /c "php artisan queue:work --ti
 :: 6. Buka browser otomatis setelah delay 2 detik di background
 start /min cmd /c "timeout /t 2 >nul & start http://localhost:8000"
 
-:: 7. Jalankan server Laravel
-php artisan serve --port=8000
+:: 7. Jalankan server Laravel pada semua interface jaringan (0.0.0.0)
+php artisan serve --host=0.0.0.0 --port=8000
 
 :: 8. Bersihkan proses background saat server ditutup
 taskkill /FI "WINDOWTITLE eq Tracking Posindo - Queue Worker*" /F >nul 2>nul

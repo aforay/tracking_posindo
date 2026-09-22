@@ -187,16 +187,16 @@ export function UserManagerModal({ isOpen, onClose, currentUserId }: Props) {
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto p-6 rounded-2xl bg-white border border-slate-200">
-        <DialogHeader className="border-b pb-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-purple-600 text-white flex items-center justify-center font-bold text-xl shadow-md">
+        <DialogHeader className="border-b pb-3 pr-12 sm:pr-14">
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-10 h-10 rounded-xl bg-purple-600 text-white flex items-center justify-center font-bold text-xl shadow-md shrink-0">
                 <Users className="w-5 h-5" />
               </div>
-              <div>
-                <DialogTitle className="text-lg font-bold text-slate-900 flex items-center gap-2">
-                  Manajemen Pengguna &amp; Tim CS
-                  <span className="text-xs font-semibold px-2.5 py-0.5 bg-purple-100 text-purple-800 rounded-full">
+              <div className="min-w-0">
+                <DialogTitle className="text-lg font-bold text-slate-900 flex items-center gap-2 flex-wrap">
+                  <span>Manajemen Pengguna &amp; Tim CS</span>
+                  <span className="text-xs font-semibold px-2.5 py-0.5 bg-purple-100 text-purple-800 rounded-full shrink-0">
                     {users.length} User Terdaftar
                   </span>
                 </DialogTitle>
@@ -210,7 +210,7 @@ export function UserManagerModal({ isOpen, onClose, currentUserId }: Props) {
               <Button
                 onClick={handleStartAdd}
                 size="sm"
-                className="bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm"
+                className="bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm shrink-0"
               >
                 <UserPlus className="w-4 h-4" />
                 Tambah Pengguna

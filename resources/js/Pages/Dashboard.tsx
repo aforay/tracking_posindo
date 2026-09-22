@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
 import { usePage, router } from "@inertiajs/react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -15,6 +15,8 @@ import {
   Trash2,
   ChevronLeft,
   ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
   X,
   Check,
   ArrowUpDown,
@@ -111,6 +113,85 @@ export interface PageProps {
   };
 }
 
+function getCardTheme(colorKey: FuStatus | null, isAliqa: boolean) {
+  if (colorKey === null) {
+    return {
+      hoverBorder: "#64748B",
+      hoverBg: "#F8FAFC",
+      hoverShadow: "rgba(100, 116, 139, 0.22)",
+      activeBorder: "#475569",
+      activeRing: "#94A3B8",
+      activeBg: "#F1F5F9",
+    };
+  }
+
+  switch (colorKey) {
+    case "BIRU": // Paket Sukses (Toska Aliqa / Cyan Zaherba)
+      return {
+        hoverBorder: isAliqa ? "#10B981" : "#06B6D4",
+        hoverBg: isAliqa ? "#ECFDF5" : "#ECFEFF",
+        hoverShadow: isAliqa ? "rgba(16, 185, 129, 0.25)" : "rgba(6, 182, 212, 0.25)",
+        activeBorder: isAliqa ? "#059669" : "#0891B2",
+        activeRing: isAliqa ? "#34D399" : "#22D3EE",
+        activeBg: isAliqa ? "#D1FAE5" : "#CFFAFE",
+      };
+    case "ORANGE": // Paket Retur (Merah Aliqa / Orange Zaherba)
+      return {
+        hoverBorder: isAliqa ? "#F43F5E" : "#F59E0B",
+        hoverBg: isAliqa ? "#FFF1F2" : "#FFFBEB",
+        hoverShadow: isAliqa ? "rgba(244, 63, 94, 0.25)" : "rgba(245, 158, 11, 0.25)",
+        activeBorder: isAliqa ? "#E11D48" : "#D97706",
+        activeRing: isAliqa ? "#FB7185" : "#FBBF24",
+        activeBg: isAliqa ? "#FFE4E6" : "#FEF3C7",
+      };
+    case "KUNING": // Sudah di FU
+      return {
+        hoverBorder: "#EAB308",
+        hoverBg: "#FEFCE8",
+        hoverShadow: "rgba(234, 179, 8, 0.3)",
+        activeBorder: "#CA8A04",
+        activeRing: "#FACC15",
+        activeBg: "#FEF08A",
+      };
+    case "PUTIH": // BLM di FU / Belum di FU
+      return {
+        hoverBorder: "#64748B",
+        hoverBg: "#F8FAFC",
+        hoverShadow: "rgba(100, 116, 139, 0.22)",
+        activeBorder: "#334155",
+        activeRing: "#94A3B8",
+        activeBg: "#F1F5F9",
+      };
+    case "HIJAU": // FU 2 Kali
+      return {
+        hoverBorder: "#16A34A",
+        hoverBg: "#F0FDF4",
+        hoverShadow: "rgba(22, 163, 74, 0.25)",
+        activeBorder: "#15803D",
+        activeRing: "#4ADE80",
+        activeBg: "#DCFCE7",
+      };
+    case "BIRU_TUA": // ON FU POS / FU POS
+      return {
+        hoverBorder: "#1E40AF",
+        hoverBg: "#EFF6FF",
+        hoverShadow: "rgba(30, 64, 175, 0.25)",
+        activeBorder: "#1E40AF",
+        activeRing: "#60A5FA",
+        activeBg: "#DBEAFE",
+      };
+    default:
+      return {
+        hoverBorder: "#94A3B8",
+        hoverBg: "#F8FAFC",
+        hoverShadow: "rgba(148, 163, 184, 0.2)",
+        activeBorder: "#475569",
+        activeRing: "#94A3B8",
+        activeBg: "#F1F5F9",
+      };
+  }
+}
+
 export default function Dashboard() {
   const pageProps = (usePage<PageProps>()?.props || {}) as PageProps;
   const currentUser = pageProps?.auth?.user || null;
@@ -196,6 +277,9 @@ export default function Dashboard() {
   const [direction, setDirection] = useState<"asc" | "desc">(() => (pageProps?.filters?.direction as "asc" | "desc") || "asc");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [exportOpen, setExportOpen] = useState(false);
+  const [hoveredCard, setHoveredCard] = useState<string | null>(null);
+  const [isPaginating, setIsPaginating] = useState(false);
+  const [jumpPageInput, setJumpPageInput] = useState("");
 
   const handleSortChange = (newSort: string) => {
     const newDir = sort === newSort && direction === "asc" ? "desc" : "asc";
@@ -212,6 +296,62 @@ export default function Dashboard() {
     setRows(shipmentList);
   }, [shipmentList]);
 
+  // Real-time synchronization / Auto-Refresh antar semua admin & CS
+  const lastVersionRef = useRef<string | null>(null);
+  const isUpdatingRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const checkLiveVersion = async () => {
+      // Tunda jika user sedang aktif lompat halaman atau sedang submit update lokal
+      if (isPaginating || isUpdatingRef.current) return;
+
+      try {
+        const res = await fetch("/shipments/live-version", {
+          headers: { Accept: "application/json" },
+        });
+        if (!res.ok) return;
+
+        const data = await res.json();
+        if (!data || !data.version) return;
+
+        // Inisialisasi versi awal saat pertama kali dimuat
+        if (lastVersionRef.current === null) {
+          lastVersionRef.current = String(data.version);
+          return;
+        }
+
+        // Jika versi data di server berubah (admin/CS lain mengubah status/catatan/dll)
+        if (lastVersionRef.current !== String(data.version)) {
+          lastVersionRef.current = String(data.version);
+
+          // Cek apakah user sedang fokus mengetik di input pencarian
+          const activeTag = document.activeElement?.tagName;
+          const isUserTyping = activeTag === "INPUT" || activeTag === "TEXTAREA";
+
+          if (!isUserTyping && isMounted) {
+            router.reload({
+              preserveState: true,
+              preserveScroll: true,
+              only: ["shipments", "stats", "monthCounts"],
+            });
+          }
+        }
+      } catch (err) {
+        // Polling background fail silently
+      }
+    };
+
+    checkLiveVersion();
+    const interval = setInterval(checkLiveVersion, 2000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [isPaginating]);
+
   // Extract pagination info safely
   const isPaginated = Boolean(
     pageProps?.shipments &&
@@ -226,6 +366,32 @@ export default function Dashboard() {
   const lastPage = paginatedObj?.last_page ?? 1;
   const fromItem = paginatedObj?.from ?? ((rows?.length || 0) > 0 ? 1 : 0);
   const toItem = paginatedObj?.to ?? rows?.length ?? 0;
+
+  const goToPage = (targetPage: number) => {
+    if (targetPage < 1 || targetPage > lastPage || targetPage === currentPage || isPaginating) {
+      return;
+    }
+    setIsPaginating(true);
+    router.get(
+      "/shipments",
+      {
+        seller,
+        month,
+        color: colorFilter,
+        search: query,
+        sort,
+        direction,
+        overdue: isOverdue ? 1 : undefined,
+        page: targetPage,
+      },
+      {
+        preserveState: true,
+        preserveScroll: true,
+        only: ["shipments"],
+        onFinish: () => setIsPaginating(false),
+      }
+    );
+  };
 
   const bySeller = useMemo(
     () => (rows || []).filter((r) => !seller || r?.seller === seller),
@@ -284,6 +450,7 @@ export default function Dashboard() {
       )
     );
 
+    isUpdatingRef.current = true;
     router.post(
       "/shipments/update-status",
       { ids, fu, escalationDate },
@@ -291,9 +458,17 @@ export default function Dashboard() {
         preserveState: true,
         preserveScroll: true,
         onSuccess: () => {
+          isUpdatingRef.current = false;
+          fetch("/shipments/live-version")
+            .then((r) => r.json())
+            .then((d) => {
+              if (d?.version) lastVersionRef.current = String(d.version);
+            })
+            .catch(() => {});
           toast.success(`${ids.length} resi diperbarui → ${FU_META[fu]?.label || fu}`);
         },
         onError: () => {
+          isUpdatingRef.current = false;
           if (ids.length === 1) {
             router.post(`/shipments/${ids[0]}/update-color`, { color_code: fu, fu_pos_date: escalationDate });
           }
@@ -304,10 +479,23 @@ export default function Dashboard() {
 
   const setNote = (id: string, note: string) => {
     setRows((prev) => prev.map((r) => (r.id === id ? { ...r, note } : r)));
+    isUpdatingRef.current = true;
     router.post(`/shipments/${id}/update-color`, { color_code: "NOTED", noted: note }, {
       preserveState: true,
       preserveScroll: true,
-      onSuccess: () => toast.success("Catatan tersimpan"),
+      onSuccess: () => {
+        isUpdatingRef.current = false;
+        fetch("/shipments/live-version")
+          .then((r) => r.json())
+          .then((d) => {
+            if (d?.version) lastVersionRef.current = String(d.version);
+          })
+          .catch(() => {});
+        toast.success("Catatan tersimpan");
+      },
+      onError: () => {
+        isUpdatingRef.current = false;
+      },
     });
   };
 
@@ -581,284 +769,265 @@ export default function Dashboard() {
         </div>
       </header>
 
-      <main className="space-y-4 p-5">
-        {/* Overdue SLA Proactive Alert Banner */}
-        {Number(pageProps?.stats?.overdue || 0) > 0 && !isOverdue && (
-          <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-2xs">
-            <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-lg bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-xs">
-                <AlertTriangle className="w-4 h-4" />
-              </div>
-              <div>
-                <h4 className="text-xs font-bold text-amber-950">
-                  Peringatan SLA: Ada {nf(pageProps?.stats?.overdue || 0)} Paket Macet &gt; 4 Hari Belum Selesai!
-                </h4>
-                <p className="text-[11px] text-amber-800">
-                  Paket belum berstatus final (Sukses/Retur) dan telah melebihi estimasi SLA antaran. Segera koordinasi atau eskalasi ke Kantor Pos tujuan.
-                </p>
-              </div>
-            </div>
-            <Button
-              size="sm"
-              onClick={() => {
-                setIsOverdue(true);
-                router.get("/shipments", { seller, month, color: colorFilter, search: query, sort, direction, overdue: 1 }, { preserveState: true, preserveScroll: true });
-              }}
-              className="bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold shrink-0 cursor-pointer"
-            >
-              Filter {nf(pageProps?.stats?.overdue || 0)} Paket Macet &rarr;
-            </Button>
-          </div>
-        )}
-
-        {isOverdue && (
-          <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 flex items-center justify-between shadow-2xs">
-            <div className="flex items-center gap-2 text-xs font-bold text-rose-950">
-              <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
-              <span>Menampilkan filter paket macet (&gt;4 hari lewat SLA).</span>
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                setIsOverdue(false);
-                router.get("/shipments", { seller, month, color: colorFilter, search: query, sort, direction }, { preserveState: true, preserveScroll: true });
-              }}
-              className="text-xs font-semibold text-rose-800 border-rose-300 hover:bg-rose-100 cursor-pointer"
-            >
-              Tampilkan Semua Paket
-            </Button>
-          </div>
-        )}
-
+      <main className="space-y-3.5 p-4 sm:p-5 max-w-[1700px] mx-auto">
+        {/* KPI Stats Cards */}
         <section className={`grid gap-3 grid-cols-2 sm:grid-cols-3 ${isAliqa ? "lg:grid-cols-3 xl:grid-cols-6" : "lg:grid-cols-4 xl:grid-cols-7"}`}>
           {cards.map((c, i) => {
-            const isSelected = c.colorKey !== null && colorFilter === c.colorKey;
+            const isSelected = !isOverdue && c.colorKey !== null && colorFilter === c.colorKey;
+            const isHovered = hoveredCard === c.label;
+            const theme = getCardTheme(c.colorKey, isAliqa);
+
             return (
               <motion.div
                 key={c.label}
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: i * 0.03 }}
+                onMouseEnter={() => setHoveredCard(c.label)}
+                onMouseLeave={() => setHoveredCard(null)}
                 onClick={() => {
+                  setIsOverdue(false);
                   if (c.colorKey === null) {
                     setColorFilter(null);
-                    router.get("/shipments", { seller, month, search: query, sort, direction, overdue: isOverdue ? 1 : undefined }, { preserveState: true, preserveScroll: true });
+                    router.get("/shipments", { seller, month, search: query, sort, direction }, { preserveState: true, preserveScroll: true });
                   } else if (c.colorKey) {
-                    const nextColor = colorFilter === c.colorKey ? null : c.colorKey;
+                    const nextColor = (colorFilter === c.colorKey && !isOverdue) ? null : c.colorKey;
                     setColorFilter(nextColor);
-                    router.get("/shipments", { seller, month, color: nextColor, search: query, sort, direction, overdue: isOverdue ? 1 : undefined }, { preserveState: true, preserveScroll: true });
+                    router.get("/shipments", { seller, month, color: nextColor || undefined, search: query, sort, direction }, { preserveState: true, preserveScroll: true });
                   }
                 }}
-                style={{ backgroundColor: c.bg, color: c.fg }}
-                className={`rounded-xl border p-3.5 shadow-sm transition-all cursor-pointer hover:shadow-md hover:scale-[1.02] ${
-                  isSelected ? "ring-2 ring-[#1E40AF] ring-offset-2 border-[#1E40AF]" : "border-border"
+                style={{
+                  borderColor: isSelected ? theme.activeBorder : isHovered ? theme.hoverBorder : undefined,
+                  backgroundColor: isSelected ? theme.activeBg : isHovered ? theme.hoverBg : "#FFFFFF",
+                  boxShadow: isSelected
+                    ? `0 0 0 2px #FFFFFF, 0 0 0 4px ${theme.activeRing}, 0 4px 14px ${theme.hoverShadow}`
+                    : isHovered
+                    ? `0 8px 20px -3px ${theme.hoverShadow}`
+                    : undefined,
+                  transform: isHovered ? "translateY(-3px)" : "translateY(0)",
+                  transition: "all 0.18s cubic-bezier(0.16, 1, 0.3, 1)",
+                }}
+                className={`rounded-2xl border p-3.5 cursor-pointer select-none ${
+                  !isSelected && !isHovered ? "border-slate-200/90 shadow-2xs" : ""
                 }`}
+                title={`Klik untuk memfilter: ${c.label}`}
               >
-                <div className="flex items-start justify-between">
-                  <div>
-                    <div className="text-[10.5px] font-bold tracking-wide uppercase opacity-85">
-                      {c.label}
-                    </div>
-                    <div className="mt-1 text-2xl font-extrabold tabular-nums">{nf(c.value)}</div>
-                    <div className="text-[10px] opacity-75 font-medium mt-0.5">
-                      {c.sub} ·{" "}
-                      {kpi.total ? ((c.value / kpi.total) * 100).toFixed(1) : "0.0"}%
-                    </div>
-                  </div>
-                  <c.icon className="h-4.5 w-4.5 opacity-75 shrink-0 ml-1 mt-0.5" />
+                <div className="flex items-center justify-between gap-1.5 mb-2">
+                  <span
+                    className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[10.5px] font-bold tracking-wide uppercase border border-black/10 shadow-2xs truncate transition-transform"
+                    style={{
+                      backgroundColor: c.bg,
+                      color: c.fg,
+                      transform: isHovered ? "scale(1.03)" : "none",
+                    }}
+                  >
+                    <c.icon className="h-3 w-3 shrink-0" />
+                    <span>{c.label}</span>
+                  </span>
+                  <span className={`text-[10.5px] font-bold tabular-nums shrink-0 transition-colors ${isSelected ? "text-slate-800" : "text-slate-400"}`}>
+                    {kpi.total ? ((c.value / kpi.total) * 100).toFixed(1) : "0.0"}%
+                  </span>
+                </div>
+
+                <div className="text-2xl font-black text-slate-900 tabular-nums tracking-tight">
+                  {nf(c.value)}
+                </div>
+
+                <div className="text-[10px] text-slate-500 font-medium mt-0.5 truncate flex items-center justify-between">
+                  <span>{c.sub}</span>
+                  {isSelected && (
+                    <span className="text-[9px] font-extrabold px-1.5 py-0.2 rounded bg-black/10 text-slate-800">
+                      Aktif
+                    </span>
+                  )}
                 </div>
               </motion.div>
             );
           })}
         </section>
 
-        {/* Baris Filter Status CS & Ekspor */}
-        <section className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200/90 bg-white p-3.5 shadow-xs">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="mr-1 text-[11px] font-extrabold tracking-wider uppercase text-slate-500">
-              Filter Status CS
-            </span>
-            {currentFuOrder.map((k) => {
-              const active = colorFilter === k;
-              return (
-                <button
-                  key={k}
-                  onClick={() => {
-                    const nextColor = active ? null : k;
-                    setColorFilter(nextColor);
-                    router.get(
-                      "/shipments",
-                      { seller, month, color: nextColor, search: query, sort, direction, overdue: isOverdue ? 1 : undefined },
-                      { preserveState: true, preserveScroll: true }
-                    );
+        {/* Unified Search, Filter & Control Toolbar (Tanpa Tombol Ekspor) */}
+        <section className="rounded-2xl border border-slate-200/90 bg-white p-3.5 sm:p-4 shadow-xs space-y-3">
+          {/* Baris 1: Pencarian, Mitra Seller, & Sorting */}
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-2.5 items-center">
+            <div className="relative md:col-span-7 flex items-center gap-2">
+              <div className="relative flex-1">
+                <Search className="absolute top-3 left-3.5 h-4 w-4 text-slate-400 pointer-events-none" />
+                <Input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      router.get("/shipments", { seller, month, color: colorFilter, search: query, sort, direction, overdue: isOverdue ? 1 : undefined }, { preserveState: true, preserveScroll: true });
+                    }
                   }}
-                  style={{ backgroundColor: currentFuMeta[k].bg, color: currentFuMeta[k].fg }}
-                  className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[11px] font-extrabold transition-all transform cursor-pointer ${
-                    active
-                      ? "ring-2 ring-[#1E40AF] ring-offset-1 border-[#1E40AF] shadow-md scale-105"
-                      : "border-black/20 hover:scale-102 hover:brightness-95 opacity-90 hover:opacity-100 shadow-2xs"
-                  }`}
-                >
-                  {active && <Check className="h-3 w-3 text-current stroke-[3]" />}
-                  {currentFuMeta[k].label}
-                </button>
-              );
-            })}
-
-            {/* Divider */}
-            <div className="h-5 w-px bg-slate-200 mx-1 hidden sm:block" />
-
-            {/* Tombol Filter Cepat "Lewat SLA / Macet > 4 Hari" */}
-            <button
-              type="button"
-              onClick={() => {
-                const nextOverdue = !isOverdue;
-                setIsOverdue(nextOverdue);
-                router.get(
-                  "/shipments",
-                  {
-                    seller,
-                    month,
-                    color: colorFilter,
-                    search: query,
-                    sort,
-                    direction,
-                    overdue: nextOverdue ? 1 : undefined,
-                  },
-                  { preserveState: true, preserveScroll: true }
-                );
-              }}
-              className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[11px] font-extrabold transition-all transform cursor-pointer ${
-                isOverdue
-                  ? "bg-rose-600 text-white border-rose-700 shadow-md ring-2 ring-rose-400 ring-offset-1 scale-105"
-                  : "bg-amber-50 text-amber-900 border-amber-300/80 hover:bg-amber-100 hover:border-amber-400 hover:scale-102 shadow-2xs"
-              }`}
-              title="Tampilkan kiriman belum selesai (bukan Sukses/Retur) dengan tanggal kirim >= 4 hari lalu"
-            >
-              <AlertTriangle className={`h-3.5 w-3.5 shrink-0 ${isOverdue ? "text-white" : "text-amber-600"}`} />
-              <span>Lewat SLA / Macet &gt; 4 Hari</span>
-              {typeof pageProps?.stats?.overdue === "number" && (
-                <span
-                  className={`ml-1 rounded-full px-2 py-0.2 text-[10px] font-black ${
-                    isOverdue ? "bg-white text-rose-700" : "bg-amber-200 text-amber-950"
-                  }`}
-                >
-                  {nf(pageProps.stats.overdue)}
-                </span>
-              )}
-            </button>
-
-            {(colorFilter || isOverdue) && (
-              <button
+                  placeholder="Cari nama penerima, nomor resi, no. HP, alamat tujuan... (tekan Enter)"
+                  className="h-10 pl-10 pr-9 text-xs bg-slate-50/70 border-slate-200 focus:bg-white focus:ring-2 focus:ring-blue-600 rounded-xl"
+                />
+                {query && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setQuery("");
+                      router.get("/shipments", { seller, month, color: colorFilter, search: "", sort, direction, overdue: isOverdue ? 1 : undefined }, { preserveState: true, preserveScroll: true });
+                    }}
+                    className="absolute right-2.5 top-2.5 p-1 text-slate-400 hover:text-slate-600 rounded-md transition cursor-pointer"
+                    title="Hapus pencarian"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+              <Button
+                type="button"
                 onClick={() => {
-                  setColorFilter(null);
-                  setIsOverdue(false);
+                  router.get("/shipments", { seller, month, color: colorFilter, search: query, sort, direction, overdue: isOverdue ? 1 : undefined }, { preserveState: true, preserveScroll: true });
+                }}
+                className="h-10 px-4 bg-[#1E40AF] hover:bg-blue-900 text-white font-bold text-xs rounded-xl shadow-xs shrink-0 cursor-pointer transition-colors"
+              >
+                Cari
+              </Button>
+            </div>
+
+            <div className="md:col-span-3">
+              <Select value={seller} onValueChange={handleSellerChange}>
+                <SelectTrigger className="h-10 text-xs bg-white border border-slate-200 font-semibold shadow-2xs rounded-xl focus:ring-1 focus:ring-blue-600 cursor-pointer">
+                  <SelectValue>{seller}</SelectValue>
+                </SelectTrigger>
+                <SelectContent className="bg-white border border-slate-200 shadow-xl rounded-xl">
+                  <SelectItem value="Mitra Aliqa" className="font-semibold cursor-pointer text-xs">Mitra Aliqa</SelectItem>
+                  <SelectItem value="Mitra Zaherba" className="font-semibold cursor-pointer text-xs">Mitra Zaherba</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="md:col-span-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  if (sort === "sheet") {
+                    handleSortChange("nama");
+                  } else {
+                    handleSortChange("sheet");
+                  }
+                }}
+                className="w-full h-10 text-xs font-bold flex items-center justify-between border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-800 cursor-pointer shadow-2xs rounded-xl"
+                title="Klik untuk mengubah urutan data (Default: Sesuai Spreadsheet)"
+              >
+                <span className="truncate">
+                  {sort === "sheet"
+                    ? "Sesuai Sheet"
+                    : sort === "nama"
+                    ? direction === "asc"
+                      ? "Nama A → Z"
+                      : "Nama Z → A"
+                    : sort}
+                </span>
+                <ArrowUpDown className="h-3.5 w-3.5 ml-1 text-blue-600 shrink-0" />
+              </Button>
+            </div>
+          </div>
+
+          {/* Baris 2: Filter Status CS & Lewat SLA */}
+          <div className="border-t border-slate-100 pt-2.5 flex flex-wrap items-center justify-between gap-2.5">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="mr-1 text-[11px] font-bold tracking-wider uppercase text-slate-400">
+                Filter Status:
+              </span>
+              {currentFuOrder.map((k) => {
+                const active = !isOverdue && colorFilter === k;
+                return (
+                  <button
+                    key={k}
+                    onClick={() => {
+                      const nextColor = active ? null : k;
+                      setColorFilter(nextColor);
+                      setIsOverdue(false);
+                      router.get(
+                        "/shipments",
+                        { seller, month, color: nextColor || undefined, search: query, sort, direction },
+                        { preserveState: true, preserveScroll: true }
+                      );
+                    }}
+                    style={{ backgroundColor: currentFuMeta[k].bg, color: currentFuMeta[k].fg }}
+                    className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-bold transition-all cursor-pointer ${
+                      active
+                        ? "ring-2 ring-[#1E40AF] ring-offset-1 border-[#1E40AF] shadow-xs scale-105"
+                        : "border-black/15 hover:scale-102 hover:brightness-95 opacity-90 hover:opacity-100 shadow-2xs"
+                    }`}
+                  >
+                    {active && <Check className="h-3 w-3 text-current stroke-[3]" />}
+                    <span>{currentFuMeta[k].label}</span>
+                  </button>
+                );
+              })}
+
+              {/* Divider */}
+              <div className="h-4 w-px bg-slate-200 mx-1 hidden sm:block" />
+
+              {/* Tombol Filter Cepat "Lewat SLA / Macet > 4 Hari" */}
+              <button
+                type="button"
+                onClick={() => {
+                  const nextOverdue = !isOverdue;
+                  setIsOverdue(nextOverdue);
+                  if (nextOverdue) {
+                    setColorFilter(null);
+                  }
                   router.get(
                     "/shipments",
-                    { seller, month, search: query, sort, direction },
+                    {
+                      seller,
+                      month,
+                      search: query,
+                      sort,
+                      direction,
+                      overdue: nextOverdue ? 1 : undefined,
+                    },
                     { preserveState: true, preserveScroll: true }
                   );
                 }}
-                className="ml-1 inline-flex items-center gap-1 rounded-full bg-slate-100 border border-slate-300/70 px-2.5 py-1 text-[11px] font-bold text-slate-700 hover:bg-slate-200 transition cursor-pointer"
+                className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-bold transition-all cursor-pointer ${
+                  isOverdue
+                    ? "bg-rose-600 text-white border-rose-700 shadow-xs ring-2 ring-rose-400 ring-offset-1 scale-105"
+                    : "bg-rose-50 text-rose-800 border-rose-200 hover:bg-rose-100 shadow-2xs"
+                }`}
+                title="Tampilkan kiriman belum selesai (bukan Sukses/Retur) dengan tanggal kirim >= 4 hari lalu"
               >
-                <X className="h-3 w-3" /> Reset Filter
+                <AlertTriangle className={`h-3.5 w-3.5 shrink-0 ${isOverdue ? "text-white" : "text-rose-600"}`} />
+                <span>Lewat SLA (&gt; 4 Hari)</span>
+                {typeof pageProps?.stats?.overdue === "number" && (
+                  <span
+                    className={`ml-0.5 rounded-full px-1.5 py-0.2 text-[10px] font-black ${
+                      isOverdue ? "bg-white text-rose-700" : "bg-rose-200/80 text-rose-900"
+                    }`}
+                  >
+                    {nf(pageProps.stats.overdue)}
+                  </span>
+                )}
               </button>
-            )}
-          </div>
 
-          {isAdmin && (
-            <div className="flex items-center">
-              <Button
-                onClick={() => setExportOpen(true)}
-                className="gap-2 bg-[#1E40AF] text-white hover:bg-blue-900 cursor-pointer font-bold shadow-sm text-xs px-4 h-9 rounded-xl transition-all"
-              >
-                <FileSpreadsheet className="h-4 w-4 text-[#F97316]" />
-                Export Laporan Seller {String(seller).replace("Mitra ", "")} (.XLSX)
-              </Button>
-            </div>
-          )}
-        </section>
-
-        {/* Baris Pencarian, Mitra, & Sorting */}
-        <section className="grid grid-cols-1 md:grid-cols-12 gap-3 rounded-2xl border border-slate-200/90 bg-white p-3.5 shadow-xs items-center">
-          <div className="relative md:col-span-7 flex items-center gap-1.5">
-            <div className="relative flex-1">
-              <Search className="absolute top-3 left-3.5 h-4 w-4 text-slate-400 pointer-events-none" />
-              <Input
-                value={query}
-                onChange={(e) => {
-                  setQuery(e.target.value);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    router.get("/shipments", { seller, month, color: colorFilter, search: query, sort, direction, overdue: isOverdue ? 1 : undefined }, { preserveState: true, preserveScroll: true });
-                  }
-                }}
-                placeholder="Cari nama penerima, nomor resi, no. HP, alamat tujuan... (tekan Enter)"
-                className="h-10 pl-10 pr-9 text-xs bg-slate-50/50 border-slate-200 focus:bg-white focus:ring-1 focus:ring-blue-600 rounded-xl"
-              />
-              {query && (
+              {/* Reset Filter Button */}
+              {(colorFilter || isOverdue) && (
                 <button
                   type="button"
                   onClick={() => {
-                    setQuery("");
-                    router.get("/shipments", { seller, month, color: colorFilter, search: "", sort, direction, overdue: isOverdue ? 1 : undefined }, { preserveState: true, preserveScroll: true });
+                    setColorFilter(null);
+                    setIsOverdue(false);
+                    router.get(
+                      "/shipments",
+                      { seller, month, search: query, sort, direction },
+                      { preserveState: true, preserveScroll: true }
+                    );
                   }}
-                  className="absolute right-2.5 top-2.5 p-1 text-slate-400 hover:text-slate-600 rounded-md transition cursor-pointer"
-                  title="Hapus pencarian"
+                  className="ml-1 inline-flex items-center gap-1 rounded-full bg-slate-100 border border-slate-300/70 px-2 py-0.5 text-[11px] font-bold text-slate-700 hover:bg-slate-200 transition cursor-pointer"
                 >
-                  <X className="h-3.5 w-3.5" />
+                  <X className="h-3 w-3" /> Reset Filter
                 </button>
               )}
             </div>
-            <Button
-              type="button"
-              onClick={() => {
-                router.get("/shipments", { seller, month, color: colorFilter, search: query, sort, direction, overdue: isOverdue ? 1 : undefined }, { preserveState: true, preserveScroll: true });
-              }}
-              className="h-10 px-4 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-xl shadow-2xs shrink-0 cursor-pointer"
-            >
-              Cari
-            </Button>
-          </div>
-          <div className="md:col-span-3">
-            <Select value={seller} onValueChange={handleSellerChange}>
-              <SelectTrigger className="h-10 text-xs bg-white border border-slate-200 font-semibold shadow-2xs rounded-xl focus:ring-1 focus:ring-blue-600 cursor-pointer">
-                <SelectValue>{seller}</SelectValue>
-              </SelectTrigger>
-              <SelectContent className="bg-white border border-slate-200 shadow-xl rounded-xl">
-                <SelectItem value="Mitra Aliqa" className="font-semibold cursor-pointer text-xs">Mitra Aliqa</SelectItem>
-                <SelectItem value="Mitra Zaherba" className="font-semibold cursor-pointer text-xs">Mitra Zaherba</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="md:col-span-2">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
-                if (sort === "sheet") {
-                  handleSortChange("nama");
-                } else {
-                  handleSortChange("sheet");
-                }
-              }}
-              className="w-full h-10 text-xs font-bold flex items-center justify-between border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-800 cursor-pointer shadow-2xs rounded-xl"
-              title="Klik untuk mengubah urutan data (Default: Sesuai Spreadsheet)"
-            >
-              <span className="truncate">
-                {sort === "sheet"
-                  ? "Sesuai Sheet"
-                  : sort === "nama"
-                  ? direction === "asc"
-                    ? "Nama A → Z"
-                    : "Nama Z → A"
-                  : sort}
-              </span>
-              <ArrowUpDown className="h-3.5 w-3.5 ml-1 text-blue-600 shrink-0" />
-            </Button>
           </div>
         </section>
 
@@ -945,39 +1114,102 @@ export default function Dashboard() {
           sortDirection={direction}
         />
 
-        <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-3 py-2">
-          <div className="text-xs text-muted-foreground">
-            Menampilkan{" "}
-            <b className="text-foreground">
-              {nf(fromItem)}–{nf(toItem)}
-            </b>{" "}
-            dari <b className="text-foreground">{nf(totalCount)}</b> resi
+        <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-3 py-2 shadow-sm">
+          <div className="text-xs text-muted-foreground flex items-center gap-2">
+            <span>
+              Menampilkan{" "}
+              <b className="text-foreground">
+                {nf(fromItem)}–{nf(toItem)}
+              </b>{" "}
+              dari <b className="text-foreground">{nf(totalCount)}</b> resi
+            </span>
+            {isPaginating && (
+              <span className="flex items-center gap-1 text-primary font-medium">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                <span>Memuat...</span>
+              </span>
+            )}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
+            {/* Tombol Halaman Pertama << */}
             <Button
               size="icon"
               variant="outline"
               className="h-8 w-8 cursor-pointer"
-              disabled={currentPage <= 1}
-              onClick={() => {
-                router.get("/shipments", { seller, month, color: colorFilter, search: query, sort, direction, overdue: isOverdue ? 1 : undefined, page: currentPage - 1 }, { preserveState: true, preserveScroll: true });
-              }}
+              disabled={currentPage <= 1 || isPaginating}
+              onClick={() => goToPage(1)}
+              title="Halaman Pertama (1)"
+            >
+              <ChevronsLeft className="h-4 w-4" />
+            </Button>
+
+            {/* Tombol Halaman Sebelumnya < */}
+            <Button
+              size="icon"
+              variant="outline"
+              className="h-8 w-8 cursor-pointer"
+              disabled={currentPage <= 1 || isPaginating}
+              onClick={() => goToPage(currentPage - 1)}
+              title="Halaman Sebelumnya"
             >
               <ChevronLeft className="h-4 w-4" />
             </Button>
-            <span className="font-mono text-xs">
-              Halaman {currentPage} dari {lastPage}
-            </span>
+
+            {/* Input Lompat Cepat ke Halaman */}
+            <div className="flex items-center gap-1 px-2 font-mono text-xs">
+              <span>Halaman</span>
+              <input
+                type="number"
+                min={1}
+                max={lastPage}
+                value={jumpPageInput !== "" ? jumpPageInput : currentPage}
+                onChange={(e) => setJumpPageInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    const p = parseInt(jumpPageInput, 10);
+                    if (!isNaN(p)) {
+                      goToPage(p);
+                      setJumpPageInput("");
+                    }
+                  }
+                }}
+                onBlur={() => {
+                  if (jumpPageInput !== "") {
+                    const p = parseInt(jumpPageInput, 10);
+                    if (!isNaN(p)) {
+                      goToPage(p);
+                    }
+                    setJumpPageInput("");
+                  }
+                }}
+                className="h-7 w-12 rounded border border-input bg-background px-1 text-center font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                title="Ketik nomor halaman lalu tekan Enter untuk lompat cepat"
+              />
+              <span>dari {lastPage}</span>
+            </div>
+
+            {/* Tombol Halaman Selanjutnya > */}
             <Button
               size="icon"
               variant="outline"
               className="h-8 w-8 cursor-pointer"
-              disabled={currentPage >= lastPage}
-              onClick={() => {
-                router.get("/shipments", { seller, month, color: colorFilter, search: query, sort, direction, overdue: isOverdue ? 1 : undefined, page: currentPage + 1 }, { preserveState: true, preserveScroll: true });
-              }}
+              disabled={currentPage >= lastPage || isPaginating}
+              onClick={() => goToPage(currentPage + 1)}
+              title="Halaman Selanjutnya"
             >
               <ChevronRight className="h-4 w-4" />
+            </Button>
+
+            {/* Tombol Halaman Terakhir >> */}
+            <Button
+              size="icon"
+              variant="outline"
+              className="h-8 w-8 cursor-pointer"
+              disabled={currentPage >= lastPage || isPaginating}
+              onClick={() => goToPage(lastPage)}
+              title={`Halaman Terakhir (${lastPage})`}
+            >
+              <ChevronsRight className="h-4 w-4" />
             </Button>
           </div>
         </section>
