@@ -110,15 +110,19 @@ class PostOffice extends Model
         // 1. Exact or partial Match on Post Office Name / Code from cached collection
         if (!empty($destination)) {
             $destClean = strtoupper(trim($destination));
-            $byName = $offices->first(function ($item) use ($destClean) {
-                return !empty($item->name) && (
-                    strcasecmp($item->name, $destClean) === 0 ||
-                    str_contains(strtoupper($item->name), $destClean) ||
-                    str_contains($destClean, strtoupper($item->name))
-                );
-            });
-            if ($byName) {
-                return $byName;
+            // KCP cannot handle follow-ups; skip direct match so it resolves to governing KC / KCU
+            $isKcp = str_contains($destClean, 'KCP');
+            if (!$isKcp) {
+                $byName = $offices->first(function ($item) use ($destClean) {
+                    return !empty($item->name) && (
+                        strcasecmp($item->name, $destClean) === 0 ||
+                        str_contains(strtoupper($item->name), $destClean) ||
+                        str_contains($destClean, strtoupper($item->name))
+                    );
+                });
+                if ($byName) {
+                    return $byName;
+                }
             }
         }
 
@@ -554,19 +558,70 @@ class PostOffice extends Model
 
         // 5. Fallback via Postal Code Prefix (2-digit or 3-digit)
         $postalPrefixes = [
+            // Jabodetabek & Banten
+            '10' => 'JAKARTA', '11' => 'JAKARTA', '12' => 'JAKARTA', '13' => 'JAKARTA', '14' => 'JAKARTA',
+            '15' => 'TANGERANG', '161' => 'BOGOR', '166' => 'BOGOR', '167' => 'BOGOR', '168' => 'BOGOR',
+            '164' => 'DEPOK', '165' => 'DEPOK', '169' => 'CIBINONG',
+            '171' => 'BEKASI', '172' => 'BEKASI', '173' => 'BEKASI', '174' => 'BEKASI',
+            '175' => 'CIKARANG', '176' => 'CIKARANG',
+            '421' => 'SERANG', '423' => 'RANGKASBITUNG', '424' => 'CILEGON',
+
+            // Jawa Barat
+            '40' => 'BANDUNG', '41' => 'SUBANG', '431' => 'SUKABUMI', '432' => 'CIANJUR',
+            '44' => 'GARUT', '451' => 'CIREBON', '454' => 'MAJALENGKA', '46' => 'TASIKMALAYA',
+
+            // Jawa Tengah & DIY
+            '501' => 'SEMARANG', '502' => 'SEMARANG', '506' => 'SALATIGA', '513' => 'KENDAL',
+            '521' => 'TEGAL', '524' => 'TEGAL', '522' => 'TEGAL', '52' => 'TEGAL',
+            '531' => 'PURWOKERTO', '532' => 'CILACAP', '533' => 'PURBALINGGA', '534' => 'PURBALINGGA', '53' => 'PURWOKERTO',
+            '543' => 'KEBUMEN', '55' => 'YOGYAKARTA', '557' => 'BANTUL',
+            '571' => 'SOLO', '572' => 'SOLO', '573' => 'SALATIGA',
+            '591' => 'PATI', '594' => 'JEPARA', '593' => 'PATI',
+
+            // Jawa Timur
+            '60' => 'SURABAYA', '611' => 'GRESIK', '612' => 'SURABAYA',
+            '661' => 'BLITAR', '662' => 'TULUNGAGUNG', '671' => 'PROBOLINGGO',
+            '691' => 'PAMEKASAN', '692' => 'PAMEKASAN', '693' => 'PAMEKASAN', '694' => 'SUMENEP', '69' => 'PAMEKASAN',
+
+            // Sumatera Utara & Aceh
+            '20' => 'MEDAN', '211' => 'PEMATANG SIANTAR', '212' => 'KISARAN', '214' => 'RANTAUPRAPAT',
+            '221' => 'KABANJAHE', '228' => 'GUNUNGSITOLI', '224' => 'SIBOLGA', '225' => 'SIBOLGA',
+            '227' => 'PADANGSIDEMPUAN',
+            '23' => 'BANDA ACEH', '236' => 'MEULABOH', '241' => 'BIREUEN', '242' => 'BIREUEN',
+            '243' => 'LHOKSEUMAWE', '244' => 'LANGSA', '245' => 'TAKENGON', '246' => 'KUTACANE',
+
+            // Riau, Kepri, Sumbar, Jambi, Sumsel, Bengkulu, Lampung, Babel
+            '28' => 'PEKANBARU', '284' => 'BANGKINANG', '288' => 'DUMAI',
+            '291' => 'TANJUNGPINANG', '292' => 'TEMBILAHAN', '293' => 'RENGAT', '294' => 'BATAM',
+            '25' => 'PADANG', '261' => 'BUKITTINGGI', '262' => 'BUKITTINGGI', '274' => 'SAWAHLUNTO', '273' => 'SOLOK',
+            '263' => 'LUBUKSIKAPING',
+            '36' => 'JAMBI', '37' => 'MUAROBUNGO', '371' => 'SUNGAIPENUH',
+            '30' => 'PALEMBANG', '311' => 'PRABUMULIH', '316' => 'LUBUKLINGGAU',
+            '38' => 'BENGKULU', '33' => 'PANGKALPINANG',
+            '35' => 'BANDAR LAMPUNG', '341' => 'METRO', '345' => 'KOTABUMI',
+
+            // Bali & Nusa Tenggara
+            '80' => 'DENPASAR', '81' => 'DENPASAR', '82' => 'TABANAN', '805' => 'GIANYAR',
+            '83' => 'MATARAM', '841' => 'BIMA', '843' => 'SUMBAWA BESAR',
+            '85' => 'KUPANG', '857' => 'ATAMBUA', '865' => 'KOMODO', '863' => 'ENDE', '87' => 'WAINGAPU',
+
+            // Kalimantan
+            '70' => 'BANJARMASIN', '707' => 'BANJARBARU', '71' => 'BANJARMASIN', '72' => 'BATULICIN',
+            '731' => 'PALANGKARAYA', '737' => 'BUNTOK', '738' => 'MUARA TEWEH', '74' => 'SAMPIT', '741' => 'PANGKALANBUN',
+            '75' => 'SAMARINDA', '753' => 'BONTANG', '755' => 'TENGGARONG', '76' => 'BALIKPAPAN', '771' => 'TARAKAN', '772' => 'TANJUNGSELOR', '773' => 'TANJUNGREDEB',
+            '78' => 'PONTIANAK', '781' => 'PONTIANAK', '785' => 'SINTANG', '788' => 'KETAPANG', '79' => 'SINGKAWANG',
+
+            // Sulawesi
+            '90' => 'MAKASSAR', '915' => 'MAMUJU', '918' => 'PALOPO', '919' => 'PALOPO',
+            '91' => 'PARE PARE', '92' => 'BULUKUMBA', '93' => 'KENDARI', '937' => 'BAUBAU',
+            '94' => 'PALU', '947' => 'LUWUK', '95' => 'MANADO', '96' => 'GORONTALO',
+
+            // Maluku & Papua
             '977' => 'TERNATE', '978' => 'TERNATE', '976' => 'TUAL', '975' => 'AMBON',
             '970' => 'AMBON', '971' => 'AMBON', '972' => 'AMBON', '973' => 'AMBON', '974' => 'AMBON',
-            '99'  => 'JAYAPURA', '984' => 'SORONG', '985' => 'SORONG', '986' => 'SORONG',
+            '99' => 'JAYAPURA', '984' => 'SORONG', '985' => 'SORONG', '986' => 'SORONG',
             '983' => 'SORONG', '981' => 'BIAK', '982' => 'BIAK', '987' => 'TIMIKA', '988' => 'JAYAPURA',
-            '936' => 'BAUBAU', '937' => 'BAUBAU', '938' => 'BAUBAU', '93' => 'KENDARI',
-            '947' => 'LUWUK', '948' => 'LUWUK', '949' => 'LUWUK', '94' => 'PALU',
-            '95'  => 'MANADO', '96' => 'GORONTALO', '915' => 'MAMUJU', '913' => 'MAMUJU',
-            '918' => 'PALOPO', '919' => 'PALOPO', '91' => 'PARE PARE', '90' => 'MAKASSAR',
-            '92'  => 'MAKASSAR', '80' => 'DENPASAR', '81' => 'DENPASAR', '82' => 'DENPASAR',
-            '83'  => 'MATARAM', '84' => 'BIMA', '85' => 'KUPANG', '86' => 'KUPANG', '87' => 'WAINGAPU',
-            '70'  => 'BANJARMASIN', '71' => 'BANJARMASIN', '72' => 'BATULICIN', '73' => 'PALANGKARAYA',
-            '74'  => 'SAMPIT', '75' => 'SAMARINDA', '76' => 'BALIKPAPAN', '77' => 'TARAKAN',
-            '78'  => 'PONTIANAK', '79' => 'SINGKAWANG', '60' => 'SURABAYA',
+            '996' => 'MERAUKE',
         ];
 
         if (preg_match('/\b(\d{2,3})\d{2,3}\b/', $target, $m)) {

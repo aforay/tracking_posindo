@@ -619,28 +619,87 @@ class TrackingBotService
 
     /**
      * Extract destination office or last location from tracking text & timeline HTML
+     * KCP cannot handle follow-ups, so timeline history is scanned specifically for KC/KCU.
      */
-    public function extractKantorTujuan(string $text, string $rawHtml = ''): ?string
+    public function extractKantorTujuan(string $text, string $rawHtml = '', string $destinationAddress = ''): ?string
     {
         $combined = $text . ' ' . strip_tags($rawHtml);
 
-        // 1. Look for explicit (KCU|KCP|KC|MPC|DC) in timeline / events e.g. "di KCP BOGORTANAHSAREAL 16161A" or "di KCU BOGOR 16000"
-        if (preg_match_all('/\b(KCU|KCP|KC|MPC|DC|KANTOR\s*POS)\s+([A-Z0-9\s\.\,\-\/]+?)(?=\s+(?:oleh|dan|telah|dengan|Tanggal|\d{2}:\d{2}|\[|<|\n|\r|$))/i', $combined, $matches, PREG_SET_ORDER)) {
-            $lastMatch = end($matches);
-            $fullOffice = trim($lastMatch[1] . ' ' . $lastMatch[2]);
-            $fullOffice = preg_replace('/\s+/', ' ', $fullOffice);
-            if (mb_strlen($fullOffice) >= 4 && mb_strlen($fullOffice) <= 60) {
-                return strtoupper($fullOffice);
+        // 1. Specifically scan for KC or KCU in timeline / lacak events
+        // Exclude KCP, MPC, DC, SPP, SENTRAL, etc. KCP cannot handle follow-ups!
+        if (preg_match_all('/\b(KCU|KC)\s+([A-Z0-9\s\.\,\-\/]+?)(?=\s+(?:oleh|dan|telah|dengan|Tanggal|Petugas|\d{2}:\d{2}|\[|<|\n|\r|$))/i', $combined, $matches, PREG_SET_ORDER)) {
+            $validCandidates = [];
+            foreach ($matches as $m) {
+                $officeName = trim($m[1] . ' ' . $m[2]);
+                $officeName = preg_replace('/\s+/', ' ', $officeName);
+                $upper = strtoupper($officeName);
+                if (!str_contains($upper, 'KCP') &&
+                    !str_contains($upper, 'MPC') &&
+                    !str_contains($upper, 'SPP') &&
+                    !str_contains($upper, 'SENTRAL') &&
+                    mb_strlen($officeName) >= 4 && mb_strlen($officeName) <= 60) {
+                    $validCandidates[] = $officeName;
+                }
+            }
+
+            if (!empty($validCandidates)) {
+                // If destination address is provided, see if any candidate matches the address/city
+                if (!empty($destinationAddress)) {
+                    foreach ($validCandidates as $cand) {
+                        $matched = \App\Models\PostOffice::matchByDestinationOrAddress($cand, $destinationAddress);
+                        if ($matched) {
+                            return $matched->name;
+                        }
+                    }
+                }
+
+                // In standard Pos Indonesia timeline (chronological), the delivery/destination KC is the last KC in the sequence.
+                // Check if the order is reverse-chronological by inspecting timestamps
+                $chosenCandidate = end($validCandidates);
+                if (preg_match_all('/\b(\d{4}-\d{2}-\d{2}|\d{2}\/\d{2}\/\d{4})\b/', $combined, $dateMatches)) {
+                    $dates = $dateMatches[0];
+                    if (count($dates) >= 2) {
+                        $d1 = strtotime(str_replace('/', '-', $dates[0]));
+                        $d2 = strtotime(str_replace('/', '-', end($dates)));
+                        if ($d1 !== false && $d2 !== false && $d1 > $d2) {
+                            // Reverse chronological: newest event is first, so destination KC is first KC candidate
+                            $chosenCandidate = reset($validCandidates);
+                        }
+                    }
+                }
+
+                $matchedOffice = \App\Models\PostOffice::matchByDestinationOrAddress($chosenCandidate, $destinationAddress);
+                if ($matchedOffice) {
+                    return $matchedOffice->name;
+                }
+
+                $cleanChosen = trim(preg_replace('/\bKCP\b/i', 'KC', $chosenCandidate));
+                $cleanChosen = preg_replace('/\s+\d{5}[A-Za-z0-9]*$/', '', $cleanChosen);
+                return strtoupper($cleanChosen);
             }
         }
 
-        // 2. Look for "KANTOR TUJUAN : ..." or "KANTOR POS : ..."
+        // 2. If no explicit KC/KCU found in timeline, look for KCP or generic office patterns and redirect to KC/KCU
         if (preg_match('/(?:KANTOR\s*TUJUAN|TUJUAN|KCU|KC|KCP|MPC|DC|KANTOR\s*POS)\s*[:=]?\s*([A-Z0-9\s\.\,\-\(\)]+)/i', $combined, $m)) {
             $extracted = trim($m[1]);
             $extracted = preg_split('/[\r\n\|\<\>\;]/', $extracted)[0];
             $extracted = trim($extracted);
             if (mb_strlen($extracted) >= 3 && mb_strlen($extracted) <= 60) {
-                return strtoupper($extracted);
+                $matchedOffice = \App\Models\PostOffice::matchByDestinationOrAddress($extracted, $destinationAddress);
+                if ($matchedOffice) {
+                    return $matchedOffice->name;
+                }
+                $clean = trim(preg_replace('/\bKCP\b/i', 'KC', $extracted));
+                $clean = preg_replace('/\s+\d{5}[A-Za-z0-9]*$/', '', $clean);
+                return strtoupper($clean);
+            }
+        }
+
+        // 3. Fallback: match by destination address alone if available
+        if (!empty($destinationAddress)) {
+            $matchedByAddr = \App\Models\PostOffice::matchByDestinationOrAddress(null, $destinationAddress);
+            if ($matchedByAddr) {
+                return $matchedByAddr->name;
             }
         }
 

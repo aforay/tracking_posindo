@@ -103,16 +103,17 @@ class ProcessNiposTrackingJob implements ShouldQueue
                     $category = $res['status_kategori'] ?? $botService->categorizeStatus($statusPos, $keterangan);
                     $newColorCode = $res['color_code'] ?? $botService->determineColorCode($category);
 
-                    // === FORCE OVERRIDE ===
+                    // === FORCE OVERRIDE & FOLLOW-UP STATUS PERSISTENCE ===
                     $prevColorCode = $shipment->color_code;
-                    if (in_array($category, ['SUKSES', 'RETUR']) && in_array($prevColorCode, $fuColorCodes)) {
+                    if (in_array($category, ['SUKSES', 'RETUR'])) {
                         $newColorCode = $botService->determineColorCode($category);
-                    }
-
-                    // === RETUR PERSISTENCE ===
-                    if (($prevColorCode === 'ORANGE' || $shipment->status_kategori === 'RETUR' || $shipment->isReturn()) && $category !== 'SUKSES') {
+                    } elseif (($prevColorCode === 'ORANGE' || $shipment->status_kategori === 'RETUR' || $shipment->isReturn()) && $category !== 'SUKSES') {
                         $category = 'RETUR';
                         $newColorCode = 'ORANGE';
+                    } elseif (in_array($prevColorCode, ['BIRU_TUA', 'HIJAU', 'KUNING'])) {
+                        // Paket masih dalam proses pengantaran/transit: pertahankan warna Follow Up CS
+                        $newColorCode = $prevColorCode;
+                        $category = 'FOLLOW_UP';
                     }
 
                     $rawSla = $res['sla_days'] ?? ($res['sla'] ?? ($shipment->sla_days ?: 2));
@@ -144,9 +145,21 @@ class ProcessNiposTrackingJob implements ShouldQueue
                     if ($matchedOffice) {
                         $kantorTujuan = $matchedOffice->name;
                         $kantorPosId = $matchedOffice->id;
+                    } elseif (!empty($kantorTujuan) && str_contains(strtoupper($kantorTujuan), 'KCP')) {
+                        // KCP cannot handle follow-ups: redirect to governing KC / KCU
+                        $matchedFallback = PostOffice::matchByDestinationOrAddress(null, $shipment->alamat);
+                        if ($matchedFallback) {
+                            $kantorTujuan = $matchedFallback->name;
+                            $kantorPosId = $matchedFallback->id;
+                        } else {
+                            $kantorTujuan = trim(preg_replace('/\bKCP\b/i', 'KC', $kantorTujuan));
+                        }
                     }
 
-                    $lastLocation = $resTujuan ?: ($res['last_location'] ?? $shipment->last_location);
+                    $lastLocation = $kantorTujuan ?: ($resTujuan ?: ($res['last_location'] ?? $shipment->last_location));
+                    if (!empty($lastLocation) && str_contains(strtoupper($lastLocation), 'KCP')) {
+                        $lastLocation = $kantorTujuan;
+                    }
                     $createdAtStr = $shipment->created_at ? (is_string($shipment->created_at) ? $shipment->created_at : $shipment->created_at->toDateTimeString()) : $nowStr;
 
                     $updateBatch[] = [

@@ -110,6 +110,9 @@ class TrackNiposCommand extends Command
                         if (($shipment->color_code === 'ORANGE' || $shipment->status_kategori === 'RETUR' || $shipment->isReturn()) && $category !== 'SUKSES') {
                             $category = 'RETUR';
                             $color = 'ORANGE';
+                        } elseif ($category !== 'SUKSES' && in_array($shipment->color_code, ['BIRU_TUA', 'HIJAU', 'KUNING'])) {
+                            $color = $shipment->color_code;
+                            $category = 'FOLLOW_UP';
                         }
 
                         // Ekstraksi SLA asli dari hasil NIPOS & tanggal kirim NIPOS

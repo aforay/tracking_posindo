@@ -63,14 +63,6 @@ class OutgoingShipment extends Model
                 }
             }
         });
-
-        static::saved(function () {
-            \Illuminate\Support\Facades\Cache::forever('shipments_data_version', (string) microtime(true));
-        });
-
-        static::deleted(function () {
-            \Illuminate\Support\Facades\Cache::forever('shipments_data_version', (string) microtime(true));
-        });
     }
 
     /**

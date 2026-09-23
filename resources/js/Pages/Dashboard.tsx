@@ -23,6 +23,7 @@ import {
   Bot,
   Loader2,
   AlertTriangle,
+  UploadCloud,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
@@ -281,6 +282,31 @@ export default function Dashboard() {
   const [isPaginating, setIsPaginating] = useState(false);
   const [jumpPageInput, setJumpPageInput] = useState("");
 
+  // Debounced search: otomatis cari setelah user selesai mengetik 450ms tanpa harus klik Cari / tekan Enter
+  const isSearchFirstRender = useRef(true);
+  useEffect(() => {
+    if (isSearchFirstRender.current) {
+      isSearchFirstRender.current = false;
+      return;
+    }
+    const serverSearch = (pageProps?.filters?.search || "").trim();
+    if ((query || "").trim() === serverSearch) return;
+
+    const timer = setTimeout(() => {
+      router.get(
+        "/shipments",
+        { seller, month, color: colorFilter, search: query, sort, direction, overdue: isOverdue ? 1 : undefined },
+        { preserveState: true, preserveScroll: true, replace: true }
+      );
+    }, 450);
+
+    return () => clearTimeout(timer);
+  }, [query]);
+
+  useEffect(() => {
+    setQuery(pageProps?.filters?.search || "");
+  }, [pageProps?.filters?.search]);
+
   const handleSortChange = (newSort: string) => {
     const newDir = sort === newSort && direction === "asc" ? "desc" : "asc";
     setSort(newSort);
@@ -296,16 +322,20 @@ export default function Dashboard() {
     setRows(shipmentList);
   }, [shipmentList]);
 
-  // Real-time synchronization / Auto-Refresh antar semua admin & CS
+  // Real-time synchronization / Auto-Refresh pintar antar semua admin & CS
   const lastVersionRef = useRef<string | null>(null);
   const isUpdatingRef = useRef<boolean>(false);
+  const isReloadingRef = useRef<boolean>(false);
 
   useEffect(() => {
     let isMounted = true;
 
     const checkLiveVersion = async () => {
-      // Tunda jika user sedang aktif lompat halaman atau sedang submit update lokal
-      if (isPaginating || isUpdatingRef.current) return;
+      // 1. Tunda jika tab browser sedang di background / diminimize
+      if (typeof document !== "undefined" && document.hidden) return;
+
+      // 2. Tunda jika user sedang lompat halaman, modal terbuka, atau sedang submit data
+      if (isPaginating || isUpdatingRef.current || isReloadingRef.current || waModalOpen || postOfficesModalOpen || exportOpen) return;
 
       try {
         const res = await fetch("/shipments/live-version", {
@@ -322,19 +352,23 @@ export default function Dashboard() {
           return;
         }
 
-        // Jika versi data di server berubah (admin/CS lain mengubah status/catatan/dll)
+        // Jika versi data di server berubah (admin/CS lain mengubah status/catatan follow up)
         if (lastVersionRef.current !== String(data.version)) {
           lastVersionRef.current = String(data.version);
 
-          // Cek apakah user sedang fokus mengetik di input pencarian
+          // Cek apakah user sedang fokus mengetik di input/textarea
           const activeTag = document.activeElement?.tagName;
           const isUserTyping = activeTag === "INPUT" || activeTag === "TEXTAREA";
 
-          if (!isUserTyping && isMounted) {
+          if (!isUserTyping && isMounted && !isReloadingRef.current) {
+            isReloadingRef.current = true;
             router.reload({
               preserveState: true,
               preserveScroll: true,
-              only: ["shipments", "stats", "monthCounts"],
+              only: ["shipments", "stats"],
+              onFinish: () => {
+                isReloadingRef.current = false;
+              },
             });
           }
         }
@@ -344,13 +378,13 @@ export default function Dashboard() {
     };
 
     checkLiveVersion();
-    const interval = setInterval(checkLiveVersion, 2000);
+    const interval = setInterval(checkLiveVersion, 15000);
 
     return () => {
       isMounted = false;
       clearInterval(interval);
     };
-  }, [isPaginating]);
+  }, [isPaginating, waModalOpen, postOfficesModalOpen, exportOpen]);
 
   // Extract pagination info safely
   const isPaginated = Boolean(
@@ -577,6 +611,79 @@ export default function Dashboard() {
     }
   };
 
+  const [isPushingSelected, setIsPushingSelected] = useState(false);
+  const pushSelectedToSheets = async () => {
+    const ids = Array.from(selected);
+    if (ids.length === 0) return;
+
+    try {
+      setIsPushingSelected(true);
+      const csrfToken =
+        document.querySelector('meta[name="csrf-token"]')?.getAttribute("content") ||
+        (document.cookie.match(/XSRF-TOKEN=([^;]+)/)?.[1] ? decodeURIComponent(document.cookie.match(/XSRF-TOKEN=([^;]+)/)![1]) : "");
+
+      const res = await fetch("/shipments/push-selected", {
+        method: "POST",
+        headers: {
+          "Accept": "application/json",
+          "Content-Type": "application/json",
+          "X-CSRF-TOKEN": csrfToken,
+          "X-XSRF-TOKEN": csrfToken,
+        },
+        body: JSON.stringify({ ids }),
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        toast.success(data.message || `Berhasil mem-push ${ids.length} resi ke Google Sheets!`);
+        setSelected(new Set());
+      } else {
+        toast.error(data.message || "Gagal mem-push resi terpilih");
+      }
+    } catch (err: any) {
+      toast.error("Terjadi kesalahan: " + (err?.message || err));
+    } finally {
+      setIsPushingSelected(false);
+    }
+  };
+
+  const [isPushingAllFuPos, setIsPushingAllFuPos] = useState(false);
+  const handlePushAllFuPos = async () => {
+    try {
+      setIsPushingAllFuPos(true);
+      const csrfToken =
+        document.querySelector('meta[name="csrf-token"]')?.getAttribute("content") ||
+        (document.cookie.match(/XSRF-TOKEN=([^;]+)/)?.[1] ? decodeURIComponent(document.cookie.match(/XSRF-TOKEN=([^;]+)/)![1]) : "");
+
+      const res = await fetch("/shipments/push-all-fu-pos", {
+        method: "POST",
+        headers: {
+          "Accept": "application/json",
+          "Content-Type": "application/json",
+          "X-CSRF-TOKEN": csrfToken,
+          "X-XSRF-TOKEN": csrfToken,
+        },
+        body: JSON.stringify({
+          seller: seller,
+          month: month === "all" ? "" : month,
+        }),
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        toast.success(data.message || "Berhasil mem-push seluruh resi FU POS ke Google Sheets!", {
+          description: `${data.count ?? 0} resi FU POS telah diperbarui di Google Sheets.`,
+        });
+      } else {
+        toast.error(data.message || "Gagal mem-push resi FU POS.");
+      }
+    } catch (err: any) {
+      toast.error("Terjadi kesalahan: " + (err?.message || err));
+    } finally {
+      setIsPushingAllFuPos(false);
+    }
+  };
+
   const isAliqa = typeof seller === "string" && seller.toUpperCase().includes("ALIQA");
   const currentFuMeta = useMemo(() => getSellerFuMeta(seller), [seller]);
   const currentFuOrder = useMemo(() => getSellerFuOrder(seller), [seller]);
@@ -599,7 +706,7 @@ export default function Dashboard() {
           label: "Paket Sukses",
           value: kpi.sukses,
           icon: CheckCircle2,
-          bg: "#38D9A9", // Hijau Toska
+          bg: "#40e4b4", // Hijau Toska (#40e4b4)
           fg: "#000000",
           sub: "DELIVERED",
           colorKey: "BIRU" as FuStatus,
@@ -608,8 +715,8 @@ export default function Dashboard() {
           label: "Paket Retur",
           value: kpi.retur,
           icon: RotateCcw,
-          bg: "#E8A29A", // Merah
-          fg: "#000000",
+          bg: "#ff0000", // Merah (#ff0000)
+          fg: "#FFFFFF",
           sub: "RETURN / GAGAL SERAH",
           colorKey: "ORANGE" as FuStatus,
         },
@@ -617,7 +724,7 @@ export default function Dashboard() {
           label: "Sudah di FU",
           value: kpi.sudahFu,
           icon: BellRing,
-          bg: "#FFFF00", // Kuning
+          bg: "#ffff00", // Kuning (#ffff00)
           fg: "#000000",
           sub: "SUDAH DI FU",
           colorKey: "KUNING" as FuStatus,
@@ -643,7 +750,7 @@ export default function Dashboard() {
       ];
     }
 
-    // Default / Mitra Zaherba (7 kotak tetap utuh tidak diubah sama sekali)
+    // Default / Mitra Zaherba
     return [
       {
         label: "Total Kiriman",
@@ -658,8 +765,8 @@ export default function Dashboard() {
         label: "Paket Sukses",
         value: kpi.sukses,
         icon: CheckCircle2,
-        bg: "#46BDC6",
-        fg: "#083344",
+        bg: "#40e4b4",
+        fg: "#000000",
         sub: "DELIVERED",
         colorKey: "BIRU" as FuStatus,
       },
@@ -667,8 +774,8 @@ export default function Dashboard() {
         label: "Paket Retur",
         value: kpi.retur,
         icon: RotateCcw,
-        bg: "#FBBC04",
-        fg: "#451A03",
+        bg: "#ff0000",
+        fg: "#FFFFFF",
         sub: "RETURN / GAGAL SERAH",
         colorKey: "ORANGE" as FuStatus,
       },
@@ -862,7 +969,7 @@ export default function Dashboard() {
                       router.get("/shipments", { seller, month, color: colorFilter, search: query, sort, direction, overdue: isOverdue ? 1 : undefined }, { preserveState: true, preserveScroll: true });
                     }
                   }}
-                  placeholder="Cari nama penerima, nomor resi, no. HP, alamat tujuan... (tekan Enter)"
+                  placeholder="Cari nama, resi, HP, alamat... (Bebas huruf besar/kecil / Caps Lock)"
                   className="h-10 pl-10 pr-9 text-xs bg-slate-50/70 border-slate-200 focus:bg-white focus:ring-2 focus:ring-blue-600 rounded-xl"
                 />
                 {query && (
@@ -1031,15 +1138,61 @@ export default function Dashboard() {
           </div>
         </section>
 
+        {colorFilter === "BIRU_TUA" && (
+          <motion.div
+            initial={{ opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-xl bg-gradient-to-r from-blue-900 via-indigo-900 to-slate-900 text-white shadow-md border border-blue-500/30"
+          >
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-blue-500/20 border border-blue-400/30 text-blue-300 shrink-0">
+                <Send className="h-5 w-5" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-sm text-white">Filter Khusus: Eskalasi FU POS (KC / KCU)</span>
+                  <span className="text-[10px] uppercase font-black tracking-wider bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full border border-emerald-400/30">
+                    Real-Time Push Aktif
+                  </span>
+                </div>
+                <p className="text-xs text-blue-200/80 mt-0.5">
+                  Setiap resi dapat langsung di-push satuan ke Google Sheets menggunakan tombol <strong className="text-emerald-300">Push ke Sheets</strong> di samping nomor resi.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handlePushAllFuPos}
+                disabled={isPushingAllFuPos || (pageProps?.stats?.fu_pos ?? rows.length) === 0}
+                className="group relative inline-flex items-center gap-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 active:from-emerald-700 active:to-teal-700 text-white font-bold text-xs px-4 py-2 rounded-xl shadow-md hover:shadow-lg border border-emerald-400/40 cursor-pointer transition-all duration-200 disabled:opacity-50"
+                title="Push seluruh resi FU POS ke Google Sheets sekaligus"
+              >
+                {isPushingAllFuPos ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin text-white" />
+                    <span>Mendorong Semua FU POS...</span>
+                  </>
+                ) : (
+                  <>
+                    <UploadCloud className="h-4 w-4 text-emerald-100 group-hover:scale-110 transition-transform" />
+                    <span>Push Semua Resi FU POS ({nf(pageProps?.stats?.fu_pos ?? rows.length)})</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </motion.div>
+        )}
+
         <AnimatePresence>
           {selected.size > 0 && (
             <motion.div
               initial={{ opacity: 0, y: -6 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -6 }}
-              className="flex flex-wrap items-center gap-2 rounded-xl border border-blue-300 bg-blue-50 p-3"
+              className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white/95 backdrop-blur-md shadow-md p-3"
             >
-              <span className="text-xs font-bold text-[#1E40AF] mr-1">{selected.size} resi dipilih</span>
+              <span className="text-xs font-bold text-slate-800 bg-slate-100 border border-slate-200 px-2.5 py-1 rounded-lg mr-1">{selected.size} resi dipilih</span>
               <Button size="sm" variant="secondary" className="cursor-pointer bg-sky-100 text-sky-800 hover:bg-sky-200 border border-sky-300 font-bold text-xs" onClick={() => bulk("BIRU")}>
                 Mark as Sukses
               </Button>
@@ -1069,6 +1222,16 @@ export default function Dashboard() {
               >
                 {isTrackingSelected ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Bot className="h-3.5 w-3.5" />}
                 Lacak NIPOS Terpilih
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={isPushingSelected}
+                className="cursor-pointer bg-emerald-600 text-white hover:bg-emerald-700 border border-emerald-700 font-bold text-xs gap-1"
+                onClick={pushSelectedToSheets}
+              >
+                {isPushingSelected ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <UploadCloud className="h-3.5 w-3.5" />}
+                Push Terpilih ke Sheets
               </Button>
               {isAdmin ? (
                 <>

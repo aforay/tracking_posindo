@@ -107,7 +107,7 @@ class ImportPostOfficeContactsCommand extends Command
             ['name' => 'KC JEPARA', 'city' => 'Jepara', 'phone_wa' => '+62 822-2158-1708'],
             ['name' => 'KC SUMENEP', 'city' => 'Sumenep', 'phone_wa' => '+62 819-1956-9640'],
             ['name' => 'KC TANUNGPINANG', 'city' => 'Tanjungpinang', 'phone_wa' => '+62 813-7856-5100'],
-            ['name' => 'KCP KOLONEDALE', 'city' => 'Kolonodale', 'phone_wa' => '+62 822-9601-6724'],
+            ['name' => 'KC KOLONEDALE', 'city' => 'Kolonodale', 'phone_wa' => '+62 822-9601-6724'],
             ['name' => 'KC SORONG', 'city' => 'Sorong', 'phone_wa' => '+62 812-4748-8191'],
             ['name' => 'KC SINGKAWANG', 'city' => 'Singkawang', 'phone_wa' => '+62 823-3338-8815'],
             ['name' => 'KC CIANJUR', 'city' => 'Cianjur', 'phone_wa' => '+62 856-2477-7410'],

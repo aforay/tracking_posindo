@@ -1,7 +1,7 @@
 import { useMemo, useEffect, useState } from "react";
 import { router } from "@inertiajs/react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Truck, Bot, Loader2, CheckCircle2, Zap, RefreshCw, Send, Building2, AlertCircle, Check, ArrowUpRight, Search, Cookie, LogOut, ShieldCheck, User, Users, KeyRound, AlertTriangle } from "lucide-react";
+import { Truck, Bot, Loader2, CheckCircle2, Zap, RefreshCw, Send, Building2, AlertCircle, Check, ArrowUpRight, Search, Cookie, LogOut, ShieldCheck, User, Users, KeyRound, AlertTriangle, ChevronDown } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -116,15 +116,16 @@ export function TopBar({
   const [isPushing, setIsPushing] = useState(false);
   const [sheetSyncState, setSheetSyncState] = useState<"idle" | "syncing" | "done">("idle");
 
-  const handlePushUpdates = async () => {
+  const handlePushUpdates = async (mode: 'all' | 'recent_fu' = 'all') => {
     if (isPushing) return;
     setIsPushing(true);
-    const toastId = toast.loading("Menghubungkan ke Google Sheets...");
+    const modeLabel = mode === 'recent_fu' ? 'Resi Follow-Up' : 'Semua Resi';
+    const toastId = toast.loading(`Menyiapkan pengiriman ${modeLabel} ke Google Sheets...`);
     try {
       const csrfToken = getCsrfToken();
       const targetMonth = selectedSyncMonth === "current" ? activeBotMonth : (selectedSyncMonth || activeBotMonth);
       let offset = 0;
-      const limit = 100;
+      const limit = 250;
       let total = 0;
       let totalGasUpdated = 0;
 
@@ -139,6 +140,7 @@ export function TopBar({
           body: JSON.stringify({
             month: targetMonth,
             seller: normalizedSeller,
+            mode: mode,
             offset: offset,
             limit: limit,
           }),
@@ -146,12 +148,12 @@ export function TopBar({
 
         const data = await res.json();
         if (!res.ok || !data.success) {
-          throw new Error(data.message || "Gagal melakukan push status ke Google Sheets.");
+          throw new Error(data.message || `Gagal melakukan push status ${modeLabel} ke Google Sheets.`);
         }
 
         total = data.total || 0;
         if (total === 0) {
-          toast.info(data.message || "Tidak ada resi yang perlu di-push.", { id: toastId });
+          toast.info(data.message || `Tidak ada ${modeLabel.toLowerCase()} yang perlu di-push.`, { id: toastId });
           break;
         }
 
@@ -160,18 +162,18 @@ export function TopBar({
         totalGasUpdated += (data.updated_in_gas || 0);
         const percent = Math.min(100, Math.round((offset / total) * 100));
 
-        toast.loading(`Mendorong Status & Warna (${offset}/${total} resi - ${percent}%)...`, { id: toastId });
+        toast.loading(`Mendorong ${modeLabel} (${offset}/${total} resi - ${percent}%)...`, { id: toastId });
 
         if (data.done || offset >= total || processed === 0) {
-          toast.success("Berhasil Push ke Google Sheets!", {
+          toast.success(`Berhasil Push ${modeLabel} ke Google Sheets!`, {
             id: toastId,
-            description: `${offset} resi status dan warna telah terkirim ke Google Sheets (${activeBotMonthName}).`,
+            description: `${offset} resi telah berhasil disinkronkan ke Google Sheets (${activeBotMonthName}).`,
           });
           break;
         }
       }
     } catch (err: any) {
-      toast.error("Gagal melakukan push status: " + (err.message || String(err)), { id: toastId });
+      toast.error(`Gagal melakukan push status: ${err.message || String(err)}`, { id: toastId });
     } finally {
       setIsPushing(false);
     }
@@ -580,19 +582,55 @@ export function TopBar({
                 <RefreshCw className="h-3.5 w-3.5 text-emerald-600" /> Sync Sheets
               </Button>
 
-              <Button
-                variant="outline"
-                disabled={isPushing}
-                className="gap-1.5 border-blue-600/70 bg-blue-50 text-blue-900 hover:bg-blue-100 hover:text-blue-950 cursor-pointer font-semibold text-xs h-9 shadow-xs rounded-lg"
-                onClick={handlePushUpdates}
-              >
-                {isPushing ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-600" />
-                ) : (
-                  <Send className="h-3.5 w-3.5 text-blue-600" />
-                )}
-                Push Status
-              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="outline"
+                    disabled={isPushing}
+                    className="gap-1.5 border-blue-600/70 bg-blue-50 text-blue-900 hover:bg-blue-100 hover:text-blue-950 cursor-pointer font-semibold text-xs h-9 shadow-xs rounded-lg"
+                    title="Pilih mode Push Status ke Google Sheets"
+                  >
+                    {isPushing ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-600" />
+                    ) : (
+                      <Send className="h-3.5 w-3.5 text-blue-600" />
+                    )}
+                    Push Status
+                    <ChevronDown className="h-3 w-3 opacity-60 ml-0.5" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-64 p-1.5 shadow-lg rounded-xl bg-white border border-slate-200">
+                  <DropdownMenuItem
+                    onClick={() => handlePushUpdates('all')}
+                    disabled={isPushing}
+                    className="flex flex-col items-start gap-0.5 p-2 rounded-lg cursor-pointer hover:bg-blue-50 focus:bg-blue-50 text-slate-800"
+                  >
+                    <div className="flex items-center gap-2 font-bold text-xs text-blue-900">
+                      <Send className="h-3.5 w-3.5 text-blue-600 shrink-0" />
+                      Push Semua Resi
+                    </div>
+                    <span className="text-[10px] text-slate-500 pl-5.5 leading-snug">
+                      Kirim seluruh status resi (Delivered, Retur, FU) ke Google Sheets.
+                    </span>
+                  </DropdownMenuItem>
+
+                  <DropdownMenuSeparator className="my-1 bg-slate-100" />
+
+                  <DropdownMenuItem
+                    onClick={() => handlePushUpdates('recent_fu')}
+                    disabled={isPushing}
+                    className="flex flex-col items-start gap-0.5 p-2 rounded-lg cursor-pointer hover:bg-amber-50 focus:bg-amber-50 text-slate-800"
+                  >
+                    <div className="flex items-center gap-2 font-bold text-xs text-amber-900">
+                      <Zap className="h-3.5 w-3.5 text-amber-600 shrink-0" />
+                      Push Resi Baru Di-Follow Up
+                    </div>
+                    <span className="text-[10px] text-slate-500 pl-5.5 leading-snug">
+                      Hanya kirim resi hasil Follow Up CS (Kuning, Hijau, FU Pos).
+                    </span>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           )}
 
@@ -602,7 +640,7 @@ export function TopBar({
               variant="outline"
               className="gap-1.5 text-xs h-9 font-semibold border-slate-200 bg-white hover:bg-slate-50 cursor-pointer shadow-xs text-slate-700 hover:text-slate-900 rounded-lg"
               onClick={onOpenPostOffices}
-              title="Buka Database Kontak WhatsApp KC/KCP Pos Indonesia"
+              title="Buka Database Kontak WhatsApp KC/KCU Pos Indonesia"
             >
               <Building2 className="h-3.5 w-3.5 text-blue-600" /> Kontak KC Pos
             </Button>

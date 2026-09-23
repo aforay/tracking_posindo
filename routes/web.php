@@ -28,6 +28,9 @@ Route::middleware(['role:admin,cs'])->group(function () {
     Route::post('/shipments/bulk-action', [DashboardController::class, 'bulkAction'])->name('shipments.bulk_action');
     Route::post('/shipments/{id}/color', [DashboardController::class, 'updateColor'])->name('shipments.color');
     Route::post('/shipments/{id}/update-color', [DashboardController::class, 'updateColor'])->name('shipments.update_color');
+    Route::post('/shipments/{id}/push-sheet', [DashboardController::class, 'pushSingleToSheet'])->name('shipments.push_single');
+    Route::post('/shipments/push-selected', [DashboardController::class, 'pushSelectedToSheets'])->name('shipments.push_selected');
+    Route::post('/shipments/push-all-fu-pos', [DashboardController::class, 'pushAllFuPos'])->name('shipments.push_all_fu_pos');
     Route::get('/shipments/{id}/logs', [DashboardController::class, 'shipmentLogs'])->name('shipments.logs');
 
     // Profile & Password self-update

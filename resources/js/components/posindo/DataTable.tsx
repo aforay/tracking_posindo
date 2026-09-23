@@ -17,6 +17,7 @@ import {
   Bot,
   History,
   Loader2,
+  UploadCloud,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -109,7 +110,7 @@ export function DataTable({
         const existing = resolvedOffices[r.resi] || resolvedOffices[r.id] || r.kantorTujuan;
         return (
           r.resi &&
-          (!existing || generic.includes(existing.trim().toUpperCase())) &&
+          (!existing || generic.includes(existing.trim().toUpperCase()) || existing.toUpperCase().includes('KCP')) &&
           !resolvingRef.current.has(r.resi)
         );
       })
@@ -179,6 +180,39 @@ export function DataTable({
     }
   };
 
+  const [pushingResiId, setPushingResiId] = useState<string | null>(null);
+
+  const handleSinglePush = async (row: Shipment) => {
+    try {
+      setPushingResiId(row.id);
+      const csrfToken =
+        document.querySelector('meta[name="csrf-token"]')?.getAttribute("content") ||
+        (document.cookie.match(/XSRF-TOKEN=([^;]+)/)?.[1] ? decodeURIComponent(document.cookie.match(/XSRF-TOKEN=([^;]+)/)![1]) : "");
+
+      const res = await fetch(`/shipments/${row.id}/push-sheet`, {
+        method: "POST",
+        headers: {
+          "Accept": "application/json",
+          "Content-Type": "application/json",
+          "X-CSRF-TOKEN": csrfToken,
+          "X-XSRF-TOKEN": csrfToken,
+        },
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success(`Resi ${row.resi} berhasil di-push ke Google Sheets!`, {
+          description: "Status dan warna di spreadsheet berhasil diperbarui secara instan.",
+        });
+      } else {
+        toast.error(data.message || "Gagal push resi ke Google Sheets");
+      }
+    } catch (err: any) {
+      toast.error("Terjadi kesalahan saat push resi: " + (err?.message || err));
+    } finally {
+      setPushingResiId(null);
+    }
+  };
+
   const copy = (resi: string) => {
     void navigator.clipboard?.writeText(resi);
     toast.success("No. Resi disalin", { description: resi });
@@ -199,7 +233,7 @@ export function DataTable({
               </th>
               <th className="w-12 whitespace-nowrap">No</th>
               <th className="w-32 whitespace-nowrap">Seller / Mitra</th>
-              <th className="w-44 whitespace-nowrap">
+              <th className="min-w-[220px] whitespace-nowrap">
                 <button
                   type="button"
                   onClick={() => onSort?.("resi")}
@@ -234,7 +268,9 @@ export function DataTable({
             {(Array.isArray(rows) ? rows : []).map((row, i) => {
               if (!row) return null;
               const meta = fuMeta[row.fu] || fuMeta["PUTIH"];
-              const dark = row.fu === "BIRU_TUA";
+              const isFuPos = row.fu === "BIRU_TUA";
+              const dark = !isFuPos && row.fu === "ORANGE";
+              const rowBg = isFuPos ? "transparent" : meta.bg;
               const isChecked = Boolean(selected && typeof selected.has === "function" && selected.has(row.id));
               const niposUpper = (row.nipos || "").toUpperCase();
               const isRetur = row.fu === "ORANGE" || niposUpper.includes("RETURN") || niposUpper === "DELIVERED (RETURN DELIVERY)";
@@ -246,8 +282,8 @@ export function DataTable({
               return (
                 <tr
                   key={row.id || `row-${i}`}
-                  style={{ backgroundColor: meta.bg, color: dark ? "#FFFFFF" : "#111827" }}
-                  className="border-b border-border/70 align-top hover:opacity-95"
+                  style={{ backgroundColor: rowBg, color: dark ? "#FFFFFF" : "#111827" }}
+                  className={`border-b border-border/70 align-top hover:opacity-95 ${isFuPos ? "bg-blue-50/20" : ""}`}
                 >
                   <td className="px-3 py-2">
                       <Checkbox
@@ -267,38 +303,102 @@ export function DataTable({
                         {row.seller}
                       </span>
                     </td>
-                    <td className="px-3 py-2">
-                      <div className="flex items-center gap-1">
+                    <td className="px-3 py-2.5">
+                      <div className="flex flex-col gap-1.5 min-w-[210px]">
                         {(() => {
                           const encryptedResi = encodeURIComponent(btoa(row.resi));
                           const detailUrl = `https://pid.posindonesia.co.id/lacak/admin/detail_lacak_banyak.php?id=${encryptedResi}`;
+                          
+                          if (isFuPos) {
+                            return (
+                              <>
+                                {/* Badge FU POS (Clean, sharp, exact styling) */}
+                                <div className="inline-flex items-center gap-1.5 w-fit bg-[#1E40AF] hover:bg-blue-900 text-white px-2.5 py-1 rounded-md shadow-xs border border-blue-400/40 transition">
+                                  <button
+                                    type="button"
+                                    onClick={() => setTimelineShipment(row)}
+                                    className="font-mono text-xs font-bold hover:underline cursor-pointer text-left text-white tracking-tight"
+                                    title="Klik untuk melihat Detail Timeline Pelacakan Resi (FU POS / Eskalasi KC)"
+                                  >
+                                    {row.resi}
+                                  </button>
+                                  <span className="text-[9px] font-black bg-white/20 text-white px-1.5 py-0.2 rounded leading-tight tracking-wider uppercase">
+                                    FU POS
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => copy(row.resi)}
+                                    className="rounded p-0.5 hover:bg-white/20 transition cursor-pointer text-white/90 hover:text-white"
+                                    title="Salin No. Resi"
+                                  >
+                                    <Copy className="h-3 w-3" />
+                                  </button>
+                                  <a
+                                    href={detailUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="rounded p-0.5 hover:bg-white/20 transition cursor-pointer text-white/90 hover:text-white"
+                                    title="Buka Detail Lacak NIPOS di Tab Baru"
+                                  >
+                                    <ExternalLink className="h-3 w-3" />
+                                  </a>
+                                </div>
+
+                                {/* Tombol Push Satuan Real-Time (Sleek, Modern, & Eye-Pleasing) */}
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleSinglePush(row);
+                                  }}
+                                  disabled={pushingResiId === row.id}
+                                  className="w-fit inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-600 hover:text-white border border-emerald-300 hover:border-emerald-600 shadow-2xs hover:shadow-xs transition-all duration-150 cursor-pointer disabled:opacity-50"
+                                  title="Push resi ini langsung ke Google Sheets (Satuan / Real-Time)"
+                                >
+                                  {pushingResiId === row.id ? (
+                                    <>
+                                      <Loader2 className="h-3 w-3 animate-spin text-emerald-600" />
+                                      <span>Mengirim ke Sheets...</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <UploadCloud className="h-3.5 w-3.5" />
+                                      <span>Push ke Sheets</span>
+                                    </>
+                                  )}
+                                </button>
+                              </>
+                            );
+                          }
+
                           return (
-                            <>
+                            <div className="flex items-center gap-1">
                               <button
                                 type="button"
                                 onClick={() => setTimelineShipment(row)}
-                                className="font-mono text-xs font-bold underline-offset-2 hover:underline text-[#1E40AF] cursor-pointer text-left"
+                                className={`font-mono text-xs font-bold underline-offset-2 hover:underline cursor-pointer text-left ${dark ? "text-white" : "text-[#1E40AF]"}`}
                                 title="Klik untuk melihat Detail Timeline Pelacakan Resi"
                               >
                                 {row.resi}
                               </button>
                               <button
+                                type="button"
                                 onClick={() => copy(row.resi)}
-                                className="rounded p-1 opacity-60 transition hover:opacity-100 cursor-pointer"
-                                aria-label="Salin resi"
+                                className={`rounded p-1 opacity-60 transition hover:opacity-100 cursor-pointer ${dark ? "text-white hover:bg-white/20" : "text-slate-600 hover:bg-slate-100"}`}
+                                title="Salin no. resi"
                               >
-                                <Copy className="h-3.5 w-3.5" />
+                                <Copy className="h-3 w-3" />
                               </button>
                               <a
                                 href={detailUrl}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="rounded p-0.5 opacity-60 transition hover:opacity-100 cursor-pointer text-[#1E40AF]"
+                                className={`rounded p-1 opacity-60 transition hover:opacity-100 cursor-pointer ${dark ? "text-white hover:bg-white/20" : "text-slate-600 hover:text-blue-600 hover:bg-slate-100"}`}
                                 title="Buka Detail Lacak NIPOS di Tab Baru"
                               >
-                                <ExternalLink className="h-3.5 w-3.5" />
+                                <ExternalLink className="h-3 w-3" />
                               </a>
-                            </>
+                            </div>
                           );
                         })()}
                       </div>
@@ -310,11 +410,20 @@ export function DataTable({
                       {(() => {
                         const rawKC = (resolvedOffices[row.resi] || resolvedOffices[row.id] || row.kantorTujuan || "").trim();
                         const isGenericKC = !rawKC || ['KC TUJUAN', 'KC', 'KANTOR POS TUJUAN', 'KC POS PENGANTARAN', 'KC PENGANTARAN', 'POS PENGANTARAN', 'KC POS INDONESIA', 'POS INDONESIA'].includes(rawKC.toUpperCase());
+                        const isKcp = /\bKCP\b/i.test(rawKC);
                         const cityRegency = extractCityRegency(row.alamat || "", rawKC);
                         
                         let displayKC = "";
                         let isResolving = false;
-                        if (!isGenericKC) {
+                        if (isKcp) {
+                          // KCP tidak bisa untuk follow up -> diarahkan ke KC / KCU
+                          if (cityRegency && cityRegency !== "-") {
+                            displayKC = `KC ${cityRegency.replace(/^(Kota|Kab\.?|Kec\.?)\s+/i, "").trim().toUpperCase()}`;
+                          } else {
+                            const officeClean = rawKC.replace(/^(?:KCP)\s+/i, "").replace(/\s+\d{5}[A-Za-z0-9]*$/, "").trim();
+                            displayKC = officeClean ? `KC ${officeClean.toUpperCase()}` : "KC TUJUAN";
+                          }
+                        } else if (!isGenericKC) {
                           displayKC = rawKC;
                         } else if (cityRegency && cityRegency !== "-") {
                           displayKC = `KC ${cityRegency.replace(/^(Kota|Kab\.?|Kec\.?)\s+/i, "").trim().toUpperCase()}`;
@@ -515,6 +624,19 @@ export function DataTable({
                           title="Lihat Riwayat Log Aktivitas & Catatan CS"
                         >
                           <History className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleSinglePush(row)}
+                          disabled={pushingResiId === row.id}
+                          className="p-1 rounded-md border border-black/10 bg-white/70 hover:bg-emerald-50 text-slate-700 hover:text-emerald-700 transition cursor-pointer shadow-2xs disabled:opacity-50"
+                          title="Push Resi ini Langsung ke Google Sheets"
+                        >
+                          {pushingResiId === row.id ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin text-emerald-600" />
+                          ) : (
+                            <UploadCloud className="h-3.5 w-3.5" />
+                          )}
                         </button>
                       </div>
                       {noteFor === row.id && (

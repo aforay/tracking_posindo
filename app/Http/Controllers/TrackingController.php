@@ -103,11 +103,12 @@ class TrackingController extends Controller
             $query->where('color_code', strtoupper($selectedColor));
         }
         if (!empty($searchQuery)) {
-            $query->where(function ($q) use ($searchQuery) {
-                $q->where('resi', 'LIKE', "%{$searchQuery}%")
-                  ->orWhere('nama_konsumen', 'LIKE', "%{$searchQuery}%")
-                  ->orWhere('no_hp', 'LIKE', "%{$searchQuery}%")
-                  ->orWhere('alamat', 'LIKE', "%{$searchQuery}%");
+            $lowerSearch = mb_strtolower($searchQuery, 'UTF-8');
+            $query->where(function ($q) use ($lowerSearch) {
+                $q->whereRaw('LOWER(resi) LIKE ?', ["%{$lowerSearch}%"])
+                  ->orWhereRaw('LOWER(nama_konsumen) LIKE ?', ["%{$lowerSearch}%"])
+                  ->orWhereRaw('LOWER(no_hp) LIKE ?', ["%{$lowerSearch}%"])
+                  ->orWhereRaw('LOWER(alamat) LIKE ?', ["%{$lowerSearch}%"]);
             });
         }
 
@@ -304,7 +305,22 @@ class TrackingController extends Controller
 
         foreach ($shipments as $s) {
             $rawKC = strtoupper(trim((string)$s->kantor_tujuan));
-            if (!empty($rawKC) && !in_array($rawKC, $genericNames)) {
+            $isKcp = str_contains($rawKC, 'KCP');
+
+            if ($isKcp) {
+                $matched = PostOffice::matchByDestinationOrAddress($s->kantor_tujuan, $s->alamat);
+                if ($matched) {
+                    $s->kantor_pos_id = $matched->id;
+                    $s->kantor_tujuan = $matched->name;
+                    $s->last_location = $matched->name;
+                    $s->saveQuietly();
+                    $resolvedMap[$s->no_resi] = $matched->name;
+                    $resolvedMap[(string)$s->id] = $matched->name;
+                    continue;
+                }
+            }
+
+            if (!empty($rawKC) && !in_array($rawKC, $genericNames) && !$isKcp) {
                 $resolvedMap[$s->no_resi] = $s->kantor_tujuan;
                 $resolvedMap[(string)$s->id] = $s->kantor_tujuan;
             } elseif (!empty($s->no_resi)) {
@@ -332,12 +348,21 @@ class TrackingController extends Controller
                                 $s->kantor_tujuan = $matched->name;
                                 $s->last_location = $matched->name;
                                 $resolvedMap[$s->no_resi] = $matched->name;
-                                $resolvedMap[(string)$s->id] = $matched->name;
                             } else {
-                                $s->kantor_tujuan = $officeName;
-                                $s->last_location = $officeName;
-                                $resolvedMap[$s->no_resi] = $officeName;
-                                $resolvedMap[(string)$s->id] = $officeName;
+                                $targetOffice = $officeName;
+                                if (str_contains(strtoupper($targetOffice), 'KCP')) {
+                                    $matchedAddr = PostOffice::matchByDestinationOrAddress(null, $s->alamat);
+                                    if ($matchedAddr) {
+                                        $targetOffice = $matchedAddr->name;
+                                        $s->kantor_pos_id = $matchedAddr->id;
+                                    } else {
+                                        $targetOffice = trim(preg_replace('/\bKCP\b/i', 'KC', $targetOffice));
+                                    }
+                                }
+                                $s->kantor_tujuan = $targetOffice;
+                                $s->last_location = $targetOffice;
+                                $resolvedMap[$s->no_resi] = $targetOffice;
+                                $resolvedMap[(string)$s->id] = $targetOffice;
                             }
                             $hasChanges = true;
                         }

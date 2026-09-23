@@ -18,13 +18,14 @@ class PostOfficeController extends Controller
 
         if ($request->filled('search')) {
             $search = trim($request->search);
-            $query->where(function ($q) use ($search) {
-                $q->where('name', 'LIKE', "%{$search}%")
-                  ->orWhere('city', 'LIKE', "%{$search}%")
-                  ->orWhere('province', 'LIKE', "%{$search}%")
-                  ->orWhere('code', 'LIKE', "%{$search}%")
-                  ->orWhere('phone_wa', 'LIKE', "%{$search}%")
-                  ->orWhere('pic_name', 'LIKE', "%{$search}%");
+            $lowerSearch = mb_strtolower($search, 'UTF-8');
+            $query->where(function ($q) use ($lowerSearch) {
+                $q->whereRaw('LOWER(name) LIKE ?', ["%{$lowerSearch}%"])
+                  ->orWhereRaw('LOWER(city) LIKE ?', ["%{$lowerSearch}%"])
+                  ->orWhereRaw('LOWER(province) LIKE ?', ["%{$lowerSearch}%"])
+                  ->orWhereRaw('LOWER(code) LIKE ?', ["%{$lowerSearch}%"])
+                  ->orWhereRaw('LOWER(phone_wa) LIKE ?', ["%{$lowerSearch}%"])
+                  ->orWhereRaw('LOWER(pic_name) LIKE ?', ["%{$lowerSearch}%"]);
             });
         }
 

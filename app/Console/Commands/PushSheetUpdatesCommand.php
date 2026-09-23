@@ -19,7 +19,7 @@ class PushSheetUpdatesCommand extends Command
                             {--month= : Specific month number (1-12) to process, or ALL}
                             {--sheet= : Specific sheet tab name to process (e.g. "AGUSTUS (ZAHERBA)")}
                             {--seller= : Filter specific seller (e.g. "Aliqa" or "Zaherba")}
-                            {--chunk=300 : Number of tracking items per batch request (300-500 recommended)}
+                            {--chunk=1000 : Number of tracking items per batch request (500-1000 recommended)}
                             {--all : Force push all shipments without month filtering}';
 
     /**
@@ -37,7 +37,7 @@ class PushSheetUpdatesCommand extends Command
         @ini_set('memory_limit', '2048M');
         @set_time_limit(0);
 
-        $chunkSize = max(50, (int)$this->option('chunk'));
+        $chunkSize = max(100, (int)($this->option('chunk') ?: 1000));
         $monthOpt = $this->option('month');
         $sheetOpt = $this->option('sheet');
         $sellerOpt = $this->option('seller');
@@ -139,7 +139,7 @@ class PushSheetUpdatesCommand extends Command
         $bar->start();
 
         // Process in DB chunks to preserve memory using chunkById and minimal selected columns
-        $query->select(['id', 'nama_seller', 'no_resi', 'tanggal_kirim', 'status_pos', 'keterangan', 'status_kategori', 'sla_days', 'last_tracked_at'])
+        $query->select(['id', 'nama_seller', 'no_resi', 'tanggal_kirim', 'status_pos', 'keterangan', 'status_kategori', 'color_code', 'sla_days', 'last_tracked_at'])
               ->chunkById($chunkSize, function ($shipments) use ($syncService, $monthSheetMapZaherba, $monthSheetMapAliqa, $sellerOpt, $targetMonth, &$totalPushed, &$successBatches, &$totalRowsUpdatedInGas, $bar) {
                   $batchPayload = [];
                   foreach ($shipments as $shipment) {
@@ -158,21 +158,30 @@ class PushSheetUpdatesCommand extends Command
                       $slaStr = $botService->formatRunningSla($shipment->tanggal_kirim, $shipment->status_kategori ?: 'IN_PROCESS', $shipment->sla_days ?: 2);
 
                       if ($isInProcess) {
-                          $statusPosText = 'IN PROSES';
-                          $keteranganText = $shipment->keterangan ?: ($shipment->status_pos ?: 'PROSES PENGIRIMAN POS');
-                          $colorCode = 'PUTIH';
-                          $statusKategori = 'IN_PROCESS';
+                          $statusPosText = $shipment->status_pos ?: 'IN PROSES';
+                          $keteranganText = $shipment->keterangan ?: 'PROSES PENGIRIMAN POS';
+                          $colorCode = $shipment->color_code ?: 'PUTIH';
+                          $statusKategori = in_array($colorCode, ['KUNING', 'HIJAU', 'BIRU_TUA']) ? 'FOLLOW_UP' : 'IN_PROCESS';
                       } elseif ($isRetur) {
                           $statusPosText = $shipment->status_pos ?: 'DELIVERED (RETURN DELIVERY)';
                           $keteranganText = $shipment->keterangan ?: 'DITERIMA PENGIRIM (MITRA)';
-                          $colorCode = 'ORANGE';
+                          $colorCode = $shipment->color_code ?: 'ORANGE';
                           $statusKategori = 'RETUR';
                       } else {
-                          $statusPosText = 'DELIVERED';
+                          $statusPosText = $shipment->status_pos ?: 'DELIVERED';
                           $keteranganText = $shipment->keterangan ?: 'DITERIMA YANG BERSANGKUTAN';
-                          $colorCode = 'BIRU';
+                          $colorCode = $shipment->color_code ?: 'BIRU';
                           $statusKategori = 'SUKSES';
                       }
+
+                      $statusLabel = match($colorCode) {
+                          'BIRU' => 'DELIVERED (SUKSES)',
+                          'ORANGE' => 'RETUR (RETURN)',
+                          'KUNING' => 'FOLLOW UP',
+                          'HIJAU' => 'SUDAH DIHUBUNGI',
+                          'BIRU_TUA' => 'ESKALASI POS',
+                          default => ($isInProcess ? 'IN PROSES' : $statusPosText),
+                      };
 
                       $batchPayload[] = [
                           'seller' => $shipment->nama_seller ?: ($isAliqa ? 'Aliqa' : 'Zaherba'),
@@ -183,6 +192,7 @@ class PushSheetUpdatesCommand extends Command
                           'keterangan' => $keteranganText,
                           'status_kategori' => $statusKategori,
                           'color_code' => $colorCode,
+                          'status_label' => $statusLabel,
                           'sla' => $slaStr,
                           'sla_days' => $slaStr,
                           'prevent_overwrite_delivered_retur' => true,

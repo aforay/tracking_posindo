@@ -5,9 +5,9 @@
  */
 
 const COLOR_HEX_MAP = {
-  'BIRU': '#32B8C8',      // Cyan-Teal (Paket Sukses)
-  'ORANGE': '#FFB719',    // Orange/Amber (Paket Retur)
-  'KUNING': '#FFFF00',    // Bright Yellow (Sudah di FU)
+  'BIRU': '#40e4b4',      // Delivered (#40e4b4)
+  'ORANGE': '#ff0000',    // Retur (#ff0000)
+  'KUNING': '#ffff00',    // FU Kuning (#ffff00)
   'PUTIH': '#FFFFFF',     // White (Blm di FU / Reset)
   'HIJAU': '#93C47D',     // Soft Green (FU 2 Kali)
   'BIRU_TUA': '#1F4E79'   // Dark Navy Blue (FU POS)
@@ -129,7 +129,11 @@ function doPost(e) {
 
           if (match && targetSearch) {
             const rowText = values[r].join(' ').toUpperCase();
-            if (rowText.indexOf(targetSearch) === -1) {
+            const searchTerms = targetSearch.split(/\s+/).filter(Boolean);
+            const allTermsMatch = searchTerms.every(function(term) {
+              return rowText.indexOf(term) !== -1;
+            });
+            if (!allTermsMatch) {
               match = false;
             }
           }
@@ -246,11 +250,18 @@ function doPost(e) {
             const colorCode = String(item.color_code || item.status_color || 'PUTIH').toUpperCase();
             const hexColor = COLOR_HEX_MAP[colorCode] || '#FFFFFF';
 
-            // 1. Mewarnai Baris (Aliqa: Kolom C-R 16 kolom; Zaherba: Kolom C-J 8 kolom)
-            if (isAliqaSheet) {
-              sheet.getRange(rowNumber, 3, 1, 16).setBackground(hexColor);
+            // 1. Pewarnaan: Khusus BIRU_TUA (FU POS), hanya sel Resi yang diwarnai!
+            if (colorCode === 'BIRU_TUA') {
+              if (resiCol >= 0) {
+                sheet.getRange(rowNumber, resiCol + 1).setBackground(hexColor).setFontColor('#FFFFFF');
+              }
             } else {
-              sheet.getRange(rowNumber, 3, 1, 8).setBackground(hexColor);
+              // Status selain FU POS: Mewarnai seluruh baris data
+              if (isAliqaSheet) {
+                sheet.getRange(rowNumber, 3, 1, 16).setBackground(hexColor);
+              } else {
+                sheet.getRange(rowNumber, 3, 1, 8).setBackground(hexColor);
+              }
             }
 
             // 2. Update Sel Kolom 'Status NIPOS' (Lindungi Formula '=' jika ada)
@@ -373,10 +384,16 @@ function doPost(e) {
         if (cellResi && targetResiMap[cellResi]) {
           const rowNumber = r + 1;
 
-          if (isAliqaSheet) {
-            sheet.getRange(rowNumber, 3, 1, 16).setBackground(hexColor);
+          if (targetStatus === 'BIRU_TUA' || hexColor === '#1F4E79') {
+            if (resiCol >= 0) {
+              sheet.getRange(rowNumber, resiCol + 1).setBackground(hexColor).setFontColor('#FFFFFF');
+            }
           } else {
-            sheet.getRange(rowNumber, 3, 1, 8).setBackground(hexColor);
+            if (isAliqaSheet) {
+              sheet.getRange(rowNumber, 3, 1, 16).setBackground(hexColor);
+            } else {
+              sheet.getRange(rowNumber, 3, 1, 8).setBackground(hexColor);
+            }
           }
 
           if (trackingPosCol >= 0) {

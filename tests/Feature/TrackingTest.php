@@ -913,6 +913,173 @@ HTML;
         $this->assertEquals('SUKSES', $fresh->status_kategori);
         $this->assertEquals('BIRU', $fresh->color_code);
     }
+
+    /**
+     * Test that manual CS follow up status (BIRU_TUA, HIJAU, KUNING) is strictly preserved
+     * when tracking returns operational / transit / cancel status.
+     */
+    public function test_follow_up_statuses_are_preserved_when_in_process_or_cancel_tracked(): void
+    {
+        $shipment = OutgoingShipment::create([
+            'nama_seller' => 'Mitra Aliqa',
+            'no_resi' => 'BAC3003264829E491D7B_PRESERVE_TEST',
+            'nama_penerima' => 'Wartini',
+            'no_hp' => '081234567890',
+            'alamat' => 'Cilacap',
+            'tanggal_kirim' => '2026-03-30',
+            'status_pos' => 'CANCEL',
+            'keterangan' => 'CANCEL',
+            'status_kategori' => 'FOLLOW_UP',
+            'color_code' => 'BIRU_TUA',
+            'fu_pos_date' => '2026-09-22',
+            'sla_days' => 2,
+        ]);
+
+        $botService = $this->createMock(TrackingBotService::class);
+        $botService->method('trackResiList')->willReturn([
+            'BAC3003264829E491D7B_PRESERVE_TEST' => [
+                'resi' => 'BAC3003264829E491D7B_PRESERVE_TEST',
+                'status_pos' => 'CANCEL',
+                'keterangan' => 'CANCEL',
+                'status_kategori' => 'IN_PROCESS',
+                'color_code' => 'PUTIH',
+                'sla_days' => 2,
+                'tanggal_kirim' => '2026-03-30',
+            ]
+        ]);
+        $botService->method('categorizeStatus')->willReturn('IN_PROCESS');
+        $botService->method('determineColorCode')->willReturn('PUTIH');
+        $botService->method('extractSlaDays')->willReturn(2);
+
+        $job = new ProcessNiposTrackingJob([$shipment->id]);
+        $job->handle($botService);
+
+        $fresh = $shipment->fresh();
+        $this->assertEquals('CANCEL', $fresh->status_pos);
+        $this->assertEquals('FOLLOW_UP', $fresh->status_kategori);
+        $this->assertEquals('BIRU_TUA', $fresh->color_code, 'BIRU_TUA must not be overwritten to PUTIH during tracking when package is in progress/cancel');
+        $this->assertEquals('2026-09-22', $fresh->fu_pos_date);
+    }
+
+    public function test_single_resi_push_to_sheets()
+    {
+        $user = \App\Models\User::factory()->create(['role' => 'cs']);
+        $shipment = OutgoingShipment::create([
+            'no_resi' => 'BAC3003264829E491D7B_SINGLE_PUSH',
+            'nama_seller' => 'Mitra Aliqa',
+            'nama_penerima' => 'Aisyah Single Push',
+            'tanggal_kirim' => '2026-03-30',
+            'status_pos' => 'IN PROCESS',
+            'keterangan' => 'ANTARAN KE PENERIMA',
+            'status_kategori' => 'FOLLOW_UP',
+            'color_code' => 'BIRU_TUA',
+            'fu_pos_date' => '2026-03-31',
+        ]);
+
+        $response = $this->actingAs($user)->postJson("/shipments/{$shipment->id}/push-sheet");
+
+        $response->assertStatus(200);
+        $response->assertJson([
+            'success' => true,
+            'resi' => 'BAC3003264829E491D7B_SINGLE_PUSH',
+            'color_code' => 'BIRU_TUA',
+        ]);
+    }
+
+    public function test_bulk_selected_push_to_sheets()
+    {
+        $user = \App\Models\User::factory()->create(['role' => 'cs']);
+        $s1 = OutgoingShipment::create([
+            'no_resi' => 'BAC_BULK_PUSH_01',
+            'nama_seller' => 'Mitra Zaherba',
+            'nama_penerima' => 'Budi 1',
+            'tanggal_kirim' => '2026-03-30',
+            'status_kategori' => 'FOLLOW_UP',
+            'color_code' => 'BIRU_TUA',
+        ]);
+        $s2 = OutgoingShipment::create([
+            'no_resi' => 'BAC_BULK_PUSH_02',
+            'nama_seller' => 'Mitra Zaherba',
+            'nama_penerima' => 'Budi 2',
+            'tanggal_kirim' => '2026-03-30',
+            'status_kategori' => 'SUKSES',
+            'color_code' => 'BIRU',
+        ]);
+
+        $response = $this->actingAs($user)->postJson("/shipments/push-selected", [
+            'ids' => [$s1->id, $s2->id],
+        ]);
+
+        $response->assertStatus(200);
+        $response->assertJson([
+            'success' => true,
+            'processed' => 2,
+        ]);
+    }
+
+    public function test_push_all_fu_pos_to_sheets()
+    {
+        $user = \App\Models\User::factory()->create(['role' => 'admin']);
+        OutgoingShipment::create([
+            'no_resi' => 'BAC_ALL_FU_POS_01',
+            'nama_seller' => 'Mitra Aliqa',
+            'nama_penerima' => 'Aisyah FU 1',
+            'tanggal_kirim' => '2026-03-30',
+            'status_kategori' => 'FOLLOW_UP',
+            'color_code' => 'BIRU_TUA',
+        ]);
+        OutgoingShipment::create([
+            'no_resi' => 'BAC_ALL_FU_POS_02',
+            'nama_seller' => 'Mitra Aliqa',
+            'nama_penerima' => 'Aisyah FU 2',
+            'tanggal_kirim' => '2026-03-30',
+            'status_kategori' => 'FOLLOW_UP',
+            'color_code' => 'BIRU_TUA',
+        ]);
+
+        $response = $this->actingAs($user)->postJson("/shipments/push-all-fu-pos", [
+            'seller' => 'Mitra Aliqa',
+            'month' => 3,
+        ]);
+
+        $response->assertStatus(200);
+        $response->assertJson([
+            'success' => true,
+            'count' => 2,
+        ]);
+    }
+
+    public function test_case_insensitive_search_uppercase_lowercase_and_mixed()
+    {
+        $user = \App\Models\User::factory()->create(['role' => 'admin']);
+        OutgoingShipment::create([
+            'no_resi' => 'BAC_MALIK_TEST_01',
+            'nama_seller' => 'Mitra Aliqa',
+            'nama_penerima' => 'Muhammad Abdul Malik',
+            'alamat' => 'Jl. Merdeka No 10',
+            'tanggal_kirim' => '2026-03-15',
+            'status_kategori' => 'SUKSES',
+            'color_code' => 'BIRU',
+        ]);
+
+        // 1. Search in ALL CAPS
+        $responseCaps = $this->actingAs($user)->get("/shipments?search=MALIK");
+        $responseCaps->assertStatus(200);
+
+        // 2. Search in all lowercase
+        $responseLower = $this->actingAs($user)->get("/shipments?search=malik");
+        $responseLower->assertStatus(200);
+
+        // 3. Search in mixed case
+        $responseMixed = $this->actingAs($user)->get("/shipments?search=MaLiK");
+        $responseMixed->assertStatus(200);
+
+        // Assert all responses return the shipment
+        $responseCaps->assertSee('BAC_MALIK_TEST_01');
+        $responseLower->assertSee('BAC_MALIK_TEST_01');
+        $responseMixed->assertSee('BAC_MALIK_TEST_01');
+    }
 }
+
 
 

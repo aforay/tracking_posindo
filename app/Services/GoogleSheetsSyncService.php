@@ -149,18 +149,6 @@ class GoogleSheetsSyncService
                     Log::warning("GoogleSheetsSyncService: Primary fetch failed for ID [{$spreadsheetId}]: " . $e->getMessage());
                 }
 
-                if ((!$response || $response->failed() || empty(trim((string)$response->body()))) && ($spreadsheetId === '1EeckOBzI5EPNTT1bHsqu6kar9asKD6Ifar2CpTkSnBg' || $isAliqaSeller)) {
-                    $fallbackId = '1wKS0ZklbpTeLHN0APu2aIh7DBka3g4O15KNSJ0Wcdac';
-                    Log::warning("GoogleSheetsSyncService: Primary Sheet ID [{$spreadsheetId}] inaccessible. Trying fallback ID [{$fallbackId}] for sheet [{$sheetName}]...");
-                    $csvUrl = "https://docs.google.com/spreadsheets/d/{$fallbackId}/gviz/tq?tqx=out:csv&sheet=" . urlencode($sheetName);
-                    $response = Http::timeout(120)
-                        ->withHeaders([
-                            'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                            'Accept' => 'text/csv,text/plain,*/*',
-                        ])
-                        ->get($csvUrl);
-                }
-
                 if (!$response || $response->failed() || empty(trim((string)$response->body()))) {
                     Log::warning("GoogleSheetsSyncService: Sheet [{$sheetName}] empty or not accessible via CSV export.");
                     continue;
@@ -249,9 +237,6 @@ class GoogleSheetsSyncService
     {
         $discovered = [];
         $targetIds = [$spreadsheetId];
-        if ($spreadsheetId === '1EeckOBzI5EPNTT1bHsqu6kar9asKD6Ifar2CpTkSnBg' || str_contains(strtoupper($defaultSeller), 'ALIQA')) {
-            $targetIds[] = '1wKS0ZklbpTeLHN0APu2aIh7DBka3g4O15KNSJ0Wcdac';
-        }
 
         foreach (array_unique($targetIds) as $sId) {
             try {
@@ -423,6 +408,7 @@ class GoogleSheetsSyncService
                     $statusCode = 200;
                     $responseBody = ['status' => 'success', 'message' => 'Testing mock reverse sync'];
                 } else {
+                    @set_time_limit(0);
                     $ch = curl_init($webhookUrl);
                     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
                     curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
@@ -432,7 +418,7 @@ class GoogleSheetsSyncService
                     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
                     curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
                     curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 15);
-                    curl_setopt($ch, CURLOPT_TIMEOUT, 60);
+                    curl_setopt($ch, CURLOPT_TIMEOUT, 120);
                     $body = curl_exec($ch);
                     $statusCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
                     curl_close($ch);
@@ -498,9 +484,27 @@ class GoogleSheetsSyncService
         // Mode A: Apps Script Webhook / Custom Webhook POST endpoint
         if (!empty($webhookUrl)) {
             try {
+                $targetSheet = '';
+                if (!empty($resiList)) {
+                    $firstShipment = \App\Models\OutgoingShipment::where('no_resi', $resiList[0])->first();
+                    if ($firstShipment && $firstShipment->tanggal_kirim) {
+                        $mNum = (int)date('n', strtotime($firstShipment->tanggal_kirim));
+                        $isAliqa = str_contains(strtoupper($firstShipment->nama_seller ?? ''), 'ALIQA');
+                        $monthSheetMapAliqa = [
+                            1 => 'JANUARI 2026 (FP ALIQA)', 2 => 'FEBRUARI 2026 (FP ALIQA)', 3 => 'MARET 2026 (FP ALIQA)',
+                            4 => 'APRIL 2026 (FP ALIQA)', 5 => 'MEI 2026 (FP ALIQA)', 6 => 'JUNI 2026 (FP ALIQA).',
+                            7 => 'JULI 2026 (FP ALIQA)', 8 => 'AGUSTUS 2026 (FP ALIQA)', 9 => 'SEPTEMBER 2026 (FP ALIQA)',
+                            10 => 'OKTOBER 2026 (FP ALIQA)', 11 => 'NOVEMBER 2026 (FP ALIQA)', 12 => 'DESEMBER 2026 (FP ALIQA)',
+                        ];
+                        $targetSheet = $isAliqa ? ($monthSheetMapAliqa[$mNum] ?? '') : '';
+                    }
+                }
+
                 $payload = [
                     'action'          => 'update_fu_status',   // action khusus FU untuk Apps Script
                     'spreadsheet_id'  => $spreadsheetId,
+                    'sheet'           => $targetSheet,
+                    'sheet_name'      => $targetSheet,
                     'resis'           => array_values($resiList),
                     'resi_list'       => array_values($resiList),
                     'status_color'    => $statusColor,
@@ -513,6 +517,7 @@ class GoogleSheetsSyncService
                     'updated_at'      => now()->toDateTimeString(),
                 ];
 
+                @set_time_limit(0);
                 $ch = curl_init($webhookUrl);
                 curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
                 curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
@@ -522,7 +527,7 @@ class GoogleSheetsSyncService
                 curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
                 curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
                 curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 15);
-                curl_setopt($ch, CURLOPT_TIMEOUT, 45);
+                curl_setopt($ch, CURLOPT_TIMEOUT, 90);
                 $body = curl_exec($ch);
                 $statusCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
                 curl_close($ch);

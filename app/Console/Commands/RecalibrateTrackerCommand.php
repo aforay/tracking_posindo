@@ -107,7 +107,14 @@ class RecalibrateTrackerCommand extends Command
                     $newStatusPos = $res['status_pos'] ?? 'IN PROSES';
                     $newKet = $res['keterangan'] ?? 'PROSES PENGIRIMAN POS (TRANSIT)';
                     $newCat = $res['status_kategori'] ?? $botService->categorizeStatus($newStatusPos, $newKet);
-                    $newColor = $res['color_code'] ?? $botService->determineColorCode($newCat);
+                    if (in_array($newCat, ['SUKSES', 'RETUR'])) {
+                        $newColor = $botService->determineColorCode($newCat);
+                    } elseif (in_array($shipment->color_code, ['BIRU_TUA', 'HIJAU', 'KUNING'])) {
+                        $newColor = $shipment->color_code;
+                        $newCat = 'FOLLOW_UP';
+                    } else {
+                        $newColor = $res['color_code'] ?? $botService->determineColorCode($newCat);
+                    }
                     $newSla = $res['sla_days'] ?? $botService->extractSlaDays($res['sla'] ?? '', $shipment->tanggal_kirim);
 
                     $kantorTujuan = !empty($res['kantor_tujuan']) ? $res['kantor_tujuan'] : $shipment->kantor_tujuan;

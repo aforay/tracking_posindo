@@ -96,7 +96,8 @@ start "Tracking Posindo - Queue Worker" /min cmd /c "php artisan queue:work --ti
 :: 6. Buka browser otomatis setelah delay 2 detik di background
 start /min cmd /c "timeout /t 2 >nul & start http://localhost:8000"
 
-:: 7. Jalankan server Laravel pada semua interface jaringan (0.0.0.0)
+:: 7. Jalankan server Laravel pada semua interface jaringan (0.0.0.0) dengan 10 Multi-Worker paralel
+set PHP_CLI_SERVER_WORKERS=10
 php artisan serve --host=0.0.0.0 --port=8000
 
 :: 8. Bersihkan proses background saat server ditutup

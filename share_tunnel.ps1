@@ -62,7 +62,8 @@ $serveProcess = $null
 $queueProcess = $null
 
 if (-not $portActive) {
-    Write-Host "[INFO] Menjalankan server Laravel (port 8000)..." -ForegroundColor Green
+    Write-Host "[INFO] Menjalankan server Laravel Multi-Worker (port 8000)..." -ForegroundColor Green
+    $env:PHP_CLI_SERVER_WORKERS = "10"
     $serveProcess = Start-Process -FilePath "php" -ArgumentList "artisan", "serve", "--host=0.0.0.0", "--port=8000" -PassThru -WindowStyle Hidden
     Start-Sleep -Seconds 2
 } else {

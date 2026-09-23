@@ -524,7 +524,8 @@ class ShipmentsImport
         $kategori = $botService->categorizeStatus($statusPos, $keterangan);
 
         // Tentukan color_code dari kolom FU sheet (prioritas) atau dari status_pos/keterangan
-        $colorCode = $this->resolveFuColorCode($fuRawStr, $kategori, $botService);
+        $explicitFuColor = $this->extractExplicitFuColor($fuRawStr);
+        $colorCode = $explicitFuColor ?: $botService->determineColorCode($kategori);
 
         return [
             'nama_seller'     => $seller,
@@ -537,6 +538,7 @@ class ShipmentsImport
             'keterangan'      => $keterangan ?: null,
             'status_kategori' => $kategori,
             'color_code'      => $colorCode,
+            'has_explicit_fu' => ($explicitFuColor !== null),
             'sla_days'        => $slaDays,
             'created_at'      => $now,
             'updated_at'      => $now,
@@ -544,59 +546,60 @@ class ShipmentsImport
     }
 
     /**
+     * Extract explicit color code dari nilai kolom status FU sheet jika ada.
+     */
+    protected function extractExplicitFuColor(string $fuRawStr): ?string
+    {
+        if (empty($fuRawStr) || in_array($fuRawStr, ['FU', 'STATUS FU', 'FOLLOW UP', 'WARNA', 'COLOR', 'STATUS', '-'])) {
+            return null;
+        }
+
+        // RETUR / RETURN / GAGAL → ORANGE
+        if (str_contains($fuRawStr, 'RETUR') || str_contains($fuRawStr, 'RETURN') || str_contains($fuRawStr, 'GAGAL') || str_contains($fuRawStr, 'ORANGE')) {
+            return 'ORANGE';
+        }
+        // DELIVERED / SUKSES / SELESAI / BIRU → BIRU
+        if (str_contains($fuRawStr, 'DELIVERED') || str_contains($fuRawStr, 'SUKSES') || str_contains($fuRawStr, 'SELESAI') || $fuRawStr === 'BIRU') {
+            return 'BIRU';
+        }
+        // FU POS / ESKALASI / FUPOS / BIRU_TUA → BIRU_TUA
+        if (str_contains($fuRawStr, 'FU POS') || str_contains($fuRawStr, 'FUPOS') || str_contains($fuRawStr, 'ESKALASI') || $fuRawStr === 'BIRU_TUA') {
+            return 'BIRU_TUA';
+        }
+        // FU DUA KALI / FU 2 / FU2 / FU 2X / HIJAU → HIJAU
+        if (
+            str_contains($fuRawStr, 'DUA') || str_contains($fuRawStr, '2 KALI') || str_contains($fuRawStr, '2X') ||
+            $fuRawStr === 'FU2' || $fuRawStr === 'FU 2' || $fuRawStr === 'HIJAU'
+        ) {
+            return 'HIJAU';
+        }
+        // FU SEKALI / SUDAH FU / FU 1 / FU1 / KUNING → KUNING
+        if (
+            str_contains($fuRawStr, 'SEKALI') || str_contains($fuRawStr, 'SUDAH FU') || str_contains($fuRawStr, 'SUDAH DI FU') ||
+            str_contains($fuRawStr, '1 KALI') || str_contains($fuRawStr, '1X') ||
+            $fuRawStr === 'FU1' || $fuRawStr === 'FU 1' || $fuRawStr === 'KUNING' || $fuRawStr === 'FU'
+        ) {
+            return 'KUNING';
+        }
+        // BELUM FU / PROSES / PUTIH → PUTIH
+        if (str_contains($fuRawStr, 'BELUM') || str_contains($fuRawStr, 'PROSES') || $fuRawStr === 'PUTIH') {
+            return 'PUTIH';
+        }
+
+        return null;
+    }
+
+    /**
      * Resolve color_code dari teks status FU di sheet atau dari kategori NIPPOS.
-     *
-     * Prioritas:
-     *  1. Jika kolom FU di sheet berisi teks yang dikenal → gunakan warna yang sesuai
-     *  2. Jika tidak ada kolom FU → derive dari kategori (SUKSES→BIRU, RETUR→ORANGE, dll)
-     *
-     * Mapping teks → color_code:
-     *  - BELUM FU / kosong / PROSES          → PUTIH
-     *  - FU SEKALI / SUDAH FU / FU 1 / FU1   → KUNING
-     *  - FU DUA KALI / FU 2 / FU2 / FU 2X   → HIJAU
-     *  - FU POS / ESKALASI / FUPOS           → BIRU_TUA
-     *  - DELIVERED / SUKSES / SELESAI        → BIRU
-     *  - RETUR / RETURN / GAGAL              → ORANGE
      */
     protected function resolveFuColorCode(string $fuRawStr, string $kategori, \App\Services\TrackingBotService $botService): string
     {
-        // === PRIORITAS 1: Jika sheet punya kolom FU dengan teks yang dikenal ===
-        if (!empty($fuRawStr) && !in_array($fuRawStr, ['FU', 'STATUS FU', 'FOLLOW UP', 'WARNA', 'COLOR', 'STATUS', '-'])) {
-
-            // RETUR / RETURN / GAGAL → ORANGE
-            if (str_contains($fuRawStr, 'RETUR') || str_contains($fuRawStr, 'RETURN') || str_contains($fuRawStr, 'GAGAL') || str_contains($fuRawStr, 'ORANGE')) {
-                return 'ORANGE';
-            }
-            // DELIVERED / SUKSES / SELESAI / BIRU → BIRU
-            if (str_contains($fuRawStr, 'DELIVERED') || str_contains($fuRawStr, 'SUKSES') || str_contains($fuRawStr, 'SELESAI') || $fuRawStr === 'BIRU') {
-                return 'BIRU';
-            }
-            // FU POS / ESKALASI / FUPOS / BIRU_TUA → BIRU_TUA
-            if (str_contains($fuRawStr, 'FU POS') || str_contains($fuRawStr, 'FUPOS') || str_contains($fuRawStr, 'ESKALASI') || $fuRawStr === 'BIRU_TUA') {
-                return 'BIRU_TUA';
-            }
-            // FU DUA KALI / FU 2 / FU2 / FU 2X / HIJAU → HIJAU
-            if (
-                str_contains($fuRawStr, 'DUA') || str_contains($fuRawStr, '2 KALI') || str_contains($fuRawStr, '2X') ||
-                $fuRawStr === 'FU2' || $fuRawStr === 'FU 2' || $fuRawStr === 'HIJAU'
-            ) {
-                return 'HIJAU';
-            }
-            // FU SEKALI / SUDAH FU / FU 1 / FU1 / KUNING → KUNING
-            if (
-                str_contains($fuRawStr, 'SEKALI') || str_contains($fuRawStr, 'SUDAH FU') || str_contains($fuRawStr, 'SUDAH DI FU') ||
-                str_contains($fuRawStr, '1 KALI') || str_contains($fuRawStr, '1X') ||
-                $fuRawStr === 'FU1' || $fuRawStr === 'FU 1' || $fuRawStr === 'KUNING' || $fuRawStr === 'FU'
-            ) {
-                return 'KUNING';
-            }
-            // BELUM FU / PROSES / PUTIH → PUTIH
-            if (str_contains($fuRawStr, 'BELUM') || str_contains($fuRawStr, 'PROSES') || $fuRawStr === 'PUTIH') {
-                return 'PUTIH';
-            }
+        $explicit = $this->extractExplicitFuColor($fuRawStr);
+        if ($explicit !== null) {
+            return $explicit;
         }
 
-        // === PRIORITAS 2: Derive dari kategori (SUKSES/RETUR dari status_pos/keterangan) ===
+        // Derive dari kategori (SUKSES/RETUR dari status_pos/keterangan)
         return $botService->determineColorCode($kategori);
     }
 
@@ -855,19 +858,23 @@ class ShipmentsImport
                     $statusKategori = $incomingCategory ?: 'IN_PROCESS';
 
                     // === PRIORITAS COLOR_CODE ===
-                    // 1. Jika sheet punya kolom FU dengan nilai yang jelas (KUNING/HIJAU/BIRU_TUA/PUTIH)
-                    //    → gunakan langsung dari sheet (data fix sesuai yang diinput)
-                    // 2. Jika tidak ada kolom FU di sheet → pertahankan warna yang sudah ada di DB
-                    //    (misal CS sudah set KUNING via website, jangan di-reset ke PUTIH)
+                    // 1. Jika sheet punya kolom FU dengan nilai eksplisit (KUNING/HIJAU/BIRU_TUA/PUTIH/dll)
+                    //    → gunakan langsung dari sheet (data fix sesuai yang diinput di sheet)
+                    // 2. Jika sheet TIDAK punya kolom FU eksplisit → pertahankan warna yang sudah ada di DB
+                    //    (misal CS sudah set BIRU_TUA / HIJAU / KUNING via website, JANGAN di-reset ke PUTIH!)
+                    $hasExplicitFu = !empty($data['has_explicit_fu']);
                     $incomingColorFromSheet = $data['color_code'] ?? null;
-                    $sheetHasFuColor = !empty($incomingColorFromSheet) && in_array($incomingColorFromSheet, ['PUTIH', 'KUNING', 'HIJAU', 'BIRU_TUA', 'BIRU', 'ORANGE']);
 
-                    if ($sheetHasFuColor) {
+                    if ($hasExplicitFu && !empty($incomingColorFromSheet)) {
                         // Sheet punya data FU yang eksplisit → pakai dari sheet
                         $colorCode = $incomingColorFromSheet;
-                    } elseif (!empty($existing->color_code) && $existing->color_code !== 'BIRU' && $existing->color_code !== 'ORANGE') {
-                        // Sheet tidak punya kolom FU → pertahankan warna DB yang ada
+                        if (in_array($colorCode, ['KUNING', 'HIJAU', 'BIRU_TUA'])) {
+                            $statusKategori = 'FOLLOW_UP';
+                        }
+                    } elseif (!empty($existing->color_code) && in_array($existing->color_code, ['KUNING', 'HIJAU', 'BIRU_TUA'])) {
+                        // Pertahankan warna DB manual yang diupdate CS / Admin
                         $colorCode = $existing->color_code;
+                        $statusKategori = 'FOLLOW_UP';
                     } else {
                         $colorCode = $botService->determineColorCode($statusKategori);
                     }

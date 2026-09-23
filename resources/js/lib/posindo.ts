@@ -74,20 +74,32 @@ export function resolveDestinationOffice(shipment: Shipment, postOfficeName?: st
   ];
   const isGeneric = !rawOffice || generic.includes(rawOffice.toUpperCase());
   const isTransitHub = /^(SPP|MPC|DC|SENTRAL|TRANSIT)\b/i.test(rawOffice);
+  const isKcp = /\bKCP\b/i.test(rawOffice);
 
-  // If explicit postOfficeName was selected and it's not generic/transit, use it
-  if (postOfficeName && !isGeneric && !isTransitHub) {
+  // If explicit postOfficeName was selected and it's not generic/transit/kcp, use it
+  if (postOfficeName && !isGeneric && !isTransitHub && !isKcp) {
     return postOfficeName;
   }
 
   const city = extractCityRegency(shipment.alamat || "", isGeneric || isTransitHub ? "" : rawOffice);
+
+  // KCP tidak bisa untuk follow up -> selalu arahkan ke KC / KCU
+  if (isKcp) {
+    if (city && city !== "-") {
+      return `KC ${city.replace(/^(Kota|Kab\.?|Kec\.?)\s+/i, "").trim().toUpperCase()}`;
+    }
+    const cleanKcp = rawOffice.replace(/^(?:KCP)\s+/i, "").replace(/\s+\d{5}[A-Za-z0-9]*$/, "").trim();
+    if (cleanKcp) {
+      return `KC ${cleanKcp.toUpperCase()}`;
+    }
+  }
 
   // If rawOffice is a transit hub (like SPP JAKARTA TIMUR 13400) or generic, and we have destination city (e.g. Mimika), use destination KC!
   if ((isGeneric || isTransitHub) && city && city !== "-") {
     return `KC ${city.replace(/^(Kota|Kab\.?|Kec\.?)\s+/i, "").trim().toUpperCase()}`;
   }
 
-  if (!isGeneric && !isTransitHub) {
+  if (!isGeneric && !isTransitHub && !isKcp) {
     return rawOffice;
   }
 
@@ -340,9 +352,9 @@ export const FU_META: Record<
   { label: string; bg: string; fg: string; short: string }
 > = {
   PUTIH: { label: "BLM DI FU", bg: "#FFFFFF", fg: "#1E293B", short: "PUTIH" },
-  BIRU: { label: "PAKET SUKSES", bg: "#46BDC6", fg: "#083344", short: "BIRU" },
-  ORANGE: { label: "PAKET RETUR", bg: "#FBBC04", fg: "#451A03", short: "ORANGE" },
-  KUNING: { label: "SUDAH DI FU", bg: "#FFFF00", fg: "#422006", short: "KUNING" },
+  BIRU: { label: "PAKET SUKSES", bg: "#40e4b4", fg: "#000000", short: "BIRU" },
+  ORANGE: { label: "PAKET RETUR", bg: "#ff0000", fg: "#FFFFFF", short: "ORANGE" },
+  KUNING: { label: "SUDAH DI FU", bg: "#ffff00", fg: "#000000", short: "KUNING" },
   HIJAU: { label: "FU 2 KALI", bg: "#93C47D", fg: "#14532D", short: "HIJAU" },
   BIRU_TUA: { label: "FU POS", bg: "#1C4587", fg: "#FFFFFF", short: "BIRU TUA" },
 };
@@ -350,9 +362,9 @@ export const FU_META: Record<
 export const FU_ORDER: FuStatus[] = ["BIRU", "ORANGE", "KUNING", "PUTIH", "HIJAU", "BIRU_TUA"];
 
 // Konfigurasi Khusus Mitra Aliqa sesuai catatan resmi:
-// 1. HIJAU TOSKA -> PAKET SUKSES
-// 2. MERAH -> PAKET RETUR
-// 3. KUNING -> SUDAH DI FU
+// 1. HIJAU TOSKA / MINT (#40e4b4) -> PAKET SUKSES
+// 2. MERAH (#ff0000) -> PAKET RETUR
+// 3. KUNING (#ffff00) -> SUDAH DI FU
 // 4. PUTIH -> BLM DI FU
 // 5. BIRU TUA -> ON FU POS
 export const FU_META_ALIQA: Record<
@@ -360,9 +372,9 @@ export const FU_META_ALIQA: Record<
   { label: string; bg: string; fg: string; short: string }
 > = {
   PUTIH: { label: "BLM DI FU", bg: "#FFFFFF", fg: "#1E293B", short: "PUTIH" },
-  BIRU: { label: "PAKET SUKSES", bg: "#38D9A9", fg: "#000000", short: "HIJAU TOSKA" },
-  ORANGE: { label: "PAKET RETUR", bg: "#E8A29A", fg: "#000000", short: "MERAH" },
-  KUNING: { label: "SUDAH DI FU", bg: "#FFFF00", fg: "#000000", short: "KUNING" },
+  BIRU: { label: "PAKET SUKSES", bg: "#40e4b4", fg: "#000000", short: "HIJAU TOSKA" },
+  ORANGE: { label: "PAKET RETUR", bg: "#ff0000", fg: "#FFFFFF", short: "MERAH" },
+  KUNING: { label: "SUDAH DI FU", bg: "#ffff00", fg: "#000000", short: "KUNING" },
   HIJAU: { label: "FU 2 KALI", bg: "#93C47D", fg: "#14532D", short: "HIJAU" },
   BIRU_TUA: { label: "ON FU POS", bg: "#1C4587", fg: "#FFFFFF", short: "BIRU TUA" },
 };

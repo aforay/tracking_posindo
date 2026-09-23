@@ -57,11 +57,11 @@ export function PostOfficesManagerModal({
     const q = search.toLowerCase();
     return postOffices.filter(
       (po) =>
-        po.name.toLowerCase().includes(q) ||
+        (po.name && po.name.toLowerCase().includes(q)) ||
         (po.city && po.city.toLowerCase().includes(q)) ||
         (po.province && po.province.toLowerCase().includes(q)) ||
-        (po.code && po.code.includes(q)) ||
-        (po.phone_wa && po.phone_wa.includes(q)) ||
+        (po.code && String(po.code).toLowerCase().includes(q)) ||
+        (po.phone_wa && String(po.phone_wa).toLowerCase().includes(q)) ||
         (po.pic_name && po.pic_name.toLowerCase().includes(q))
     );
   }, [postOffices, search]);
@@ -232,7 +232,7 @@ export function PostOfficesManagerModal({
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
               <div className="md:col-span-2">
                 <label className="font-bold text-slate-700 block mb-1">
-                  Nama Kantor Pos (KC/KCU/KCP) <span className="text-red-500">*</span>:
+                  Nama Kantor Pos (KC/KCU) <span className="text-red-500">*</span>:
                 </label>
                 <Input
                   value={formData.name}

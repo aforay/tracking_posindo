@@ -56,7 +56,14 @@ class RecategorizeShipmentsCommand extends Command
                 DB::transaction(function () use ($shipments, $botService, &$updatedCount, &$returCount, &$suksesCount, &$followUpCount, &$inProcessCount, $bar) {
                 foreach ($shipments as $shipment) {
                     $newCategory = $botService->categorizeStatus($shipment->status_pos, $shipment->keterangan);
-                    $newColor = $botService->determineColorCode($newCategory);
+                    if (in_array($newCategory, ['SUKSES', 'RETUR'])) {
+                        $newColor = $botService->determineColorCode($newCategory);
+                    } elseif (in_array($shipment->color_code, ['BIRU_TUA', 'HIJAU', 'KUNING'])) {
+                        $newColor = $shipment->color_code;
+                        $newCategory = 'FOLLOW_UP';
+                    } else {
+                        $newColor = $botService->determineColorCode($newCategory);
+                    }
 
                     if ($shipment->status_kategori !== $newCategory || $shipment->color_code !== $newColor) {
                         $shipment->status_kategori = $newCategory;
