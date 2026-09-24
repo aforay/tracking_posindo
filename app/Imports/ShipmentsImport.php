@@ -653,7 +653,15 @@ class ShipmentsImport
      */
     protected function parseDateValue($val, ?string $sheetName = null, ?string $resi = null): ?string
     {
-        // 1. Direct date value parsing if provided
+        // 1. High-Confidence Pos Indonesia Barcode Resi Date Extraction First
+        if (!empty($resi)) {
+            $resiDate = self::extractDateFromResi($resi);
+            if ($resiDate) {
+                return $resiDate;
+            }
+        }
+
+        // 2. Direct date value parsing from cell
         if (!empty($val) && !in_array(strtoupper(trim((string)$val)), ['TANGGAL', 'TGL', 'TGL KIRIM', 'TANGGAL KIRIM', 'TANGGAL_KIRIM', 'DATE', '-'])) {
             try {
                 if (is_numeric($val) && (float)$val > 10000) {
@@ -729,14 +737,6 @@ class ShipmentsImport
                 }
             } catch (Throwable $e) {
                 // Fallback below
-            }
-        }
-
-        // 2. Barcode Resi Date Extraction Fallback
-        if (!empty($resi)) {
-            $resiDate = self::extractDateFromResi($resi);
-            if ($resiDate) {
-                return $resiDate;
             }
         }
 

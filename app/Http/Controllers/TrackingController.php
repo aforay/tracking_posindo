@@ -476,7 +476,7 @@ class TrackingController extends Controller
         $shipmentIds = $request->input('shipment_ids', []);
         $useQueue = $request->boolean('use_queue', false);
         $force = $request->boolean('force', false);
-        $limit = min(450, max(5, (int)$request->input('limit', 350)));
+        $limit = min(1000, max(5, (int)$request->input('limit', 500)));
         $seller = $request->input('seller', null);
 
         // Session timestamp to isolate current bot run batches
@@ -578,8 +578,8 @@ class TrackingController extends Controller
         }
 
         if ($useQueue) {
-            // Asynchronous Queue chunked dispatch
-            foreach (array_chunk($allPendingIds, 25) as $chunkIds) {
+            // Asynchronous Queue chunked dispatch (100 items per job for maximum throughput)
+            foreach (array_chunk($allPendingIds, 100) as $chunkIds) {
                 ProcessNiposTrackingJob::dispatch($chunkIds);
             }
             $msg = "Tracking Bot NIPOS berhasil dijalankan di background queue untuk {$pendingCount} resi.";

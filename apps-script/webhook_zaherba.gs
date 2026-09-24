@@ -168,14 +168,20 @@ function handleNiposUpdate(data) {
   var allSheets = ss.getSheets();
   var sheetsToScan = [];
 
-  // Prioritaskan sheet bulan yang cocok
-  var hintSheet = String(data.sheet || data.sheet_name || (items[0] && (items[0].sheet || items[0].sheet_name)) || '').trim().toUpperCase();
+  // Prioritaskan sheet bulan yang cocok (otomatis buat sheet bulan jika belum ada)
+  var hintSheet = String(data.sheet || data.sheet_name || (items[0] && (items[0].sheet || items[0].sheet_name)) || '').trim();
   if (hintSheet) {
-    allSheets.forEach(function(sh) {
-      if (sh.getName().trim().toUpperCase().indexOf(hintSheet) !== -1 || hintSheet.indexOf(sh.getName().trim().toUpperCase()) !== -1) {
-        sheetsToScan.push(sh);
-      }
-    });
+    var matchedOrCreated = getOrCreateSheet(ss, hintSheet);
+    if (matchedOrCreated) {
+      sheetsToScan.push(matchedOrCreated);
+    } else {
+      var hintUpper = hintSheet.toUpperCase();
+      allSheets.forEach(function(sh) {
+        if (sh.getName().trim().toUpperCase().indexOf(hintUpper) !== -1 || hintUpper.indexOf(sh.getName().trim().toUpperCase()) !== -1) {
+          sheetsToScan.push(sh);
+        }
+      });
+    }
   }
 
   // Tambahkan sheet lainnya sebagai fallback
@@ -375,5 +381,59 @@ function findCol(hdr, keywords) {
       return c + 1;
     }
   }
+  return null;
+}
+
+/**
+ * Otomatis mencari atau MEMBUAT SHEET BULAN BARU (misal SEPTEMBER 2026 / SEPTEMBER (ZAHERBA)) jika belum ada
+ */
+function getOrCreateSheet(ss, hintSheetName) {
+  if (!hintSheetName) return null;
+
+  var targetName = String(hintSheetName).trim();
+  var targetUpper = targetName.toUpperCase();
+  var allSheets = ss.getSheets();
+
+  // 1. Cari jika sheet sudah ada (case-insensitive)
+  for (var i = 0; i < allSheets.length; i++) {
+    var nameUpper = allSheets[i].getName().trim().toUpperCase();
+    if (nameUpper === targetUpper || nameUpper.indexOf(targetUpper) !== -1 || targetUpper.indexOf(nameUpper) !== -1) {
+      return allSheets[i];
+    }
+  }
+
+  // 2. Jika belum ada, duplikat otomatis dari template atau sheet bulan sebelumnya (misal AGUSTUS)
+  try {
+    var templateSheet = null;
+    for (var j = allSheets.length - 1; j >= 0; j--) {
+      var sName = allSheets[j].getName().toUpperCase();
+      if (sName.indexOf('TEMPLATE') !== -1 || sName.indexOf('AGUSTUS') !== -1 || sName.indexOf('JULI') !== -1 || sName.indexOf('JUNI') !== -1) {
+        templateSheet = allSheets[j];
+        break;
+      }
+    }
+    if (!templateSheet && allSheets.length > 0) {
+      templateSheet = allSheets[allSheets.length - 1];
+    }
+
+    if (templateSheet) {
+      var newSheet = templateSheet.copyTo(ss);
+      newSheet.setName(targetName);
+
+      // Bersihkan baris data lama tapi pertahankan Header Row & Struktur
+      var hdr = findHeaderRow(newSheet);
+      var headerRowIndex = hdr ? hdr.rowIndex : 1;
+      var lastRow = newSheet.getLastRow();
+      if (lastRow > headerRowIndex) {
+        newSheet.getRange(headerRowIndex + 1, 1, lastRow - headerRowIndex, newSheet.getLastColumn()).clearContent();
+      }
+
+      Logger.log("Auto-created missing month sheet: " + targetName);
+      return newSheet;
+    }
+  } catch (e) {
+    Logger.log("Error creating sheet " + targetName + ": " + e.toString());
+  }
+
   return null;
 }

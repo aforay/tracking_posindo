@@ -477,6 +477,7 @@ class DashboardController extends Controller
                 }
 
                 $fourDaysAgo = now()->subDays(4)->toDateString();
+                $todayStart = now()->startOfDay()->toDateTimeString();
                 $statsRow = (clone $statsBaseQuery)->selectRaw("
                     COUNT(*) as total,
                     SUM(CASE WHEN color_code = 'BIRU' OR ((color_code IS NULL OR color_code = '') AND status_kategori = 'SUKSES') THEN 1 ELSE 0 END) as sukses,
@@ -493,12 +494,13 @@ class DashboardController extends Controller
                         AND tanggal_kirim <= '{$fourDaysAgo}'
                     ) THEN 1 ELSE 0 END) as overdue,
                     SUM(CASE WHEN (
-                        status_pos IS NULL OR status_pos = '' OR status_pos LIKE '%PROCESS%' 
+                        (status_pos IS NULL OR status_pos = '' OR status_pos LIKE '%PROCESS%' 
                         OR status_kategori NOT IN ('SUKSES', 'RETUR') OR status_kategori IS NULL 
                         OR color_code NOT IN ('BIRU', 'ORANGE') OR color_code IS NULL 
                         OR status_pos IN ('unBag', 'UNBAG', 'INVEHICLE', 'INLOCATION', 'inBag', 'INBAG', 'DELIVERYRUNSHEET', 'FAILEDTODELIVERED', 'ARRIVEDUNPAID', 'Irregularity', 'MANIFEST', 'ARRIVAL', 'DEPARTURE')
-                        OR ((status_kategori = 'RETUR' OR color_code = 'ORANGE') AND (status_pos IS NULL OR (status_pos NOT LIKE '%RETURN DELIVERY%' AND status_pos NOT LIKE '%RETURN TO SENDER%' AND status_pos NOT LIKE '%DITERIMA PENGIRIM%')))
-                        OR ((status_kategori = 'SUKSES' OR color_code = 'BIRU') AND (status_pos IS NULL OR status_pos NOT LIKE '%DELIVERED%' OR status_pos LIKE '%RETURN%'))
+                        OR ((status_kategori = 'RETUR' OR color_code = 'ORANGE') AND (status_pos IS NULL OR (status_pos NOT LIKE '%RETURN DELIVERY%' AND status_pos NOT LIKE '%RETURN TO SENDER%' AND status_pos NOT LIKE '%DITERIMA PENGIRIM%'))))
+                        AND (status_pos IS NULL OR status_pos NOT LIKE '%DELIVERED%' OR status_pos LIKE '%RETURN%')
+                        AND (last_tracked_at IS NULL OR last_tracked_at < '{$todayStart}')
                     ) THEN 1 ELSE 0 END) as pending
                 ")->first();
 
@@ -542,22 +544,20 @@ class DashboardController extends Controller
 
                 $driver = \Illuminate\Support\Facades\DB::connection()->getDriverName();
                 $monthSql = $driver === 'sqlite' ? "CAST(strftime('%m', tanggal_kirim) AS INTEGER)" : "MONTH(tanggal_kirim)";
+                $todayStart = now()->startOfDay()->toDateTimeString();
 
                 $monthRows = (clone $monthQuery)
                     ->selectRaw("
                         {$monthSql} as m,
                         COUNT(*) as total,
                         SUM(CASE WHEN (
-                            status_pos IS NULL 
-                            OR status_pos = '' 
-                            OR status_pos LIKE '%PROCESS%' 
-                            OR status_kategori NOT IN ('SUKSES', 'RETUR') 
-                            OR status_kategori IS NULL 
-                            OR color_code NOT IN ('BIRU', 'ORANGE') 
-                            OR color_code IS NULL 
+                            (status_pos IS NULL OR status_pos = '' OR status_pos LIKE '%PROCESS%' 
+                            OR status_kategori NOT IN ('SUKSES', 'RETUR') OR status_kategori IS NULL 
+                            OR color_code NOT IN ('BIRU', 'ORANGE') OR color_code IS NULL 
                             OR status_pos IN ('unBag', 'UNBAG', 'INVEHICLE', 'INLOCATION', 'inBag', 'INBAG', 'DELIVERYRUNSHEET', 'FAILEDTODELIVERED', 'ARRIVEDUNPAID', 'Irregularity', 'MANIFEST', 'ARRIVAL', 'DEPARTURE')
-                            OR ((status_kategori = 'RETUR' OR color_code = 'ORANGE') AND (status_pos IS NULL OR (status_pos NOT LIKE '%RETURN DELIVERY%' AND status_pos NOT LIKE '%RETURN TO SENDER%' AND status_pos NOT LIKE '%DITERIMA PENGIRIM%')))
-                            OR ((status_kategori = 'SUKSES' OR color_code = 'BIRU') AND (status_pos IS NULL OR status_pos NOT LIKE '%DELIVERED%' OR status_pos LIKE '%RETURN%'))
+                            OR ((status_kategori = 'RETUR' OR color_code = 'ORANGE') AND (status_pos IS NULL OR (status_pos NOT LIKE '%RETURN DELIVERY%' AND status_pos NOT LIKE '%RETURN TO SENDER%' AND status_pos NOT LIKE '%DITERIMA PENGIRIM%'))))
+                            AND (status_pos IS NULL OR status_pos NOT LIKE '%DELIVERED%' OR status_pos LIKE '%RETURN%')
+                            AND (last_tracked_at IS NULL OR last_tracked_at < '{$todayStart}')
                         ) THEN 1 ELSE 0 END) as pending
                     ")
                     ->whereNotNull('tanggal_kirim')

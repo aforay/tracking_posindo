@@ -376,7 +376,7 @@ export function TopBar({
               "X-XSRF-TOKEN": csrfToken,
             },
             body: JSON.stringify({
-              limit: 350,
+              limit: 500,
               seller: seller || normalizedSeller,
               month: activeBotMonth,
               session_start: sessionStart,

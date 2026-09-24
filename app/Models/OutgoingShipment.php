@@ -89,9 +89,8 @@ class OutgoingShipment extends Model
 
     /**
      * Scope query for shipments that need live tracking from NIPOS.
-     * Shipments that are STILL in transit/operational (e.g. unBag, INVEHICLE, INLOCATION, inBag, etc.)
-     * MUST be tracked even if previously categorized as RETUR (ORANGE) or FOLLOW_UP,
-     * until NIPOS confirms the final status (e.g. DELIVERED or DELIVERED (RETURN DELIVERY)).
+     * Strictly tracks ONLY pending & in-transit shipments.
+     * Final DELIVERED (SUKSES) and final DELIVERED RETURN DELIVERY (RETUR) shipments are EXCLUDED.
      */
     public function scopeNeedsTracking($query, bool $force = false)
     {
@@ -100,23 +99,23 @@ class OutgoingShipment extends Model
         }
 
         return $query->where(function ($q) {
-            // 1. Status pos kosong atau ON PROCESS / TRANSIT
+            // 1. Status pos kosong, ON PROCESS, atau belum final
             $q->whereNull('status_pos')
               ->orWhere('status_pos', '')
               ->orWhere('status_pos', 'ON PROCESS')
               ->orWhere('status_pos', 'LIKE', '%PROCESS%')
-              // 2. Kategori atau warna belum final
-              ->orWhereNotIn('status_kategori', ['SUKSES', 'RETUR'])
+              // 2. Kategori atau warna dalam proses (PUTIH, KUNING, HIJAU, BIRU_TUA)
+              ->orWhereIn('status_kategori', ['IN_PROCESS', 'FOLLOW_UP'])
               ->orWhereNull('status_kategori')
-              ->orWhereNotIn('color_code', ['BIRU', 'ORANGE'])
+              ->orWhereIn('color_code', ['PUTIH', 'KUNING', 'HIJAU', 'BIRU_TUA'])
               ->orWhereNull('color_code')
-              // 3. Status pos masih operasional/transit
+              // 3. Status pos masih operasional/transit di perjalanan
               ->orWhereIn('status_pos', [
                   'unBag', 'UNBAG', 'INVEHICLE', 'INLOCATION', 'inBag', 'INBAG',
                   'DELIVERYRUNSHEET', 'FAILEDTODELIVERED', 'ARRIVEDUNPAID', 'Irregularity',
                   'MANIFEST', 'ARRIVAL', 'DEPARTURE'
               ])
-              // 4. Sudah RETUR / ORANGE tapi paketnya belum sampai ke pengirim (belum DELIVERED RETURN DELIVERY)
+              // 4. Paket RETUR yang masih dalam proses retur (belum DELIVERED RETURN DELIVERY ke pengirim)
               ->orWhere(function ($returQ) {
                   $returQ->where(function ($sub) {
                       $sub->where('status_kategori', 'RETUR')
@@ -129,24 +128,15 @@ class OutgoingShipment extends Model
                                 ->where('status_pos', 'NOT LIKE', '%DITERIMA PENGIRIM%');
                           });
                   });
-              })
-              // 5. Terdata SUKSES / BIRU tapi status pos nya belum DELIVERED final
-              ->orWhere(function ($suksesQ) {
-                  $suksesQ->where(function ($sub) {
-                      $sub->where('status_kategori', 'SUKSES')
-                          ->orWhere('color_code', 'BIRU');
-                  })->where(function ($sub) {
-                      $sub->whereNull('status_pos')
-                          ->orWhere('status_pos', 'NOT LIKE', '%DELIVERED%')
-                          ->orWhere('status_pos', 'LIKE', '%RETURN%');
-                  });
-              })
-              // 6. Belum memiliki Kantor Pos Tujuan resmi dari NIPOS
-              ->orWhere(function ($kantorQ) {
-                  $kantorQ->whereNull('kantor_tujuan')
-                          ->orWhere('kantor_tujuan', '')
-                          ->orWhereIn('kantor_tujuan', ['KC TUJUAN', 'KANTOR POS TUJUAN', 'KC PENGANTARAN', 'KC POS PENGANTARAN', 'POS PENGANTARAN', 'KC POS INDONESIA', 'POS INDONESIA']);
               });
+        })
+        // ABSOLUTE EXCLUSION: Keluarkan semua paket yang sudah final DELIVERED (SUKSES) dan final DELIVERED RETURN (RETUR)
+        ->where(function ($exQ) {
+            $exQ->whereNull('status_pos')
+                ->orWhere(function ($s) {
+                    $s->where('status_pos', 'NOT LIKE', '%DELIVERED%')
+                      ->orWhere('status_pos', 'LIKE', '%RETURN%');
+                });
         });
     }
 

@@ -21,13 +21,13 @@ class NiposFastTracker
     }
 
     /**
-     * Track list of resis chunked into safe 20 per request to avoid Posindo gateway timeouts
+     * Track list of resis chunked into safe 60 per request to avoid Posindo gateway timeouts
      *
      * @param array $resis
      * @param int $chunkSize
      * @return array Map of [resi => ['resi' => ..., 'status_akhir' => ...]]
      */
-    public function trackMany(array $resis, int $chunkSize = 20): array
+    public function trackMany(array $resis, int $chunkSize = 60): array
     {
         $cleanResis = array_values(array_unique(array_filter(array_map('trim', $resis))));
         if (empty($cleanResis)) {
@@ -60,7 +60,8 @@ class NiposFastTracker
 
                     $poolRequests[$idx] = $pool->asForm()
                         ->withoutVerifying()
-                        ->timeout(25)
+                        ->connectTimeout(5)
+                        ->timeout(20)
                         ->withHeaders($headers)
                         ->post($this->url, [
                             'vBarcode' => $vBarcode,

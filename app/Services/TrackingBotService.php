@@ -56,11 +56,11 @@ class TrackingBotService
             return $results;
         }
 
-        // 1. Primary Engine: Bulk tracking via NiposFastTracker (AJAX POST with vBarcode chunked by 18 for optimal API concurrency)
+        // 1. Primary Engine: Bulk tracking via NiposFastTracker (AJAX POST with vBarcode chunked by 60 for optimal API concurrency)
         if (!$isTesting) {
             try {
                 $fastTracker = app(\App\Services\NiposFastTracker::class);
-                $apiResults = $fastTracker->trackMany($cleanResis, 18);
+                $apiResults = $fastTracker->trackMany($cleanResis, 60);
                 if (!empty($apiResults)) {
                     foreach ($apiResults as $resi => $data) {
                         $rawStatus = $data['status_akhir'] ?: 'ON PROCESS';
