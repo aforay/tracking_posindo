@@ -1,7 +1,7 @@
 import { useMemo, useEffect, useState } from "react";
 import { router } from "@inertiajs/react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Truck, Bot, Loader2, CheckCircle2, Zap, RefreshCw, Send, Building2, AlertCircle, Check, ArrowUpRight, Search, Cookie, LogOut, ShieldCheck, User, Users, KeyRound, AlertTriangle, ChevronDown } from "lucide-react";
+import { Truck, Bot, Loader2, CheckCircle2, Zap, RefreshCw, Send, Building2, AlertCircle, Check, ArrowUpRight, Search, Cookie, LogOut, ShieldCheck, User, Users, KeyRound, AlertTriangle, ChevronDown, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -37,6 +37,10 @@ export function TopBar({
   googleSheetUrl,
   googleSheetId,
   googleSheetWebhookUrl,
+  googleSheetUrlAliqa,
+  googleSheetUrlZaherba,
+  googleSheetWebhookUrlAliqa,
+  googleSheetWebhookUrlZaherba,
   onOpenPostOffices,
   currentUser,
 }: {
@@ -50,6 +54,10 @@ export function TopBar({
   googleSheetUrl?: string;
   googleSheetId?: string;
   googleSheetWebhookUrl?: string;
+  googleSheetUrlAliqa?: string;
+  googleSheetUrlZaherba?: string;
+  googleSheetWebhookUrlAliqa?: string;
+  googleSheetWebhookUrlZaherba?: string;
   onOpenPostOffices?: () => void;
   currentUser?: { id: number; name: string; email: string; role: string; is_admin: boolean } | null;
 }) {
@@ -66,7 +74,8 @@ export function TopBar({
     if (typeof month === "string" && !isNaN(Number(month)) && Number(month) >= 1 && Number(month) <= 12) {
       return Number(month);
     }
-    return 8; // Default to Agustus
+    const nowMonth = new Date().getMonth() + 1;
+    return nowMonth >= 1 && nowMonth <= 12 ? nowMonth : 5;
   }, [month]);
 
   const activeBotMonthName = monthNames[activeBotMonth - 1] || "Agustus";
@@ -98,23 +107,74 @@ export function TopBar({
   }, [seller]);
   const [selectedSyncMonth, setSelectedSyncMonth] = useState<string>("current");
   const [sheetSyncOpen, setSheetSyncOpen] = useState(false);
-  const [sheetUrlInput, setSheetUrlInput] = useState(
-    googleSheetUrl || "https://docs.google.com/spreadsheets/d/1EeckOBzI5EPNTT1bHsqu6kar9asKD6Ifar2CpTkSnBg/edit"
-  );
+  const [sheetSettingsOpen, setSheetSettingsOpen] = useState(false);
 
+  // Per-seller URL states (for settings modal)
+  const [settingsAliqaUrl, setSettingsAliqaUrl] = useState(
+    googleSheetUrlAliqa || "https://docs.google.com/spreadsheets/d/1EeckOBzI5EPNTT1bHsqu6kar9asKD6Ifar2CpTkSnBg/edit"
+  );
+  const [settingsZaherbaUrl, setSettingsZaherbaUrl] = useState(
+    googleSheetUrlZaherba || "https://docs.google.com/spreadsheets/d/1wUqPnU1_QOq6WocHwpxAhjhScjlb_ZhhSy8I2WqGQKw/edit"
+  );
+  const [settingsAliqaWebhook, setSettingsAliqaWebhook] = useState(googleSheetWebhookUrlAliqa || googleSheetWebhookUrl || "");
+  const [settingsZaherbaWebhook, setSettingsZaherbaWebhook] = useState(googleSheetWebhookUrlZaherba || "");
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
+
+  // Sync when props change (e.g. page reload)
   useEffect(() => {
-    if (googleSheetUrl) {
-      setSheetUrlInput(googleSheetUrl);
-    } else if (normalizedSeller === "Mitra Zaherba") {
-      setSheetUrlInput("https://docs.google.com/spreadsheets/d/1wUqPnU1_QOq6WocHwpxAhjhScjlb_ZhhSy8I2WqGQKw/edit");
-    } else {
-      setSheetUrlInput("https://docs.google.com/spreadsheets/d/1EeckOBzI5EPNTT1bHsqu6kar9asKD6Ifar2CpTkSnBg/edit");
-    }
-  }, [googleSheetUrl, normalizedSeller]);
-  const [webhookUrlInput, setWebhookUrlInput] = useState(googleSheetWebhookUrl || "");
+    if (googleSheetUrlAliqa) setSettingsAliqaUrl(googleSheetUrlAliqa);
+    if (googleSheetUrlZaherba) setSettingsZaherbaUrl(googleSheetUrlZaherba);
+    if (googleSheetWebhookUrlAliqa) setSettingsAliqaWebhook(googleSheetWebhookUrlAliqa);
+    else if (googleSheetWebhookUrl) setSettingsAliqaWebhook(googleSheetWebhookUrl);
+    if (googleSheetWebhookUrlZaherba) setSettingsZaherbaWebhook(googleSheetWebhookUrlZaherba);
+  }, [googleSheetUrlAliqa, googleSheetUrlZaherba, googleSheetWebhookUrl, googleSheetWebhookUrlAliqa, googleSheetWebhookUrlZaherba]);
+
+  // Dynamic sheetUrlInput — strictly reads active seller URL
+  const sheetUrlInput = normalizedSeller === "Mitra Zaherba"
+    ? (googleSheetUrlZaherba || "https://docs.google.com/spreadsheets/d/1wUqPnU1_QOq6WocHwpxAhjhScjlb_ZhhSy8I2WqGQKw/edit")
+    : (googleSheetUrlAliqa || "https://docs.google.com/spreadsheets/d/1EeckOBzI5EPNTT1bHsqu6kar9asKD6Ifar2CpTkSnBg/edit");
+  const webhookUrlInput = normalizedSeller === "Mitra Zaherba" ? (settingsZaherbaWebhook || settingsAliqaWebhook) : settingsAliqaWebhook;
   const [isSyncing, setIsSyncing] = useState(false);
   const [isPushing, setIsPushing] = useState(false);
   const [sheetSyncState, setSheetSyncState] = useState<"idle" | "syncing" | "done">("idle");
+
+  const handleSaveSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSavingSettings(true);
+    try {
+      const csrfToken = getCsrfToken();
+      const res = await fetch("/settings/google-sheets", {
+        method: "POST",
+        headers: {
+          "Accept": "application/json",
+          "Content-Type": "application/json",
+          "X-CSRF-TOKEN": csrfToken,
+        },
+        body: JSON.stringify({
+          aliqa_url: settingsAliqaUrl.trim(),
+          zaherba_url: settingsZaherbaUrl.trim(),
+          webhook_url: (normalizedSeller === "Mitra Zaherba" ? settingsZaherbaWebhook : settingsAliqaWebhook).trim(),
+          aliqa_webhook_url: settingsAliqaWebhook.trim(),
+          zaherba_webhook_url: settingsZaherbaWebhook.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        toast.error(data.message || "Gagal menyimpan pengaturan Google Sheets.");
+      } else {
+        toast.success("Pengaturan Google Sheets berhasil disimpan!", {
+          description: "URL Spreadsheet per-seller telah diperbarui.",
+        });
+        setSheetSettingsOpen(false);
+        // Refresh to reflect new URLs in Sync Sheets button
+        router.reload({ preserveScroll: true });
+      }
+    } catch (err: any) {
+      toast.error("Gagal menyimpan: " + (err.message || String(err)));
+    } finally {
+      setIsSavingSettings(false);
+    }
+  };
 
   const handlePushUpdates = async (mode: 'all' | 'recent_fu' = 'all') => {
     if (isPushing) return;
@@ -316,7 +376,7 @@ export function TopBar({
               "X-XSRF-TOKEN": csrfToken,
             },
             body: JSON.stringify({
-              limit: 80,
+              limit: 350,
               seller: seller || normalizedSeller,
               month: activeBotMonth,
               session_start: sessionStart,
@@ -338,7 +398,7 @@ export function TopBar({
 
           if (Array.isArray(data.updated_items) && data.updated_items.length > 0) {
             accumulatedUpdated.push(...data.updated_items);
-            setBotUpdatedItems([...accumulatedUpdated]);
+            setBotUpdatedItems(accumulatedUpdated.slice(-100));
           }
 
           if (initialTotalPending === 0) {
@@ -421,7 +481,9 @@ export function TopBar({
     try {
       const csrfToken = getCsrfToken();
       
-      // 1. Discover Sheet Names
+      // 1. Discover Sheet Names (Hanya baca tab/sheet bulan yang dipilih)
+      const targetMonthToSync = selectedSyncMonth === "current" ? activeBotMonth : selectedSyncMonth;
+
       const discoverRes = await fetch("/sync/discover", {
         method: "POST",
         headers: {
@@ -433,7 +495,7 @@ export function TopBar({
           url: sheetUrlInput,
           webhook_url: webhookUrlInput,
           seller: normalizedSeller,
-          month: selectedSyncMonth === "current" ? "" : selectedSyncMonth,
+          month: targetMonthToSync,
         }),
       });
 
@@ -546,41 +608,59 @@ export function TopBar({
             </h1>
             <span className="rounded bg-blue-100/90 px-1.5 py-0.5 text-[9px] font-extrabold text-blue-800 border border-blue-200">SYSTEM</span>
           </div>
+
+          {/* Dropdown Seller di Navbar (Mitra Aliqa / Mitra Zaherba) */}
+          <div className="ml-2 flex items-center">
+            <Select value={normalizedSeller} onValueChange={(val) => onSeller(val)}>
+              <SelectTrigger className={`h-8.5 text-xs font-extrabold cursor-pointer shadow-2xs rounded-lg px-2.5 border transition-all ${
+                normalizedSeller === "Mitra Zaherba" 
+                  ? "bg-purple-50 text-purple-900 border-purple-300 hover:bg-purple-100" 
+                  : "bg-blue-50 text-blue-900 border-blue-300 hover:bg-blue-100"
+              }`}>
+                <SelectValue placeholder="Pilih Seller">
+                  {normalizedSeller === "Mitra Zaherba" ? "📦 Mitra Zaherba" : "📦 Mitra Aliqa"}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent className="bg-white border border-slate-200 shadow-xl rounded-xl">
+                <SelectItem value="Mitra Aliqa" className="font-bold cursor-pointer text-xs text-blue-900 py-2">
+                  📦 Mitra Aliqa
+                </SelectItem>
+                <SelectItem value="Mitra Zaherba" className="font-bold cursor-pointer text-xs text-purple-900 py-2">
+                  📦 Mitra Zaherba
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
           {/* Grup 1: Sinkronisasi Sheets (Khusus Admin) */}
           {isAdmin && (
             <div className="flex items-center gap-1.5 rounded-xl bg-slate-50 p-1 border border-slate-200/80 shadow-2xs">
-              <Select value={selectedSyncMonth} onValueChange={setSelectedSyncMonth}>
-                <SelectTrigger className="w-[135px] h-8.5 text-xs bg-white border border-slate-200 font-semibold cursor-pointer shadow-2xs focus:ring-1 focus:ring-emerald-500 rounded-lg">
-                  <SelectValue placeholder="Pilih Tab / Bulan" />
-                </SelectTrigger>
-                <SelectContent className="bg-white border border-slate-200 shadow-xl rounded-xl">
-                  <SelectItem value="current" className="font-semibold cursor-pointer text-xs">Bulan Berjalan</SelectItem>
-                  <SelectItem value="1" className="font-semibold cursor-pointer text-xs">Januari</SelectItem>
-                  <SelectItem value="2" className="font-semibold cursor-pointer text-xs">Februari</SelectItem>
-                  <SelectItem value="3" className="font-semibold cursor-pointer text-xs">Maret</SelectItem>
-                  <SelectItem value="4" className="font-semibold cursor-pointer text-xs">April</SelectItem>
-                  <SelectItem value="5" className="font-semibold cursor-pointer text-xs">Mei</SelectItem>
-                  <SelectItem value="6" className="font-semibold cursor-pointer text-xs">Juni</SelectItem>
-                  <SelectItem value="7" className="font-semibold cursor-pointer text-xs">Juli</SelectItem>
-                  <SelectItem value="8" className="font-semibold cursor-pointer text-xs">Agustus</SelectItem>
-                  <SelectItem value="9" className="font-semibold cursor-pointer text-xs">September</SelectItem>
-                  <SelectItem value="10" className="font-semibold cursor-pointer text-xs">Oktober</SelectItem>
-                  <SelectItem value="11" className="font-semibold cursor-pointer text-xs">November</SelectItem>
-                  <SelectItem value="12" className="font-semibold cursor-pointer text-xs">Desember</SelectItem>
-                  <SelectItem value="ALL" className="font-semibold cursor-pointer text-xs">Semua Bulan (ALL)</SelectItem>
-                </SelectContent>
-              </Select>
-
+              {/* Sync Sheets: Langsung buka modal konfirmasi & pilihan tab/bulan */}
               <Button
                 variant="outline"
                 className="gap-1.5 border-emerald-600/70 bg-emerald-50 text-emerald-900 hover:bg-emerald-100 hover:text-emerald-950 cursor-pointer font-semibold text-xs h-9 shadow-xs rounded-lg"
                 onClick={() => setSheetSyncOpen(true)}
+                title={`Sync data dari Google Sheets (${normalizedSeller})`}
               >
                 <RefreshCw className="h-3.5 w-3.5 text-emerald-600" /> Sync Sheets
               </Button>
+
+              {/* Settings: Konfigurasi URL per-seller */}
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-9 w-9 border-slate-200 bg-white hover:bg-slate-50 text-slate-600 hover:text-slate-900 cursor-pointer shadow-xs rounded-lg shrink-0"
+                onClick={() => setSheetSettingsOpen(true)}
+                title="Pengaturan Link Google Spreadsheet per-Seller"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
+                  <circle cx="12" cy="12" r="3"/>
+                </svg>
+              </Button>
+
 
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -946,65 +1026,203 @@ export function TopBar({
         )}
       </AnimatePresence>
 
+      {/* ── Dialog: Sync Sheets (Konfirmasi, URL otomatis dari Settings) ── */}
       <Dialog open={sheetSyncOpen} onOpenChange={setSheetSyncOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-emerald-700">
-              <RefreshCw className="h-5 w-5" /> Integrasi Google Sheets Real-time
+              <RefreshCw className="h-5 w-5" /> Sinkronisasi Google Sheets
             </DialogTitle>
+            <DialogDescription className="text-xs text-slate-500 mt-1">
+              Data akan diimport dari spreadsheet <span className="font-bold text-slate-700">{normalizedSeller}</span>.
+            </DialogDescription>
           </DialogHeader>
-          <form onSubmit={handleSyncSubmit} className="space-y-4">
-            <div className="space-y-1.5">
-              <label className="text-xs font-bold text-foreground">
-                1. Link / URL Google Spreadsheet (Public / Anyone with link can view):
-              </label>
-              <Input
-                value={sheetUrlInput}
-                onChange={(e) => setSheetUrlInput(e.target.value)}
-                placeholder="https://docs.google.com/spreadsheets/d/1wUqPnU1_QOq6WocHwpxAhjhScjlb_ZhhSy8I2WqGQKw/edit"
-                className="text-xs"
-              />
-              <p className="text-[11px] text-muted-foreground">
-                Sistem akan membaca seluruh Sheet (Januari s/d Agustus) secara otomatis (RAM &lt; 15MB).
+          <div className="space-y-3">
+            {/* Tampilkan URL aktif */}
+            <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-3 space-y-1">
+              <p className="text-[10px] font-bold text-emerald-700 uppercase tracking-wide">Spreadsheet Aktif</p>
+              <p className="text-[11px] text-emerald-900 font-mono break-all leading-snug">
+                {sheetUrlInput
+                  ? sheetUrlInput.replace(/\/edit.*$/, "").replace("https://docs.google.com/spreadsheets/d/", "ID: ")
+                  : <span className="text-red-500 font-semibold">URL belum dikonfigurasi!</span>}
               </p>
             </div>
-            <div className="space-y-1.5 pt-1">
-              <label className="text-xs font-bold text-emerald-800 flex items-center justify-between">
-                <span>2. Webhook Apps Script URL (Dua Arah / Two-Way Sync):</span>
-                <span className="text-[10px] font-normal text-muted-foreground">(Opsional)</span>
-              </label>
-              <Input
-                value={webhookUrlInput}
-                onChange={(e) => setWebhookUrlInput(e.target.value)}
-                placeholder="https://script.google.com/macros/s/AKfycbx.../exec"
-                className="text-xs font-mono"
-              />
-              <p className="text-[11px] text-muted-foreground">
-                URL ini akan secara otomatis mengubah warna baris di Google Sheets saat status diubah di Dashboard UI.
+            <div className="rounded-xl bg-slate-50 border border-slate-200 p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">
+                  Pilih Tab / Bulan
+                </label>
+                <button
+                  type="button"
+                  onClick={() => { setSheetSyncOpen(false); setSheetSettingsOpen(true); }}
+                  className="text-[10px] text-emerald-700 font-bold hover:underline flex items-center gap-1 cursor-pointer"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+                  Ubah URL
+                </button>
+              </div>
+
+              <Select value={selectedSyncMonth} onValueChange={setSelectedSyncMonth}>
+                <SelectTrigger className="w-full h-9 text-xs bg-white border border-slate-200 font-semibold cursor-pointer shadow-2xs focus:ring-1 focus:ring-emerald-500 rounded-lg">
+                  <SelectValue placeholder="Pilih Tab / Bulan" />
+                </SelectTrigger>
+                <SelectContent className="bg-white border border-slate-200 shadow-xl rounded-xl">
+                  <SelectItem value="current" className="font-semibold cursor-pointer text-xs">
+                    Bulan Berjalan ({activeBotMonthName})
+                  </SelectItem>
+                  <SelectItem value="1" className="font-semibold cursor-pointer text-xs">Januari</SelectItem>
+                  <SelectItem value="2" className="font-semibold cursor-pointer text-xs">Februari</SelectItem>
+                  <SelectItem value="3" className="font-semibold cursor-pointer text-xs">Maret</SelectItem>
+                  <SelectItem value="4" className="font-semibold cursor-pointer text-xs">April</SelectItem>
+                  <SelectItem value="5" className="font-semibold cursor-pointer text-xs">Mei</SelectItem>
+                  <SelectItem value="6" className="font-semibold cursor-pointer text-xs">Juni</SelectItem>
+                  <SelectItem value="7" className="font-semibold cursor-pointer text-xs">Juli</SelectItem>
+                  <SelectItem value="8" className="font-semibold cursor-pointer text-xs">Agustus</SelectItem>
+                  <SelectItem value="9" className="font-semibold cursor-pointer text-xs">September</SelectItem>
+                  <SelectItem value="10" className="font-semibold cursor-pointer text-xs">Oktober</SelectItem>
+                  <SelectItem value="11" className="font-semibold cursor-pointer text-xs">November</SelectItem>
+                  <SelectItem value="12" className="font-semibold cursor-pointer text-xs">Desember</SelectItem>
+                  <SelectItem value="ALL" className="font-semibold cursor-pointer text-xs">Semua Bulan (ALL)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {!sheetUrlInput && (
+              <p className="text-[11px] text-red-600 font-semibold text-center">
+                ⚠ URL Spreadsheet belum dikonfigurasi. Klik "Ubah URL" untuk mengatur.
+              </p>
+            )}
+          </div>
+          <div className="flex justify-end gap-2 pt-1">
+            <Button type="button" variant="outline" size="sm" onClick={() => setSheetSyncOpen(false)}>
+              Batal
+            </Button>
+            <Button
+              type="button"
+              onClick={() => { setSheetSyncOpen(false); handleSyncSubmit({ preventDefault: () => {} } as any); }}
+              disabled={isSyncing || !sheetUrlInput}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold gap-2 cursor-pointer text-xs h-9"
+            >
+              {isSyncing && <Loader2 className="h-4 w-4 animate-spin" />}
+              Mulai Sinkronisasi
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Dialog: Settings Google Sheets per-Seller ── */}
+      <Dialog open={sheetSettingsOpen} onOpenChange={setSheetSettingsOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-slate-800">
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-blue-600"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+              Pengaturan Google Sheets
+            </DialogTitle>
+            <DialogDescription className="text-xs text-slate-500">
+              Atur link Google Spreadsheet untuk masing-masing seller agar data pengiriman dapat terhubung dan disinkronkan secara otomatis ke sistem.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleSaveSettings} className="space-y-4">
+            {/* Mitra Aliqa */}
+            <div className="rounded-xl border border-blue-200 bg-blue-50/50 p-4 space-y-2.5">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-600 px-2.5 py-0.5 text-[10px] font-extrabold text-white uppercase tracking-wide">
+                  📦 Mitra Aliqa
+                </span>
+              </div>
+              <div className="space-y-1">
+                <label className="text-[11px] font-bold text-blue-900">
+                  1. Link / URL Google Spreadsheet Aliqa
+                </label>
+                <Input
+                  value={settingsAliqaUrl}
+                  onChange={(e) => setSettingsAliqaUrl(e.target.value)}
+                  placeholder="https://docs.google.com/spreadsheets/d/1EeckOBzI5.../edit"
+                  className="text-xs font-mono bg-white border-blue-200 focus:ring-blue-400"
+                />
+              </div>
+              <div className="space-y-1 pt-1">
+                <div className="flex items-center justify-between">
+                  <label className="text-[11px] font-bold text-blue-900 flex items-center gap-1.5">
+                    <Send className="h-3 w-3 text-blue-600" />
+                    2. Webhook Apps Script URL Aliqa (Two-Way Sync)
+                  </label>
+                  <span className="text-[9px] font-semibold text-blue-500 border border-blue-200 rounded px-1.5 py-0.2 bg-white">Opsional</span>
+                </div>
+                <Input
+                  value={settingsAliqaWebhook}
+                  onChange={(e) => setSettingsAliqaWebhook(e.target.value)}
+                  placeholder="https://script.google.com/macros/s/AKfycbx_aliqa.../exec"
+                  className="text-xs font-mono bg-white border-blue-200 focus:ring-blue-400"
+                />
+                <p className="text-[10px] text-blue-600">
+                  Untuk otomatis push warna (Hijau Toska, Merah, dsb) ke spreadsheet Aliqa.
+                </p>
+              </div>
+            </div>
+
+            {/* Mitra Zaherba */}
+            <div className="rounded-xl border border-purple-200 bg-purple-50/50 p-4 space-y-2.5">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-purple-600 px-2.5 py-0.5 text-[10px] font-extrabold text-white uppercase tracking-wide">
+                  📦 Mitra Zaherba
+                </span>
+              </div>
+              <div className="space-y-1">
+                <label className="text-[11px] font-bold text-purple-900">
+                  1. Link / URL Google Spreadsheet Zaherba
+                </label>
+                <Input
+                  value={settingsZaherbaUrl}
+                  onChange={(e) => setSettingsZaherbaUrl(e.target.value)}
+                  placeholder="https://docs.google.com/spreadsheets/d/1wUqPnU1_QOq6.../edit"
+                  className="text-xs font-mono bg-white border-purple-200 focus:ring-purple-400"
+                />
+              </div>
+              <div className="space-y-1 pt-1">
+                <div className="flex items-center justify-between">
+                  <label className="text-[11px] font-bold text-purple-900 flex items-center gap-1.5">
+                    <Send className="h-3 w-3 text-purple-600" />
+                    2. Webhook Apps Script URL Zaherba (Two-Way Sync)
+                  </label>
+                  <span className="text-[9px] font-semibold text-purple-500 border border-purple-200 rounded px-1.5 py-0.2 bg-white">Opsional</span>
+                </div>
+                <Input
+                  value={settingsZaherbaWebhook}
+                  onChange={(e) => setSettingsZaherbaWebhook(e.target.value)}
+                  placeholder="https://script.google.com/macros/s/AKfycbx_zaherba.../exec"
+                  className="text-xs font-mono bg-white border-purple-200 focus:ring-purple-400"
+                />
+                <p className="text-[10px] text-purple-600">
+                  Untuk otomatis push warna (Biru Toska #46BDC6, Orange #FF9900, dsb) ke spreadsheet Zaherba.
+                </p>
+              </div>
+            </div>
+
+            {/* Info Box: Otomatis hapus data lama saat link berganti */}
+            <div className="rounded-xl border border-amber-200 bg-amber-50/80 p-3 text-[11px] text-amber-800 flex items-start gap-2">
+              <span className="text-base leading-none">💡</span>
+              <p className="leading-snug">
+                <strong>Ketentuan Ganti Link:</strong> Jika Anda mengganti Link Google Spreadsheet suatu seller dengan link baru, sistem secara otomatis akan menghapus seluruh data resi lama seller tersebut dari database agar tidak tercampur.
               </p>
             </div>
-            <div className="rounded-lg bg-emerald-50 p-3 text-xs text-emerald-950 border border-emerald-200">
-              <span className="font-bold">✨ Two-Way Real-time Synchronization:</span>
-              <p className="mt-1 text-[11px]">
-                Impor otomatis seluruh tab + eksekusi update warna status resi secara instan ke Google Sheets via Apps Script Webhook.
-              </p>
-            </div>
-            <div className="flex justify-end gap-2 pt-2">
-              <Button type="button" variant="outline" onClick={() => setSheetSyncOpen(false)}>
+
+            <div className="flex justify-end gap-2 pt-1">
+              <Button type="button" variant="outline" size="sm" onClick={() => setSheetSettingsOpen(false)}>
                 Batal
               </Button>
               <Button
                 type="submit"
-                disabled={isSyncing || !sheetUrlInput.trim()}
-                className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold gap-2 cursor-pointer"
+                disabled={isSavingSettings}
+                className="bg-blue-600 hover:bg-blue-700 text-white font-bold gap-2 cursor-pointer text-xs h-9"
               >
-                {isSyncing && <Loader2 className="h-4 w-4 animate-spin" />}
-                Simpan &amp; Sync Otomatis
+                {isSavingSettings && <Loader2 className="h-4 w-4 animate-spin" />}
+                Simpan Pengaturan
               </Button>
             </div>
           </form>
         </DialogContent>
       </Dialog>
+
 
       <Dialog open={botResultModalOpen} onOpenChange={setBotResultModalOpen}>
         <DialogContent className="max-w-3xl max-h-[85vh] flex flex-col bg-white border border-slate-200 shadow-2xl rounded-2xl p-0 overflow-hidden">

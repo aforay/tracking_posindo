@@ -66,6 +66,34 @@ export const WA_TEMPLATES: { id: WaTemplateType; label: string; desc: string }[]
   },
 ];
 
+export const DISTRICT_TO_KC: Record<string, string> = {
+  'HINAI': 'KC BINJAI',
+  'LANGKAT': 'KC BINJAI',
+  'STABAT': 'KC BINJAI',
+  'TANJUNG PURA': 'KC BINJAI',
+  'TANJUNGPURA': 'KC BINJAI',
+  'PANGKALAN BRANDAN': 'KC BINJAI',
+  'PANGKALANBRANDAN': 'KC BINJAI',
+  'BRANDAN': 'KC BINJAI',
+  'BESITANG': 'KC BINJAI',
+  'SECANGGANG': 'KC BINJAI',
+  'GEBANG': 'KC BINJAI',
+  'BABALAN': 'KC BINJAI',
+  '20854': 'KC BINJAI',
+  '20855': 'KC BINJAI',
+  '20853': 'KC BINJAI',
+  '20857': 'KC BINJAI',
+  '20859': 'KC BINJAI',
+  '20811': 'KC BINJAI',
+  '20814': 'KC BINJAI',
+  'KALIORANG': 'KC BONTANG',
+  'MUARASABAK': 'KCU JAMBI',
+  'MUARA SABAK': 'KCU JAMBI',
+  'BENUAKAYONG': 'KC KETAPANG',
+  'BENUA KAYONG': 'KC KETAPANG',
+  'ALOR BARAT': 'KCU KUPANG',
+};
+
 export function resolveDestinationOffice(shipment: Shipment, postOfficeName?: string): string {
   const rawOffice = (postOfficeName || shipment.kantorTujuan || "").trim();
   const generic = [
@@ -74,24 +102,30 @@ export function resolveDestinationOffice(shipment: Shipment, postOfficeName?: st
   ];
   const isGeneric = !rawOffice || generic.includes(rawOffice.toUpperCase());
   const isTransitHub = /^(SPP|MPC|DC|SENTRAL|TRANSIT)\b/i.test(rawOffice);
-  const isKcp = /\bKCP\b/i.test(rawOffice);
+  const isKcp = /\bKCP\b/i.test(rawOffice) || /\b\d{5}B\d\b/i.test(rawOffice);
+  const isFakeKc = /^KC\s+(?:HINAI|SECANGGANG|KALIORANG|MUARASABAK)/i.test(rawOffice);
 
-  // If explicit postOfficeName was selected and it's not generic/transit/kcp, use it
-  if (postOfficeName && !isGeneric && !isTransitHub && !isKcp) {
+  // If explicit postOfficeName was selected and it's not generic/transit/kcp/fakeKc, use it
+  if (postOfficeName && !isGeneric && !isTransitHub && !isKcp && !isFakeKc) {
     return postOfficeName;
   }
 
-  const city = extractCityRegency(shipment.alamat || "", isGeneric || isTransitHub ? "" : rawOffice);
+  // 1. Direct district / KCP to KC dictionary match
+  const combined = `${rawOffice} ${shipment.alamat || ""} ${shipment.tujuan || ""}`.toUpperCase();
+  for (const [key, kc] of Object.entries(DISTRICT_TO_KC)) {
+    if (combined.includes(key)) {
+      return kc;
+    }
+  }
+
+  const city = extractCityRegency(shipment.alamat || "", (isGeneric || isTransitHub || isKcp || isFakeKc) ? "" : rawOffice);
 
   // KCP tidak bisa untuk follow up -> selalu arahkan ke KC / KCU
-  if (isKcp) {
+  if (isKcp || isFakeKc) {
     if (city && city !== "-") {
       return `KC ${city.replace(/^(Kota|Kab\.?|Kec\.?)\s+/i, "").trim().toUpperCase()}`;
     }
-    const cleanKcp = rawOffice.replace(/^(?:KCP)\s+/i, "").replace(/\s+\d{5}[A-Za-z0-9]*$/, "").trim();
-    if (cleanKcp) {
-      return `KC ${cleanKcp.toUpperCase()}`;
-    }
+    return "KC Pos Tujuan";
   }
 
   // If rawOffice is a transit hub (like SPP JAKARTA TIMUR 13400) or generic, and we have destination city (e.g. Mimika), use destination KC!
@@ -99,7 +133,7 @@ export function resolveDestinationOffice(shipment: Shipment, postOfficeName?: st
     return `KC ${city.replace(/^(Kota|Kab\.?|Kec\.?)\s+/i, "").trim().toUpperCase()}`;
   }
 
-  if (!isGeneric && !isTransitHub && !isKcp) {
+  if (!isGeneric && !isTransitHub) {
     return rawOffice;
   }
 
@@ -242,9 +276,10 @@ export function extractCityRegency(address?: string, officeName?: string): strin
   }
 
   // 3. Fallback to Office Name if available (e.g. "KCU SURABAYA 60000" -> "Surabaya", "KC SUMENEP 69400" -> "Sumenep")
-  if (officeName) {
+  // Do NOT use KCP village names as cities
+  if (officeName && !/\bKCP\b/i.test(officeName) && !/\b\d{5}B\d\b/i.test(officeName) && !/^KC\s+(?:HINAI|SECANGGANG|KALIORANG|MUARASABAK)/i.test(officeName)) {
     const officeClean = officeName
-      .replace(/^(?:KCU|KC|KCP|MPC|DC|SPP|KANTOR\s+POS)\s+/i, "")
+      .replace(/^(?:KCU|KC|MPC|DC|SPP|KANTOR\s+POS)\s+/i, "")
       .replace(/\s+\d{5}[A-Za-z0-9]*$/, "")
       .trim();
     if (officeClean && !["TUJUAN", "PENGANTARAN", "POS PENGANTARAN", "POS", "POS INDONESIA"].includes(officeClean.toUpperCase())) {
@@ -270,7 +305,7 @@ export function extractCityRegency(address?: string, officeName?: string): strin
     "Nganjuk", "Jombang",
     // Sumatera
     "Banda Aceh", "Sabang", "Lhokseumawe", "Langsa", "Subulussalam", "Bireuen", "Takengon", "Meulaboh", "Aceh Besar",
-    "Medan", "Binjai", "Tebing Tinggi", "Pematangsiantar", "Tanjungbalai", "Sibolga", "Padang Sidempuan", "Gunungsitoli",
+    "Medan", "Binjai", "Langkat", "Stabat", "Tebing Tinggi", "Pematangsiantar", "Tanjungbalai", "Sibolga", "Padang Sidempuan", "Gunungsitoli",
     "Deli Serdang", "Karo", "Simalungun", "Asahan", "Labuhanbatu", "Rantauprapat", "Nias",
     "Padang", "Bukittinggi", "Padang Panjang", "Pariaman", "Payakumbuh", "Sawahlunto", "Solok", "Agam", "Pasaman",
     "Pekanbaru", "Dumai", "Bengkalis", "Kampar", "Indragiri", "Tembilahan", "Rokan Hilir", "Rokan Hulu", "Siak", "Kuantan Singingi",
@@ -352,8 +387,8 @@ export const FU_META: Record<
   { label: string; bg: string; fg: string; short: string }
 > = {
   PUTIH: { label: "BLM DI FU", bg: "#FFFFFF", fg: "#1E293B", short: "PUTIH" },
-  BIRU: { label: "PAKET SUKSES", bg: "#40e4b4", fg: "#000000", short: "BIRU" },
-  ORANGE: { label: "PAKET RETUR", bg: "#ff0000", fg: "#FFFFFF", short: "ORANGE" },
+  BIRU: { label: "PAKET SUKSES", bg: "#46BDC6", fg: "#000000", short: "BIRU" },
+  ORANGE: { label: "PAKET RETUR", bg: "#FBBC04", fg: "#000000", short: "ORANGE" },
   KUNING: { label: "SUDAH DI FU", bg: "#ffff00", fg: "#000000", short: "KUNING" },
   HIJAU: { label: "FU 2 KALI", bg: "#93C47D", fg: "#14532D", short: "HIJAU" },
   BIRU_TUA: { label: "FU POS", bg: "#1C4587", fg: "#FFFFFF", short: "BIRU TUA" },

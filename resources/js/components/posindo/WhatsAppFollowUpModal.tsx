@@ -100,11 +100,25 @@ export function WhatsAppFollowUpModal({
         setSelectedOfficeId("");
       }
     } else {
+      const combined = `${shipment.kantorTujuan || ""} ${shipment.alamat || ""} ${shipment.tujuan || ""}`.toLowerCase();
       const matched = postOffices.find((po) => {
+        const poName = po.name.toLowerCase();
+        const poCity = (po.city || "").toLowerCase();
+
+        if (combined.includes("hinai") || combined.includes("langkat") || combined.includes("stabat") || combined.includes("20854")) {
+          return poName.includes("binjai") || poCity.includes("binjai");
+        }
+        if (combined.includes("kaliorang")) {
+          return poName.includes("bontang") || poCity.includes("bontang");
+        }
+        if (combined.includes("muarasabak") || combined.includes("muara sabak")) {
+          return poName.includes("jambi") || poCity.includes("jambi");
+        }
+
         if (
           shipment.kantorTujuan &&
-          (po.name.toLowerCase().includes(shipment.kantorTujuan.toLowerCase()) ||
-           shipment.kantorTujuan.toLowerCase().includes(po.name.toLowerCase()))
+          (poName.includes(shipment.kantorTujuan.toLowerCase()) ||
+           shipment.kantorTujuan.toLowerCase().includes(poName))
         ) {
           return true;
         }

@@ -111,7 +111,7 @@ class PostOffice extends Model
         if (!empty($destination)) {
             $destClean = strtoupper(trim($destination));
             // KCP cannot handle follow-ups; skip direct match so it resolves to governing KC / KCU
-            $isKcp = str_contains($destClean, 'KCP');
+            $isKcp = str_contains($destClean, 'KCP') || preg_match('/\b\d{5}B\d\b/i', $destClean);
             if (!$isKcp) {
                 $byName = $offices->first(function ($item) use ($destClean) {
                     return !empty($item->name) && (
@@ -405,6 +405,38 @@ class PostOffice extends Model
             'BINJAI' => 'BINJAI',
             'STABAT' => 'BINJAI',
             'LANGKAT' => 'BINJAI',
+            'HINAI' => 'BINJAI',
+            'TANJUNG PURA' => 'BINJAI',
+            'TANJUNGPURA' => 'BINJAI',
+            'PANGKALAN BRANDAN' => 'BINJAI',
+            'PANGKALANBRANDAN' => 'BINJAI',
+            'BRANDAN' => 'BINJAI',
+            'BESITANG' => 'BINJAI',
+            'SECANGGANG' => 'BINJAI',
+            'GEBANG' => 'BINJAI',
+            'BABALAN' => 'BINJAI',
+            'KUALA' => 'BINJAI',
+            'BAHOROK' => 'BINJAI',
+            'BOHOROK' => 'BINJAI',
+            'SALAPIAN' => 'BINJAI',
+            'SEI BINGAI' => 'BINJAI',
+            'SEIBINGAI' => 'BINJAI',
+            'PADANG TUALANG' => 'BINJAI',
+            'PADANGTUALANG' => 'BINJAI',
+            'BATANG SERANGAN' => 'BINJAI',
+            'SAWIT SEBERANG' => 'BINJAI',
+            'SIRAPIT' => 'BINJAI',
+            'SELESAI' => 'BINJAI',
+            'SEI LEPAN' => 'BINJAI',
+            'BERANDAN BARAT' => 'BINJAI',
+            'PEMATANG JAYA' => 'BINJAI',
+            'WAMPU' => 'BINJAI',
+            'KUTAMBARU' => 'BINJAI',
+            'KALIORANG' => 'BONTANG',
+            'MUARASABAK' => 'JAMBI',
+            'MUARA SABAK' => 'JAMBI',
+            'BENUAKAYONG' => 'KETAPANG',
+            'BENUA KAYONG' => 'KETAPANG',
             'SUBULUSSALAM' => 'KUTACANE',
             'KUTACANE' => 'KUTACANE',
             'ACEH TENGGARA' => 'KUTACANE',
@@ -584,6 +616,7 @@ class PostOffice extends Model
             '691' => 'PAMEKASAN', '692' => 'PAMEKASAN', '693' => 'PAMEKASAN', '694' => 'SUMENEP', '69' => 'PAMEKASAN',
 
             // Sumatera Utara & Aceh
+            '207' => 'BINJAI', '208' => 'BINJAI',
             '20' => 'MEDAN', '211' => 'PEMATANG SIANTAR', '212' => 'KISARAN', '214' => 'RANTAUPRAPAT',
             '221' => 'KABANJAHE', '228' => 'GUNUNGSITOLI', '224' => 'SIBOLGA', '225' => 'SIBOLGA',
             '227' => 'PADANGSIDEMPUAN',

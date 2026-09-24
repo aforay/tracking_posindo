@@ -110,7 +110,7 @@ export function DataTable({
         const existing = resolvedOffices[r.resi] || resolvedOffices[r.id] || r.kantorTujuan;
         return (
           r.resi &&
-          (!existing || generic.includes(existing.trim().toUpperCase()) || existing.toUpperCase().includes('KCP')) &&
+          (!existing || generic.includes(existing.trim().toUpperCase()) || existing.toUpperCase().includes('KCP') || /\b\d{5}B\d\b/i.test(existing) || /^KC\s+(?:HINAI|SECANGGANG|KALIORANG|MUARASABAK)/i.test(existing)) &&
           !resolvingRef.current.has(r.resi)
         );
       })
@@ -410,18 +410,31 @@ export function DataTable({
                       {(() => {
                         const rawKC = (resolvedOffices[row.resi] || resolvedOffices[row.id] || row.kantorTujuan || "").trim();
                         const isGenericKC = !rawKC || ['KC TUJUAN', 'KC', 'KANTOR POS TUJUAN', 'KC POS PENGANTARAN', 'KC PENGANTARAN', 'POS PENGANTARAN', 'KC POS INDONESIA', 'POS INDONESIA'].includes(rawKC.toUpperCase());
-                        const isKcp = /\bKCP\b/i.test(rawKC);
-                        const cityRegency = extractCityRegency(row.alamat || "", rawKC);
+                        const isKcp = /\bKCP\b/i.test(rawKC) || /\b\d{5}B\d\b/i.test(rawKC) || /^KC\s+(?:HINAI|SECANGGANG|KALIORANG|MUARASABAK)/i.test(rawKC);
+
+                        // Check direct district to KC match (e.g. Hinai / Langkat -> KC BINJAI)
+                        const combinedText = `${rawKC} ${row.alamat || ""}`.toUpperCase();
+                        let matchedDistrictKC = "";
+                        if (combinedText.includes("HINAI") || combinedText.includes("LANGKAT") || combinedText.includes("STABAT") || combinedText.includes("20854")) {
+                          matchedDistrictKC = "KC BINJAI";
+                        } else if (combinedText.includes("KALIORANG")) {
+                          matchedDistrictKC = "KC BONTANG";
+                        } else if (combinedText.includes("MUARASABAK") || combinedText.includes("MUARA SABAK")) {
+                          matchedDistrictKC = "KCU JAMBI";
+                        }
+
+                        const cityRegency = extractCityRegency(row.alamat || "", isKcp ? "" : rawKC);
                         
                         let displayKC = "";
                         let isResolving = false;
-                        if (isKcp) {
+                        if (matchedDistrictKC) {
+                          displayKC = matchedDistrictKC;
+                        } else if (isKcp) {
                           // KCP tidak bisa untuk follow up -> diarahkan ke KC / KCU
                           if (cityRegency && cityRegency !== "-") {
                             displayKC = `KC ${cityRegency.replace(/^(Kota|Kab\.?|Kec\.?)\s+/i, "").trim().toUpperCase()}`;
                           } else {
-                            const officeClean = rawKC.replace(/^(?:KCP)\s+/i, "").replace(/\s+\d{5}[A-Za-z0-9]*$/, "").trim();
-                            displayKC = officeClean ? `KC ${officeClean.toUpperCase()}` : "KC TUJUAN";
+                            displayKC = "KC Pos Tujuan";
                           }
                         } else if (!isGenericKC) {
                           displayKC = rawKC;

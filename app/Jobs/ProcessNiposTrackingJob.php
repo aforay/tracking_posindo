@@ -145,14 +145,17 @@ class ProcessNiposTrackingJob implements ShouldQueue
                     if ($matchedOffice) {
                         $kantorTujuan = $matchedOffice->name;
                         $kantorPosId = $matchedOffice->id;
-                    } elseif (!empty($kantorTujuan) && str_contains(strtoupper($kantorTujuan), 'KCP')) {
+                    } elseif (!empty($kantorTujuan) && (str_contains(strtoupper($kantorTujuan), 'KCP') || preg_match('/\b\d{5}B\d\b/i', $kantorTujuan))) {
                         // KCP cannot handle follow-ups: redirect to governing KC / KCU
                         $matchedFallback = PostOffice::matchByDestinationOrAddress(null, $shipment->alamat);
                         if ($matchedFallback) {
                             $kantorTujuan = $matchedFallback->name;
                             $kantorPosId = $matchedFallback->id;
                         } else {
-                            $kantorTujuan = trim(preg_replace('/\bKCP\b/i', 'KC', $kantorTujuan));
+                            $derived = \App\Http\Controllers\DashboardController::deriveKantorPosFromAddress($shipment->alamat);
+                            if (!empty($derived)) {
+                                $kantorTujuan = $derived;
+                            }
                         }
                     }
 

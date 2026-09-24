@@ -106,6 +106,10 @@ export interface PageProps {
   googleSheetUrl?: string;
   googleSheetId?: string;
   googleSheetWebhookUrl?: string;
+  googleSheetUrlAliqa?: string;
+  googleSheetUrlZaherba?: string;
+  googleSheetWebhookUrlAliqa?: string;
+  googleSheetWebhookUrlZaherba?: string;
   trackingProgress?: {
     percentage: number;
     tracked: number;
@@ -235,6 +239,15 @@ export default function Dashboard() {
     return "Mitra Aliqa";
   });
 
+  // Sync state if server filter seller changes
+  useEffect(() => {
+    const s = pageProps?.filters?.seller;
+    if (s && s !== "ALL" && s !== "all" && s !== "Semua Seller") {
+      const target = s.toUpperCase().includes("ZAHERBA") ? "Mitra Zaherba" : "Mitra Aliqa";
+      setSeller(target);
+    }
+  }, [pageProps?.filters?.seller]);
+
   const [isOverdue, setIsOverdue] = useState<boolean>(() => {
     const ov = pageProps?.filters?.overdue;
     return ov === true || ov === "1" || ov === "true" || ov === 1;
@@ -251,10 +264,13 @@ export default function Dashboard() {
       localStorage.setItem("posindo_active_seller", nextSeller);
     }
     setSeller(nextSeller);
+    setMonth("all");
+    setColorFilter(null);
+    setQuery("");
     router.get(
       "/shipments",
-      { seller: nextSeller, month, color: colorFilter, search: query, sort, direction, overdue: isOverdue ? 1 : undefined },
-      { preserveState: true, preserveScroll: true }
+      { seller: nextSeller, month: "ALL", color: null, search: "", sort: "sheet", direction: "asc" },
+      { preserveState: false, preserveScroll: true }
     );
   };
 
@@ -765,7 +781,7 @@ export default function Dashboard() {
         label: "Paket Sukses",
         value: kpi.sukses,
         icon: CheckCircle2,
-        bg: "#40e4b4",
+        bg: "#46BDC6",
         fg: "#000000",
         sub: "DELIVERED",
         colorKey: "BIRU" as FuStatus,
@@ -774,8 +790,8 @@ export default function Dashboard() {
         label: "Paket Retur",
         value: kpi.retur,
         icon: RotateCcw,
-        bg: "#ff0000",
-        fg: "#FFFFFF",
+        bg: "#FBBC04",
+        fg: "#000000",
         sub: "RETURN / GAGAL SERAH",
         colorKey: "ORANGE" as FuStatus,
       },
@@ -834,6 +850,10 @@ export default function Dashboard() {
           googleSheetUrl={pageProps?.googleSheetUrl}
           googleSheetId={pageProps?.googleSheetId}
           googleSheetWebhookUrl={pageProps?.googleSheetWebhookUrl}
+          googleSheetUrlAliqa={pageProps?.googleSheetUrlAliqa}
+          googleSheetUrlZaherba={pageProps?.googleSheetUrlZaherba}
+          googleSheetWebhookUrlAliqa={pageProps?.googleSheetWebhookUrlAliqa}
+          googleSheetWebhookUrlZaherba={pageProps?.googleSheetWebhookUrlZaherba}
           onOpenPostOffices={() => setPostOfficesModalOpen(true)}
           currentUser={currentUser}
         />
@@ -955,9 +975,9 @@ export default function Dashboard() {
 
         {/* Unified Search, Filter & Control Toolbar (Tanpa Tombol Ekspor) */}
         <section className="rounded-2xl border border-slate-200/90 bg-white p-3.5 sm:p-4 shadow-xs space-y-3">
-          {/* Baris 1: Pencarian, Mitra Seller, & Sorting */}
+          {/* Baris 1: Pencarian & Sorting */}
           <div className="grid grid-cols-1 md:grid-cols-12 gap-2.5 items-center">
-            <div className="relative md:col-span-7 flex items-center gap-2">
+            <div className="relative md:col-span-9 flex items-center gap-2">
               <div className="relative flex-1">
                 <Search className="absolute top-3 left-3.5 h-4 w-4 text-slate-400 pointer-events-none" />
                 <Input
@@ -969,7 +989,7 @@ export default function Dashboard() {
                       router.get("/shipments", { seller, month, color: colorFilter, search: query, sort, direction, overdue: isOverdue ? 1 : undefined }, { preserveState: true, preserveScroll: true });
                     }
                   }}
-                  placeholder="Cari nama, resi, HP, alamat... (Bebas huruf besar/kecil / Caps Lock)"
+                  placeholder="Cari resi, alamat, nama..."
                   className="h-10 pl-10 pr-9 text-xs bg-slate-50/70 border-slate-200 focus:bg-white focus:ring-2 focus:ring-blue-600 rounded-xl"
                 />
                 {query && (
@@ -991,25 +1011,13 @@ export default function Dashboard() {
                 onClick={() => {
                   router.get("/shipments", { seller, month, color: colorFilter, search: query, sort, direction, overdue: isOverdue ? 1 : undefined }, { preserveState: true, preserveScroll: true });
                 }}
-                className="h-10 px-4 bg-[#1E40AF] hover:bg-blue-900 text-white font-bold text-xs rounded-xl shadow-xs shrink-0 cursor-pointer transition-colors"
+                className="h-10 px-5 bg-[#1E40AF] hover:bg-blue-900 text-white font-bold text-xs rounded-xl shadow-xs shrink-0 cursor-pointer transition-colors"
               >
                 Cari
               </Button>
             </div>
 
             <div className="md:col-span-3">
-              <Select value={seller} onValueChange={handleSellerChange}>
-                <SelectTrigger className="h-10 text-xs bg-white border border-slate-200 font-semibold shadow-2xs rounded-xl focus:ring-1 focus:ring-blue-600 cursor-pointer">
-                  <SelectValue>{seller}</SelectValue>
-                </SelectTrigger>
-                <SelectContent className="bg-white border border-slate-200 shadow-xl rounded-xl">
-                  <SelectItem value="Mitra Aliqa" className="font-semibold cursor-pointer text-xs">Mitra Aliqa</SelectItem>
-                  <SelectItem value="Mitra Zaherba" className="font-semibold cursor-pointer text-xs">Mitra Zaherba</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="md:col-span-2">
               <Button
                 type="button"
                 variant="outline"

@@ -194,6 +194,13 @@ class GoogleSheetsSyncService
             'updated_at' => now()->toDateTimeString(),
         ], 3600);
 
+        // Bust months counts and stats caches so UI immediately updates
+        foreach (['Mitra Aliqa', 'Mitra Zaherba', 'Aliqa', 'Zaherba'] as $s) {
+            foreach ([date('Y'), date('Y') - 1, date('Y') + 1] as $y) {
+                \Illuminate\Support\Facades\Cache::forget('months_counts_' . md5("{$s}_{$y}"));
+            }
+        }
+
         Log::info("GoogleSheetsSyncService finished: " . json_encode($doneSummary));
 
         return $doneSummary;
@@ -378,11 +385,19 @@ class GoogleSheetsSyncService
             return ['success' => false, 'message' => 'No tracking items provided'];
         }
 
-        $savedUrl = SystemSetting::get('google_sheet_url') ?: SystemSetting::get('google_sheet_id');
-        $spreadsheetId = SystemSetting::extractSpreadsheetId($savedUrl) ?: '1wUqPnU1_QOq6WocHwpxAhjhScjlb_ZhhSy8I2WqGQKw';
-        $webhookUrl = $customWebhookUrl !== null ? $customWebhookUrl : (SystemSetting::get('google_sheet_webhook_url') ?: env('GOOGLE_SHEET_WEBHOOK_URL'));
+        $sellerName = $trackingItems[0]['seller'] ?? '';
+        $isZaherba = str_contains(strtoupper((string)$sellerName), 'ZAHERBA');
+        $sellerKey = $isZaherba ? 'zaherba' : 'aliqa';
 
-        $logMsg = "GoogleSheetsSyncService: Reverse Syncing " . count($trackingItems) . " NIPos tracking updates back to Google Sheet [{$spreadsheetId}]";
+        $savedUrl = SystemSetting::get("google_sheet_url_{$sellerKey}") ?: (SystemSetting::get('google_sheet_url') ?: SystemSetting::get('google_sheet_id'));
+        $defaultId = $isZaherba ? env('GOOGLE_SHEET_ID_ZAHERBA', '1wUqPnU1_QOq6WocHwpxAhjhScjlb_ZhhSy8I2WqGQKw') : env('GOOGLE_SHEET_ID_ALIQA', '1EeckOBzI5EPNTT1bHsqu6kar9asKD6Ifar2CpTkSnBg');
+        $spreadsheetId = SystemSetting::extractSpreadsheetId($savedUrl) ?: $defaultId;
+
+        $webhookUrl = $customWebhookUrl !== null ? $customWebhookUrl : (
+            SystemSetting::get("google_sheet_webhook_url_{$sellerKey}") ?: (SystemSetting::get('google_sheet_webhook_url') ?: env('GOOGLE_SHEET_WEBHOOK_URL'))
+        );
+
+        $logMsg = "GoogleSheetsSyncService ({$sellerKey}): Reverse Syncing " . count($trackingItems) . " NIPos tracking updates back to Google Sheet [{$spreadsheetId}]";
         Log::info($logMsg);
 
         $webhookSuccess = false;
@@ -461,10 +476,17 @@ class GoogleSheetsSyncService
      */
     public function updateResiStatus(array $resiList, string $statusColor, ?string $note = null, ?string $escalationDate = null, ?string $fuTimestamp = null): array
     {
-        $statusColor = strtoupper(trim($statusColor));
-        $savedUrl = SystemSetting::get('google_sheet_url') ?: SystemSetting::get('google_sheet_id');
-        $spreadsheetId = SystemSetting::extractSpreadsheetId($savedUrl) ?: '1wUqPnU1_QOq6WocHwpxAhjhScjlb_ZhhSy8I2WqGQKw';
-        $webhookUrl = SystemSetting::get('google_sheet_webhook_url') ?: env('GOOGLE_SHEET_WEBHOOK_URL');
+        $firstShipment = !empty($resiList) ? \App\Models\OutgoingShipment::where('no_resi', $resiList[0])->first() : null;
+        $isZaherba = $firstShipment && str_contains(strtoupper((string)($firstShipment->nama_seller ?? '')), 'ZAHERBA');
+        $sellerKey = $isZaherba ? 'zaherba' : 'aliqa';
+
+        $savedUrl = SystemSetting::get("google_sheet_url_{$sellerKey}") ?: (SystemSetting::get('google_sheet_url') ?: SystemSetting::get('google_sheet_id'));
+        $defaultId = $isZaherba ? env('GOOGLE_SHEET_ID_ZAHERBA', '1wUqPnU1_QOq6WocHwpxAhjhScjlb_ZhhSy8I2WqGQKw') : env('GOOGLE_SHEET_ID_ALIQA', '1EeckOBzI5EPNTT1bHsqu6kar9asKD6Ifar2CpTkSnBg');
+        $spreadsheetId = SystemSetting::extractSpreadsheetId($savedUrl) ?: $defaultId;
+
+        $webhookUrl = SystemSetting::get("google_sheet_webhook_url_{$sellerKey}") ?: (
+            SystemSetting::get('google_sheet_webhook_url') ?: env('GOOGLE_SHEET_WEBHOOK_URL')
+        );
 
         $statusLabelMap = [
             'BIRU'     => 'PAKET SUKSES (DELIVERED)',
@@ -476,7 +498,7 @@ class GoogleSheetsSyncService
         ];
         $statusLabel = $statusLabelMap[$statusColor] ?? $statusColor;
 
-        $logMsg = "GoogleSheetsSyncService Two-Way Sync: Updating " . count($resiList) . " resis → {$statusColor} ({$statusLabel}) on Spreadsheet [{$spreadsheetId}]";
+        $logMsg = "GoogleSheetsSyncService Two-Way Sync ({$sellerKey}): Updating " . count($resiList) . " resis → {$statusColor} ({$statusLabel}) on Spreadsheet [{$spreadsheetId}]";
         Log::info($logMsg);
 
         $webhookSuccess = false;
@@ -496,7 +518,13 @@ class GoogleSheetsSyncService
                             7 => 'JULI 2026 (FP ALIQA)', 8 => 'AGUSTUS 2026 (FP ALIQA)', 9 => 'SEPTEMBER 2026 (FP ALIQA)',
                             10 => 'OKTOBER 2026 (FP ALIQA)', 11 => 'NOVEMBER 2026 (FP ALIQA)', 12 => 'DESEMBER 2026 (FP ALIQA)',
                         ];
-                        $targetSheet = $isAliqa ? ($monthSheetMapAliqa[$mNum] ?? '') : '';
+                        $monthSheetMapZaherba = [
+                            1 => 'JANUARI (ZAHERBA)', 2 => 'FEBRUARI (ZAHERBA)', 3 => 'MARET (ZAHERBA)',
+                            4 => 'APRIL (ZAHERBA)', 5 => 'MEI (ZAHERBA)', 6 => 'JUNI (ZAHERBA)',
+                            7 => 'JULI (ZAHERBA)', 8 => 'AGUSTUS (ZAHERBA)', 9 => 'SEPTEMBER (ZAHERBA)',
+                            10 => 'OKTOBER (ZAHERBA)', 11 => 'NOVEMBER (ZAHERBA)', 12 => 'DESEMBER (ZAHERBA)',
+                        ];
+                        $targetSheet = !$isZaherba ? ($monthSheetMapAliqa[$mNum] ?? '') : ($monthSheetMapZaherba[$mNum] ?? '');
                     }
                 }
 

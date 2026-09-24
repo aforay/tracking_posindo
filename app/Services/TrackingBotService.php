@@ -56,11 +56,11 @@ class TrackingBotService
             return $results;
         }
 
-        // 1. Primary Engine: Bulk tracking via NiposFastTracker (AJAX POST with vBarcode chunked by 40)
+        // 1. Primary Engine: Bulk tracking via NiposFastTracker (AJAX POST with vBarcode chunked by 18 for optimal API concurrency)
         if (!$isTesting) {
             try {
                 $fastTracker = app(\App\Services\NiposFastTracker::class);
-                $apiResults = $fastTracker->trackMany($cleanResis, 40);
+                $apiResults = $fastTracker->trackMany($cleanResis, 18);
                 if (!empty($apiResults)) {
                     foreach ($apiResults as $resi => $data) {
                         $rawStatus = $data['status_akhir'] ?: 'ON PROCESS';
@@ -88,9 +88,17 @@ class TrackingBotService
                         ];
                     }
 
-                    if (count($results) >= count($cleanResis)) {
-                        return $results;
+                    // For any resi not returned by NIPOS FastTracker (e.g. unknown or uncollected resi),
+                    // mark as fallback so existing data is preserved without triggering slow scrapers
+                    foreach ($cleanResis as $resi) {
+                        if (!isset($results[$resi])) {
+                            $sim = $this->generateSimulatedResult($resi);
+                            $sim['is_fallback'] = true;
+                            $results[$resi] = $sim;
+                        }
                     }
+
+                    return $results;
                 }
             } catch (\Throwable $e) {
                 Log::warning("TrackingBotService: NiposFastTracker bulk attempt: " . $e->getMessage());
@@ -673,13 +681,14 @@ class TrackingBotService
                     return $matchedOffice->name;
                 }
 
-                $cleanChosen = trim(preg_replace('/\bKCP\b/i', 'KC', $chosenCandidate));
-                $cleanChosen = preg_replace('/\s+\d{5}[A-Za-z0-9]*$/', '', $cleanChosen);
-                return strtoupper($cleanChosen);
+                if (!str_contains(strtoupper($chosenCandidate), 'KCP')) {
+                    $cleanChosen = preg_replace('/\s+\d{5}[A-Za-z0-9]*$/', '', $chosenCandidate);
+                    return strtoupper(trim($cleanChosen));
+                }
             }
         }
 
-        // 2. If no explicit KC/KCU found in timeline, look for KCP or generic office patterns and redirect to KC/KCU
+        // 2. If no explicit KC/KCU found in timeline, look for office patterns and redirect to KC/KCU
         if (preg_match('/(?:KANTOR\s*TUJUAN|TUJUAN|KCU|KC|KCP|MPC|DC|KANTOR\s*POS)\s*[:=]?\s*([A-Z0-9\s\.\,\-\(\)]+)/i', $combined, $m)) {
             $extracted = trim($m[1]);
             $extracted = preg_split('/[\r\n\|\<\>\;]/', $extracted)[0];
@@ -689,9 +698,10 @@ class TrackingBotService
                 if ($matchedOffice) {
                     return $matchedOffice->name;
                 }
-                $clean = trim(preg_replace('/\bKCP\b/i', 'KC', $extracted));
-                $clean = preg_replace('/\s+\d{5}[A-Za-z0-9]*$/', '', $clean);
-                return strtoupper($clean);
+                if (!str_contains(strtoupper($extracted), 'KCP')) {
+                    $clean = preg_replace('/\s+\d{5}[A-Za-z0-9]*$/', '', $extracted);
+                    return strtoupper(trim($clean));
+                }
             }
         }
 

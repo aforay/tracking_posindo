@@ -350,13 +350,16 @@ class TrackingController extends Controller
                                 $resolvedMap[$s->no_resi] = $matched->name;
                             } else {
                                 $targetOffice = $officeName;
-                                if (str_contains(strtoupper($targetOffice), 'KCP')) {
+                                if (str_contains(strtoupper($targetOffice), 'KCP') || preg_match('/\b\d{5}B\d\b/i', $targetOffice)) {
                                     $matchedAddr = PostOffice::matchByDestinationOrAddress(null, $s->alamat);
                                     if ($matchedAddr) {
                                         $targetOffice = $matchedAddr->name;
                                         $s->kantor_pos_id = $matchedAddr->id;
                                     } else {
-                                        $targetOffice = trim(preg_replace('/\bKCP\b/i', 'KC', $targetOffice));
+                                        $derived = \App\Http\Controllers\DashboardController::deriveKantorPosFromAddress($s->alamat);
+                                        if (!empty($derived)) {
+                                            $targetOffice = $derived;
+                                        }
                                     }
                                 }
                                 $s->kantor_tujuan = $targetOffice;
@@ -473,7 +476,7 @@ class TrackingController extends Controller
         $shipmentIds = $request->input('shipment_ids', []);
         $useQueue = $request->boolean('use_queue', false);
         $force = $request->boolean('force', false);
-        $limit = min(100, max(5, (int)$request->input('limit', 25)));
+        $limit = min(450, max(5, (int)$request->input('limit', 350)));
         $seller = $request->input('seller', null);
 
         // Session timestamp to isolate current bot run batches
@@ -523,7 +526,10 @@ class TrackingController extends Controller
         }
 
         if ($targetMonthNum !== null) {
-            $pendingQuery->whereMonth('tanggal_kirim', $targetMonthNum);
+            $year = date('Y');
+            $startDate = sprintf('%s-%02d-01', $year, $targetMonthNum);
+            $endDate = date('Y-m-t', strtotime($startDate));
+            $pendingQuery->whereBetween('tanggal_kirim', [$startDate, $endDate]);
         }
 
         if (!empty($shipmentIds)) {
@@ -538,22 +544,18 @@ class TrackingController extends Controller
             });
         }
 
-        $allPendingIds = \Illuminate\Support\Facades\DB::transaction(function () use ($pendingQuery, $limit) {
-            $ids = (clone $pendingQuery)
-                ->orderByRaw('CASE WHEN last_tracked_at IS NULL THEN 0 ELSE 1 END')
-                ->orderBy('last_tracked_at', 'asc')
-                ->orderBy('id', 'asc')
-                ->limit($limit)
-                ->lockForUpdate()
-                ->pluck('id')
-                ->toArray();
+        $ids = (clone $pendingQuery)
+            ->orderBy('last_tracked_at', 'asc')
+            ->orderBy('id', 'asc')
+            ->limit($limit)
+            ->pluck('id')
+            ->toArray();
 
-            if (!empty($ids)) {
-                OutgoingShipment::whereIn('id', $ids)->update(['last_tracked_at' => now()]);
-            }
+        if (!empty($ids)) {
+            OutgoingShipment::whereIn('id', $ids)->update(['last_tracked_at' => now()]);
+        }
 
-            return $ids;
-        });
+        $allPendingIds = $ids;
 
         $pendingCount = count($allPendingIds);
 
@@ -590,11 +592,17 @@ class TrackingController extends Controller
             $msg = "Berhasil memperbarui {$updatedCount} data resi dari NIPOS.";
         }
 
-        $remainingPending = (clone $pendingQuery)->count();
-        $isFinished = $remainingPending === 0;
+        if ($pendingCount < $limit) {
+            $remainingPending = 0;
+            $isFinished = true;
+        } else {
+            $remainingPending = (clone $pendingQuery)->count();
+            $isFinished = $remainingPending === 0;
+        }
 
-        // Fetch verification details of updated items for this batch
-        $updatedItems = OutgoingShipment::whereIn('id', $allPendingIds)
+        // Fetch verification details of latest updated items for this batch (sample of 50 for rapid response)
+        $sampleIds = array_slice($allPendingIds, -50);
+        $updatedItems = OutgoingShipment::whereIn('id', $sampleIds)
             ->get(['id', 'no_resi', 'nama_seller', 'status_pos', 'keterangan', 'status_kategori', 'color_code', 'sla_days', 'last_tracked_at'])
             ->map(function ($item) {
                 return [

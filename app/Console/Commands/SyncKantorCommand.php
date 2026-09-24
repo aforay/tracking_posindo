@@ -95,13 +95,16 @@ class SyncKantorCommand extends Command
                                 $shipment->kantor_tujuan = $matched->name;
                             } else {
                                 $targetOffice = $office;
-                                if (str_contains(strtoupper($targetOffice), 'KCP')) {
+                                if (str_contains(strtoupper($targetOffice), 'KCP') || preg_match('/\b\d{5}B\d\b/i', $targetOffice)) {
                                     $matchedAddr = PostOffice::matchByDestinationOrAddress(null, $shipment->alamat);
                                     if ($matchedAddr) {
                                         $targetOffice = $matchedAddr->name;
                                         $shipment->kantor_pos_id = $matchedAddr->id;
                                     } else {
-                                        $targetOffice = trim(preg_replace('/\bKCP\b/i', 'KC', $targetOffice));
+                                        $derived = \App\Http\Controllers\DashboardController::deriveKantorPosFromAddress($shipment->alamat);
+                                        if (!empty($derived)) {
+                                            $targetOffice = $derived;
+                                        }
                                     }
                                 }
                                 $shipment->kantor_tujuan = $targetOffice;

@@ -370,12 +370,16 @@ class DashboardController extends Controller
             }
 
             // KCP cannot handle follow-ups: redirect to governing KC / KCU
-            if (!empty($kantorTujuan) && str_contains($kantorTujuan, 'KCP')) {
+            if (!empty($kantorTujuan) && (str_contains($kantorTujuan, 'KCP') || preg_match('/\b\d{5}B\d\b/i', $kantorTujuan) || !$office)) {
                 $matchedKcp = \App\Models\PostOffice::matchByDestinationOrAddress($kantorTujuan, $s->alamat);
                 if ($matchedKcp) {
                     $kantorTujuan = strtoupper(trim($matchedKcp->name));
-                } else {
-                    $kantorTujuan = strtoupper(trim(preg_replace('/\bKCP\b/i', 'KC', $kantorTujuan)));
+                    $office = $matchedKcp;
+                } elseif (str_contains($kantorTujuan, 'KCP')) {
+                    $derived = self::deriveKantorPosFromAddress($s->alamat);
+                    if (!empty($derived)) {
+                        $kantorTujuan = $derived;
+                    }
                 }
             }
 
@@ -590,6 +594,8 @@ class DashboardController extends Controller
             ?: "https://docs.google.com/spreadsheets/d/{$defaultSheetId}/edit";
 
         $currentUser = \Illuminate\Support\Facades\Auth::user();
+        $statsData = $getStats();
+        $monthsData = $getMonths();
 
         return Inertia::render('Dashboard', [
             'auth' => fn() => [
@@ -602,24 +608,28 @@ class DashboardController extends Controller
                 ] : null,
             ],
             'shipments' => $paginatedResult,
-            'stats' => fn() => $getStats()['stats'],
-            'monthCounts' => fn() => $getMonths()['counts'],
-            'monthPendingCounts' => fn() => $getMonths()['pending'],
-            'yearTotal' => fn() => $getMonths()['total'],
-            'sellersList' => fn() => $sellersList,
+            'stats' => $statsData['stats'],
+            'monthCounts' => $monthsData['counts'],
+            'monthPendingCounts' => $monthsData['pending'],
+            'yearTotal' => $monthsData['total'],
+            'sellersList' => $sellersList,
             'postOffices' => fn() => Cache::remember('all_post_offices_catalog', 3600, function () {
                 return \App\Models\PostOffice::orderBy('province', 'asc')->orderBy('city', 'asc')->orderBy('name', 'asc')->get();
             }),
-            'trackingProgress' => fn() => [
-                'total' => $getStats()['stats']['total'],
-                'tracked' => $getStats()['tracked'],
-                'pending' => $getStats()['pending'],
-                'percentage' => $getStats()['stats']['total'] > 0 ? round((($getStats()['stats']['total'] - $getStats()['pending']) / $getStats()['stats']['total']) * 100, 1) : 100,
+            'trackingProgress' => [
+                'total' => $statsData['stats']['total'],
+                'tracked' => $statsData['tracked'],
+                'pending' => $statsData['pending'],
+                'percentage' => $statsData['stats']['total'] > 0 ? round((($statsData['stats']['total'] - $statsData['pending']) / $statsData['stats']['total']) * 100, 1) : 100,
                 'is_running' => false,
             ],
             'googleSheetUrl' => fn() => $sheetUrl,
             'googleSheetId' => fn() => $defaultSheetId,
             'googleSheetWebhookUrl' => fn() => SystemSetting::get('google_sheet_webhook_url', env('GOOGLE_SHEET_WEBHOOK_URL', '')),
+            'googleSheetUrlAliqa' => fn() => SystemSetting::get('google_sheet_url_aliqa', env('GOOGLE_SHEET_URL_ALIQA', 'https://docs.google.com/spreadsheets/d/1EeckOBzI5EPNTT1bHsqu6kar9asKD6Ifar2CpTkSnBg/edit')),
+            'googleSheetUrlZaherba' => fn() => SystemSetting::get('google_sheet_url_zaherba', env('GOOGLE_SHEET_URL_ZAHERBA', 'https://docs.google.com/spreadsheets/d/1wUqPnU1_QOq6WocHwpxAhjhScjlb_ZhhSy8I2WqGQKw/edit')),
+            'googleSheetWebhookUrlAliqa' => fn() => SystemSetting::get('google_sheet_webhook_url_aliqa', SystemSetting::get('google_sheet_webhook_url', env('GOOGLE_SHEET_WEBHOOK_URL', ''))),
+            'googleSheetWebhookUrlZaherba' => fn() => SystemSetting::get('google_sheet_webhook_url_zaherba', ''),
             'filters' => [
                 'seller' => $selectedSeller,
                 'kategori' => $selectedKategori,
@@ -1342,22 +1352,126 @@ class DashboardController extends Controller
     }
 
     /**
-     * Save dynamic Google Spreadsheet URL, ID, and Webhook URL to system_settings table
+     * Save dynamic Google Spreadsheet URL, ID, and Webhook URL to system_settings table.
+     * Supports per-seller keys: google_sheet_url_aliqa / google_sheet_url_zaherba.
      */
     public function updateGoogleSheetsSetting(Request $request)
     {
+        $isAjax = $request->expectsJson() || $request->header('Accept') === 'application/json';
+
+        // Handle per-seller batch update (from Settings modal)
+        if ($request->has('aliqa_url') || $request->has('zaherba_url')) {
+            $aliqaUrl    = trim($request->input('aliqa_url', ''));
+            $zaherbaUrl  = trim($request->input('zaherba_url', ''));
+            $webhookUrl  = trim($request->input('webhook_url', ''));
+            $errors = [];
+
+            if (!empty($aliqaUrl)) {
+                $id = SystemSetting::extractSpreadsheetId($aliqaUrl);
+                if (!$id) {
+                    $errors[] = 'URL Mitra Aliqa tidak valid.';
+                } else {
+                    $oldId = SystemSetting::get('google_sheet_id_aliqa') ?: SystemSetting::get('google_sheet_id');
+                    $oldUrl = SystemSetting::get('google_sheet_url_aliqa') ?: SystemSetting::get('google_sheet_url');
+
+                    // Jika URL atau ID spreadsheet diganti, hapus data lama seller ini di database agar bersih
+                    if (($oldId && $oldId !== $id) || ($oldUrl && $oldUrl !== $aliqaUrl) || $request->boolean('reset_aliqa_data')) {
+                        $countDeleted = OutgoingShipment::whereIn('nama_seller', ['Mitra Aliqa', 'Aliqa'])->delete();
+                        Cache::flush();
+                        $clearedNotes[] = "Data lama Mitra Aliqa ({$countDeleted} data) berhasil dibersihkan dari database karena URL spreadsheet berubah.";
+                    }
+
+                    SystemSetting::set('google_sheet_url_aliqa', $aliqaUrl);
+                    SystemSetting::set('google_sheet_id_aliqa', $id);
+                    // Also update legacy key for backward compat
+                    SystemSetting::set('google_sheet_url', $aliqaUrl);
+                    SystemSetting::set('google_sheet_id', $id);
+                }
+            }
+
+            if (!empty($zaherbaUrl)) {
+                $id = SystemSetting::extractSpreadsheetId($zaherbaUrl);
+                if (!$id) {
+                    $errors[] = 'URL Mitra Zaherba tidak valid.';
+                } else {
+                    $oldId = SystemSetting::get('google_sheet_id_zaherba');
+                    $oldUrl = SystemSetting::get('google_sheet_url_zaherba');
+
+                    // Jika URL atau ID spreadsheet diganti, hapus data lama seller ini di database agar bersih
+                    if (($oldId && $oldId !== $id) || ($oldUrl && $oldUrl !== $zaherbaUrl) || $request->boolean('reset_zaherba_data')) {
+                        $countDeleted = OutgoingShipment::whereIn('nama_seller', ['Mitra Zaherba', 'Zaherba'])->delete();
+                        Cache::flush();
+                        $clearedNotes[] = "Data lama Mitra Zaherba ({$countDeleted} data) berhasil dibersihkan dari database karena URL spreadsheet berubah.";
+                    }
+
+                    SystemSetting::set('google_sheet_url_zaherba', $zaherbaUrl);
+                    SystemSetting::set('google_sheet_id_zaherba', $id);
+                }
+            }
+
+            if (!empty($webhookUrl)) {
+                SystemSetting::set('google_sheet_webhook_url', $webhookUrl);
+            }
+
+            $aliqaWebhook = trim($request->input('aliqa_webhook_url', ''));
+            if (!empty($aliqaWebhook)) {
+                SystemSetting::set('google_sheet_webhook_url_aliqa', $aliqaWebhook);
+                if (empty($webhookUrl)) {
+                    SystemSetting::set('google_sheet_webhook_url', $aliqaWebhook);
+                }
+            }
+
+            $zaherbaWebhook = trim($request->input('zaherba_webhook_url', ''));
+            if (!empty($zaherbaWebhook)) {
+                SystemSetting::set('google_sheet_webhook_url_zaherba', $zaherbaWebhook);
+            }
+
+            if (!empty($errors)) {
+                $msg = implode(' ', $errors);
+                return $isAjax
+                    ? response()->json(['success' => false, 'message' => $msg], 422)
+                    : back()->with('error', $msg);
+            }
+
+            $successMsg = 'Pengaturan Google Sheets berhasil disimpan.' . (!empty($clearedNotes) ? ' ' . implode(' ', $clearedNotes) : '');
+            return $isAjax
+                ? response()->json(['success' => true, 'message' => $successMsg])
+                : back()->with('success', $successMsg);
+        }
+
+        // Legacy single-URL update (original flow)
         $url = trim($request->input('url', ''));
         $webhookUrl = trim($request->input('webhook_url', ''));
+        $seller = trim($request->input('seller', ''));
+        $isZaherba = str_contains(strtoupper($seller), 'ZAHERBA');
 
         if (empty($url)) {
-            return back()->with('error', 'URL Google Spreadsheet tidak boleh kosong.');
+            return $isAjax
+                ? response()->json(['success' => false, 'message' => 'URL Google Spreadsheet tidak boleh kosong.'], 422)
+                : back()->with('error', 'URL Google Spreadsheet tidak boleh kosong.');
         }
 
         $id = SystemSetting::extractSpreadsheetId($url);
         if (!$id) {
-            return back()->with('error', 'Format URL Google Spreadsheet tidak valid.');
+            return $isAjax
+                ? response()->json(['success' => false, 'message' => 'Format URL tidak valid.'], 422)
+                : back()->with('error', 'Format URL Google Spreadsheet tidak valid.');
         }
 
+        // Save to per-seller key
+        $sellerKey = $isZaherba ? 'zaherba' : 'aliqa';
+        $sellerName = $isZaherba ? 'Mitra Zaherba' : 'Mitra Aliqa';
+        $oldId = SystemSetting::get("google_sheet_id_{$sellerKey}");
+        $oldUrl = SystemSetting::get("google_sheet_url_{$sellerKey}");
+
+        if (($oldId && $oldId !== $id) || ($oldUrl && $oldUrl !== $url) || $request->boolean('reset_seller_data')) {
+            $deleted = OutgoingShipment::whereIn('nama_seller', [$sellerName, trim(preg_replace('/^Mitra\s+/i', '', $sellerName))])->delete();
+            Cache::flush();
+        }
+
+        SystemSetting::set("google_sheet_url_{$sellerKey}", $url);
+        SystemSetting::set("google_sheet_id_{$sellerKey}", $id);
+        // Legacy keys
         SystemSetting::set('google_sheet_url', $url);
         SystemSetting::set('google_sheet_id', $id);
 
@@ -1365,7 +1479,30 @@ class DashboardController extends Controller
             SystemSetting::set('google_sheet_webhook_url', $webhookUrl);
         }
 
-        return back()->with('success', "URL Google Spreadsheet & Webhook berhasil diperbarui (ID: {$id}).");
+        $successMsg = "URL Google Spreadsheet & Webhook berhasil diperbarui (ID: {$id}).";
+        return $isAjax
+            ? response()->json(['success' => true, 'message' => $successMsg])
+            : back()->with('success', $successMsg);
+    }
+
+    /**
+     * Clear all shipments for a specific seller on demand
+     */
+    public function clearSellerData(Request $request)
+    {
+        $seller = trim($request->input('seller', ''));
+        $isZaherba = str_contains(strtoupper($seller), 'ZAHERBA');
+        $sellerName = $isZaherba ? 'Mitra Zaherba' : 'Mitra Aliqa';
+        $aliases = [$sellerName, trim(preg_replace('/^Mitra\s+/i', '', $sellerName))];
+
+        $deleted = OutgoingShipment::whereIn('nama_seller', $aliases)->delete();
+        Cache::flush();
+
+        return response()->json([
+            'success' => true,
+            'deleted_count' => $deleted,
+            'message' => "Berhasil mengosongkan {$deleted} data untuk {$sellerName}."
+        ]);
     }
 
     /**
@@ -1456,7 +1593,7 @@ class DashboardController extends Controller
 
         try {
             $syncService = app(\App\Services\GoogleSheetsSyncService::class);
-            $sheetNames = $syncService->discoverSheetNames($spreadsheetId);
+            $sheetNames = $syncService->discoverSheetNames($spreadsheetId, $seller);
 
             // Filter sheetNames if targetSheet or targetMonth is passed
             if (!empty($targetSheet) && strtoupper((string)$targetSheet) !== 'ALL') {
@@ -1482,8 +1619,14 @@ class DashboardController extends Controller
                         }
                         return false;
                     });
-                    if (!empty($filtered)) {
-                        $sheetNames = array_values($filtered);
+                    $sheetNames = array_values($filtered);
+                    if (empty($sheetNames)) {
+                        $mName = $monthKeywords[$mNum][1] ?? "Bulan {$mNum}";
+                        return response()->json([
+                            'success' => false,
+                            'message' => "Tab/Sheet untuk {$mName} tidak ditemukan di Google Spreadsheet.",
+                            'sheet_names' => []
+                        ], 404);
                     }
                 }
             }

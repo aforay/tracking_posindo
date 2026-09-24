@@ -58,6 +58,7 @@ Route::middleware(['role:admin'])->group(function () {
 
     // Google Sheets & Two-Way Sync Configuration
     Route::post('/settings/google-sheets', [DashboardController::class, 'updateGoogleSheetsSetting'])->name('settings.google_sheets');
+    Route::post('/settings/clear-seller-data', [DashboardController::class, 'clearSellerData'])->name('settings.clear_seller_data');
     Route::post('/shipments/sync-google-sheets', [DashboardController::class, 'syncGoogleSheets'])->name('shipments.sync_google_sheets');
     Route::post('/shipments/sync-filter', [DashboardController::class, 'syncFilter'])->name('shipments.sync_filter');
     Route::post('/sync/discover', [DashboardController::class, 'syncDiscover'])->name('sync.discover');
