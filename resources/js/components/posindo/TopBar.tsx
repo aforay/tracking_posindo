@@ -515,6 +515,7 @@ export function TopBar({
 
       let totalProcessed = 0;
       let totalInserted = 0;
+      let totalColors = 0;
 
       // 2. Loop Sheet-by-sheet
       for (let i = 0; i < totalSheets; i++) {
@@ -526,7 +527,7 @@ export function TopBar({
           total_sheets: totalSheets,
           processed_rows: totalProcessed,
           inserted_rows: totalInserted,
-          message: `Membaca sheet: ${sheetName} (Tab ${i + 1}/${totalSheets})...`,
+          message: `Menyinkronkan data & warna FU: ${sheetName} (${i + 1}/${totalSheets})...`,
         });
 
         const syncRes = await fetch("/sync/sheet", {
@@ -552,6 +553,7 @@ export function TopBar({
         if (syncResult.success) {
           totalProcessed += syncResult.processed ?? 0;
           totalInserted += syncResult.inserted ?? 0;
+          totalColors += syncResult.colors_updated ?? 0;
         }
 
         const currentPct = Math.round(((i + 1) / totalSheets) * 100);
@@ -562,7 +564,9 @@ export function TopBar({
       setSheetSyncState("done");
       
       toast.success("Sinkronisasi Selesai!", {
-        description: `${nf(totalProcessed)} data berhasil disinkronkan. Halaman diperbarui.`,
+        description: totalColors > 0
+          ? `${nf(totalProcessed)} data dan ${nf(totalColors)} status warna FU (FU POS / Sudah FU) berhasil disinkronkan.`
+          : `${nf(totalProcessed)} data pengiriman berhasil disinkronkan.`,
       });
 
       router.reload({ preserveScroll: true });

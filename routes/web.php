@@ -63,6 +63,7 @@ Route::middleware(['role:admin'])->group(function () {
     Route::post('/shipments/sync-filter', [DashboardController::class, 'syncFilter'])->name('shipments.sync_filter');
     Route::post('/sync/discover', [DashboardController::class, 'syncDiscover'])->name('sync.discover');
     Route::post('/sync/sheet', [DashboardController::class, 'syncSingleSheet'])->name('sync.sheet');
+    Route::post('/sync/colors', [DashboardController::class, 'syncSheetColors'])->name('sync.colors');
     Route::post('/shipments/push-updates', [DashboardController::class, 'pushUpdatesToSheets'])->name('shipments.push_updates');
 
     // NIPOS Session Cookie Settings & Test Connection

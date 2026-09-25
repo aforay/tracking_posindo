@@ -965,17 +965,8 @@ class DashboardController extends Controller
             $botService = app(\App\Services\TrackingBotService::class);
             $payloadItem = $this->formatShipmentForSheet($shipment, $botService);
 
-            // 1. Kirim update tracking & pewarnaan baris/resi ke Google Sheets
+            // Kirim update tracking & pewarnaan baris/resi ke Google Sheets
             $syncRes = $syncService->reverseSyncNiposTracking([$payloadItem]);
-
-            // 2. Kirim update status FU untuk memastikan status FU & tanggal eskalasi tercatat
-            $syncService->updateResiStatus(
-                [$shipment->no_resi],
-                $payloadItem['color_code'],
-                $shipment->noted,
-                $shipment->fu_pos_date,
-                now()->toDateTimeString()
-            );
 
             // Audit Trail
             \App\Models\ShipmentLog::logAction(
@@ -1028,29 +1019,8 @@ class DashboardController extends Controller
                 $payload[] = $this->formatShipmentForSheet($shipment, $botService);
             }
 
-            // 1. Reverse Sync NIPOS tracking & status
+            // Kirim reverse sync NIPOS tracking & status
             $syncRes = $syncService->reverseSyncNiposTracking($payload);
-
-            // 2. Sync FU status & cell coloring per color_code group
-            $groupedByColor = [];
-            foreach ($shipments as $shipment) {
-                $cCode = $shipment->color_code ?: 'PUTIH';
-                $groupedByColor[$cCode][] = $shipment;
-            }
-
-            foreach ($groupedByColor as $cCode => $groupShipments) {
-                $groupResis = array_values(array_filter(array_map(fn($s) => $s->no_resi, $groupShipments)));
-                if (!empty($groupResis)) {
-                    $firstItem = $groupShipments[0];
-                    $syncService->updateResiStatus(
-                        $groupResis,
-                        $cCode,
-                        $firstItem->noted,
-                        $firstItem->fu_pos_date,
-                        now()->toDateTimeString()
-                    );
-                }
-            }
 
             // Audit Trail
             foreach ($shipments as $shipment) {
@@ -1127,27 +1097,6 @@ class DashboardController extends Controller
 
             // 1. Kirim reverse sync NIPOS tracking & pewarnaan baris/resi ke Google Sheets
             $syncRes = $syncService->reverseSyncNiposTracking($payload);
-
-            // 2. Kirim update status FU per kelompok warna agar Apps Script meng-update pewarnaan sel Resi (misal BIRU_TUA)
-            $groupedByColor = [];
-            foreach ($shipments as $shipment) {
-                $cCode = $shipment->color_code ?: 'BIRU_TUA';
-                $groupedByColor[$cCode][] = $shipment;
-            }
-
-            foreach ($groupedByColor as $cCode => $groupShipments) {
-                $groupResis = array_values(array_filter(array_map(fn($s) => $s->no_resi, $groupShipments)));
-                if (!empty($groupResis)) {
-                    $firstItem = $groupShipments[0];
-                    $syncService->updateResiStatus(
-                        $groupResis,
-                        $cCode,
-                        $firstItem->noted,
-                        $firstItem->fu_pos_date,
-                        now()->toDateTimeString()
-                    );
-                }
-            }
 
             // 2. Audit Trail
             foreach ($shipments as $shipment) {
@@ -1703,9 +1652,75 @@ class DashboardController extends Controller
                 'success' => true,
                 'processed' => $metrics['processed'] ?? 0,
                 'inserted' => $metrics['inserted'] ?? 0,
+                'colors_updated' => $metrics['colors_updated'] ?? 0,
             ]);
         } catch (Throwable $e) {
             return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * Pull cell/row colors directly from Google Sheets and sync to database
+     */
+    public function syncSheetColors(Request $request, GoogleSheetsSyncService $syncService)
+    {
+        try {
+            $seller = $request->input('seller', 'Mitra Aliqa');
+            $isZaherba = str_contains(strtoupper((string)$seller), 'ZAHERBA');
+            $sellerKey = $isZaherba ? 'zaherba' : 'aliqa';
+
+            $spreadsheetId = $request->input('spreadsheet_id');
+            if (empty($spreadsheetId)) {
+                $url = SystemSetting::get("google_sheet_url_{$sellerKey}")
+                    ?: (SystemSetting::get('google_sheet_url') ?: '');
+                $spreadsheetId = SystemSetting::extractSpreadsheetId($url);
+            }
+            if (empty($spreadsheetId)) {
+                $spreadsheetId = $isZaherba
+                    ? env('GOOGLE_SHEET_ID_ZAHERBA', '1wUqPnU1_QOq6WocHwpxAhjhScjlb_ZhhSy8I2WqGQKw')
+                    : env('GOOGLE_SHEET_ID_ALIQA', '1wKS0ZklbpTeLHN0APu2aIh7DBka3g4O15KNSJ0Wcdac');
+            }
+
+            if (empty($spreadsheetId)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Spreadsheet ID tidak ditemukan.',
+                ], 400);
+            }
+
+            $sheetName = $request->input('sheet') ?: $request->input('sheet_name');
+            $month = $request->input('month');
+
+            // If month is provided but sheetName is not, resolve sheetName
+            if (empty($sheetName) && !empty($month) && strtoupper((string)$month) !== 'ALL' && (string)$month !== '0') {
+                $mNum = (int)$month;
+                if ($isZaherba) {
+                    $monthMap = [
+                        1 => 'JANUARI (ZAHERBA)', 2 => 'FEBRUARI (ZAHERBA)', 3 => 'MARET (ZAHERBA)',
+                        4 => 'APRIL (ZAHERBA)', 5 => 'MEI (ZAHERBA)', 6 => 'JUNI (ZAHERBA)',
+                        7 => 'JULI (ZAHERBA)', 8 => 'AGUSTUS (ZAHERBA)', 9 => 'SEPTEMBER (ZAHERBA)',
+                        10 => 'OKTOBER (ZAHERBA)', 11 => 'NOVEMBER (ZAHERBA)', 12 => 'DESEMBER (ZAHERBA)',
+                    ];
+                } else {
+                    $monthMap = [
+                        1 => 'JANUARI 2026 (FP ALIQA)', 2 => 'FEBRUARI 2026 (FP ALIQA)', 3 => 'MARET 2026 (FP ALIQA)',
+                        4 => 'APRIL 2026 (FP ALIQA)', 5 => 'MEI 2026 (FP ALIQA)', 6 => 'JUNI 2026 (FP ALIQA).',
+                        7 => 'JULI 2026 (FP ALIQA)', 8 => 'AGUSTUS 2026 (FP ALIQA)', 9 => 'SEPTEMBER 2026 (FP ALIQA)',
+                        10 => 'OKTOBER 2026 (FP ALIQA)', 11 => 'NOVEMBER 2026 (FP ALIQA)', 12 => 'DESEMBER 2026 (FP ALIQA)',
+                    ];
+                }
+                $sheetName = $monthMap[$mNum] ?? null;
+            }
+
+            $result = $syncService->pullColorsFromSheet($spreadsheetId, $sheetName, $seller);
+
+            return response()->json($result);
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::error("syncSheetColors error: " . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal menyinkronkan warna sheet: ' . $e->getMessage(),
+            ], 500);
         }
     }
 

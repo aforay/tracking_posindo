@@ -42,6 +42,8 @@ function doPost(e) {
       result = handleFuStatusUpdate(data);
     } else if (action === 'reverse_sync_nipos') {
       result = handleNiposUpdate(data);
+    } else if (action === 'pull_sheet_colors' || action === 'sync_colors' || action === 'get_colors') {
+      result = handlePullColors(data);
     } else if (action === 'apply_filter') {
       result = { status: 'success', updated_count: 0, message: 'Filter received' };
     }
@@ -67,29 +69,24 @@ function handleNiposUpdate(data) {
     }
   });
 
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var ss = getSpreadsheet(data);
   var allSheets = ss.getSheets();
   var sheetsToScan = [];
 
-  // Prioritaskan sheet yang cocok dengan nama sheet di payload (otomatis buat sheet bulan jika belum ada)
+  // Prioritaskan sheet yang cocok dengan nama sheet di payload
   var hintSheetName = String(data.sheet || data.sheet_name || (items[0] && (items[0].sheet || items[0].sheet_name)) || '').trim();
   if (hintSheetName) {
-    var matchedOrCreated = getOrCreateSheet(ss, hintSheetName);
-    if (matchedOrCreated) {
-      sheetsToScan.push(matchedOrCreated);
-    } else {
-      var hintUpper = hintSheetName.toUpperCase();
-      allSheets.forEach(function(sh) {
-        if (sh.getName().trim().toUpperCase().indexOf(hintUpper) !== -1 || hintUpper.indexOf(sh.getName().trim().toUpperCase()) !== -1) {
-          sheetsToScan.push(sh);
-        }
-      });
+    var matched = findSheetByName(ss, hintSheetName);
+    if (matched) {
+      sheetsToScan.push(matched);
     }
   }
 
-  // Tambahkan seluruh sheet lainnya agar tidak ada resi yang terlewat
+  // Tambahkan seluruh sheet lainnya sebagai fallback jika resi belum ditemukan
+  var scannedIds = {};
+  sheetsToScan.forEach(function(sh) { scannedIds[sh.getSheetId()] = true; });
   allSheets.forEach(function(sh) {
-    if (sheetsToScan.indexOf(sh) === -1) {
+    if (!scannedIds[sh.getSheetId()]) {
       sheetsToScan.push(sh);
     }
   });
@@ -221,6 +218,13 @@ function handleNiposUpdate(data) {
           }
         }
 
+        // 6. Tanggal FU / Eskalasi jika kolom tersedia di sheet
+        var cTgl = findCol(hdr, CONFIG.COL_TANGGAL_FU);
+        var fuTime = item.fu_timestamp || item.escalation_date || '';
+        if (cTgl && fuTime) {
+          vals[rIdx][cTgl - 1] = fmtDate(fuTime);
+        }
+
         delete resiMap[resi];
         totalUpdated++;
       }
@@ -256,20 +260,21 @@ function handleFuStatusUpdate(data) {
     return { status: 'success', updated_count: 0, message: 'No resis provided' };
   }
 
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var ss = getSpreadsheet(data);
   var allSheets = ss.getSheets();
   var sheetsToScan = [];
 
-  var hintSheetName = String(data.sheet || data.sheet_name || '').trim().toUpperCase();
+  var hintSheetName = String(data.sheet || data.sheet_name || '').trim();
   if (hintSheetName) {
-    allSheets.forEach(function(sh) {
-      if (sh.getName().trim().toUpperCase() === hintSheetName) {
-        sheetsToScan.push(sh);
-      }
-    });
+    var matched = findSheetByName(ss, hintSheetName);
+    if (matched) {
+      sheetsToScan.push(matched);
+    }
   }
+  var scannedIds = {};
+  sheetsToScan.forEach(function(sh) { scannedIds[sh.getSheetId()] = true; });
   allSheets.forEach(function(sh) {
-    if (sheetsToScan.indexOf(sh) === -1) {
+    if (!scannedIds[sh.getSheetId()]) {
       sheetsToScan.push(sh);
     }
   });
@@ -430,6 +435,53 @@ function fmtDate(s) {
   }
 }
 
+function getSpreadsheet(data) {
+  var targetId = data.spreadsheet_id || data.sheet_id || '';
+  if (targetId && String(targetId).trim()) {
+    try {
+      return SpreadsheetApp.openById(String(targetId).trim());
+    } catch(e) {
+      Logger.log("Failed openById " + targetId + ": " + e.toString());
+    }
+  }
+  return SpreadsheetApp.getActiveSpreadsheet();
+}
+
+function findSheetByName(ss, hintSheetName) {
+  if (!hintSheetName) return null;
+  var targetUpper = String(hintSheetName).trim().toUpperCase();
+  var allSheets = ss.getSheets();
+
+  // 1. Exact match
+  for (var i = 0; i < allSheets.length; i++) {
+    if (allSheets[i].getName().trim().toUpperCase() === targetUpper) {
+      return allSheets[i];
+    }
+  }
+
+  // 2. Substring match
+  for (var i = 0; i < allSheets.length; i++) {
+    var n = allSheets[i].getName().trim().toUpperCase();
+    if (n.indexOf(targetUpper) !== -1 || targetUpper.indexOf(n) !== -1) {
+      return allSheets[i];
+    }
+  }
+
+  // 3. Month keyword match
+  var months = ['JANUARI', 'FEBRUARI', 'MARET', 'APRIL', 'MEI', 'JUNI', 'JULI', 'AGUSTUS', 'SEPTEMBER', 'OKTOBER', 'NOVEMBER', 'DESEMBER'];
+  for (var m = 0; m < months.length; m++) {
+    if (targetUpper.indexOf(months[m]) !== -1) {
+      for (var i = 0; i < allSheets.length; i++) {
+        if (allSheets[i].getName().trim().toUpperCase().indexOf(months[m]) !== -1) {
+          return allSheets[i];
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
 /**
  * Otomatis mencari atau MEMBUAT SHEET BULAN BARU (misal SEPTEMBER 2026 / SEPTEMBER (ZAHERBA)) jika belum ada
  */
@@ -482,4 +534,183 @@ function getOrCreateSheet(ss, hintSheetName) {
   }
 
   return null;
+}
+
+/**
+ * Tarik Data Warna FU (Two-Way Sync: Google Sheets → TRACKO Sistem)
+ * Membaca background color kolom RESI dan baris data untuk mendeteksi:
+ * - BIRU_TUA: FU POS (Eskalasi KC/KCU) - Khusus sel Resi berwarna biru tua/navy
+ * - KUNING: Sudah di FU (1x) - Seluruh baris atau sel resi berwarna kuning
+ * - HIJAU: FU 2 Kali - Seluruh baris atau sel resi berwarna hijau
+ * - BIRU: Delivered / Sukses - Seluruh baris berwarna biru muda/toska
+ * - ORANGE: Retur / Gagal Serah - Seluruh baris berwarna merah/orange
+ * - PUTIH: Belum di FU / In Process - Seluruh baris putih/tanpa warna
+ */
+function handlePullColors(data) {
+  var ss = getSpreadsheet(data);
+  var sheetsToScan = [];
+  var hintSheetName = String(data.sheet || data.sheet_name || '').trim();
+
+  if (hintSheetName && hintSheetName.toUpperCase() !== 'ALL') {
+    var matched = findSheetByName(ss, hintSheetName);
+    if (matched) sheetsToScan.push(matched);
+  }
+  if (sheetsToScan.length === 0) {
+    sheetsToScan = ss.getSheets();
+  }
+
+  var colorResults = [];
+
+  for (var sIdx = 0; sIdx < sheetsToScan.length; sIdx++) {
+    var sheet = sheetsToScan[sIdx];
+    var hdr = findHeaderRow(sheet);
+    if (!hdr) continue;
+
+    var cResi = findCol(hdr, CONFIG.COL_RESI);
+    if (!cResi) continue;
+
+    var cFu = findCol(hdr, CONFIG.COL_STATUS_FU);
+
+    var lastRow = sheet.getLastRow();
+    var numRows = lastRow - hdr.rowIndex;
+    if (numRows <= 0) continue;
+
+    var maxCols = Math.min(15, sheet.getLastColumn());
+    var resiVals = sheet.getRange(hdr.rowIndex + 1, cResi, numRows, 1).getValues();
+    var allBgs   = sheet.getRange(hdr.rowIndex + 1, 1, numRows, maxCols).getBackgrounds();
+    var fuVals   = cFu ? sheet.getRange(hdr.rowIndex + 1, cFu, numRows, 1).getValues() : null;
+
+    for (var i = 0; i < numRows; i++) {
+      var rVal = String(resiVals[i][0] || '').trim().toUpperCase();
+      if (!rVal || rVal.length < 8) continue;
+
+      var resiHex = String(allBgs[i][cResi - 1] || '#ffffff').trim().toLowerCase();
+      var fuHex   = cFu ? String(allBgs[i][cFu - 1] || '#ffffff').trim().toLowerCase() : '#ffffff';
+      var rowHexes = allBgs[i];
+      var fuText  = fuVals ? String(fuVals[i][0] || '').trim().toUpperCase() : '';
+
+      var colorCode = classifyRowColor(resiHex, fuHex, rowHexes, fuText);
+      if (colorCode && colorCode !== 'PUTIH') {
+        colorResults.push({
+          resi: rVal,
+          color: colorCode
+        });
+      }
+    }
+  }
+
+  return {
+    status: 'success',
+    total_found: colorResults.length,
+    colors: colorResults
+  };
+}
+
+function classifyRowColor(resiHex, fuHex, rowHexes, fuText) {
+  // 1. Cek teks eksplisit pada kolom FU jika ada
+  if (fuText) {
+    if (fuText.indexOf('ESKALASI') !== -1 || fuText.indexOf('FU POS') !== -1 || fuText.indexOf('FUPOS') !== -1) return 'BIRU_TUA';
+    if (fuText.indexOf('SUDAH FU') !== -1 || fuText.indexOf('SUDAH DI FU') !== -1 || fuText.indexOf('FU 1') !== -1 || fuText.indexOf('FU1') !== -1 || fuText === 'KUNING') return 'KUNING';
+    if (fuText.indexOf('FU 2') !== -1 || fuText.indexOf('FU2') !== -1 || fuText.indexOf('2 KALI') !== -1 || fuText.indexOf('2X') !== -1 || fuText === 'HIJAU') return 'HIJAU';
+    if (fuText.indexOf('DELIVERED') !== -1 || fuText.indexOf('SUKSES') !== -1) return 'BIRU';
+    if (fuText.indexOf('RETUR') !== -1 || fuText.indexOf('RETURN') !== -1) return 'ORANGE';
+  }
+
+  // 2. KHUSUS FU POS: Sel Resi atau Sel FU berwarna biru
+  if (isBlue(resiHex) || isBlue(fuHex)) {
+    return 'BIRU_TUA';
+  }
+
+  // 3. Cek warna di sepanjang baris (dan sel resi/FU)
+  var hasYellow = isYellow(resiHex) || isYellow(fuHex);
+  var hasGreen  = isGreen(resiHex) || isGreen(fuHex);
+  var hasCyan   = isCyan(resiHex) || isCyan(fuHex);
+  var hasRed    = isRedOrOrange(resiHex) || isRedOrOrange(fuHex);
+  var hasBlue   = false;
+
+  if (rowHexes && rowHexes.length) {
+    for (var c = 0; c < rowHexes.length; c++) {
+      var h = String(rowHexes[c] || '').trim().toLowerCase();
+      if (!h || h === '#ffffff' || h === 'white') continue;
+
+      if (isCyan(h)) {
+        hasCyan = true;
+      } else if (isBlue(h)) {
+        hasBlue = true;
+      } else if (isYellow(h)) {
+        hasYellow = true;
+      } else if (isGreen(h)) {
+        hasGreen = true;
+      } else if (isRedOrOrange(h)) {
+        hasRed = true;
+      }
+    }
+  }
+
+  // Prioritas penentuan status FU:
+  // 1. Biru (ON FU POS / Eskalasi KC)
+  if (hasBlue) return 'BIRU_TUA';
+  // 2. Kuning (SUDAH DI FU)
+  if (hasYellow) return 'KUNING';
+  // 3. Hijau (FU 2 Kali)
+  if (hasGreen) return 'HIJAU';
+  // 4. Toska / Cyan (Delivered)
+  if (hasCyan) return 'BIRU';
+  // 5. Merah / Orange (Retur)
+  if (hasRed) return 'ORANGE';
+
+  return 'PUTIH';
+}
+
+function hexToRgb(hex) {
+  if (!hex || hex === '#ffffff' || hex === 'white') return null;
+  hex = hex.replace('#', '');
+  if (hex.length === 3) hex = hex[0]+hex[0]+hex[1]+hex[1]+hex[2]+hex[2];
+  if (hex.length !== 6) return null;
+  var num = parseInt(hex, 16);
+  return { r: (num >> 16) & 255, g: (num >> 8) & 255, b: num & 255 };
+}
+
+function isBlue(hex) {
+  var rgb = hexToRgb(hex);
+  if (!rgb) return false;
+  // Deteksi warna biru (navy, dark blue, royal blue, google blue, dsb):
+  // Komponen Blue dominan di atas Green & Red, dan minimal bernilai 75
+  return rgb.b > rgb.g && rgb.b > (rgb.r * 1.15) && rgb.b > 75;
+}
+
+function isDarkBlue(hex) {
+  return isBlue(hex);
+}
+
+function isYellow(hex) {
+  var rgb = hexToRgb(hex);
+  if (!rgb) return false;
+  // Yellow / Pastel Yellow: red & green tinggi, blue jauh lebih rendah
+  // Contoh: #ffff00, #fff2cc, #ffe599, #ffd966, #f1c232
+  return rgb.r > 180 && rgb.g > 160 && (rgb.r - rgb.b) > 25 && (rgb.g - rgb.b) > 15;
+}
+
+function isGreen(hex) {
+  var rgb = hexToRgb(hex);
+  if (!rgb) return false;
+  // Green / Pastel Green: green dominan di atas red & blue
+  // Contoh: #93c47d, #d9ead3, #6aa84f, #38761d
+  return rgb.g > rgb.r && rgb.g > rgb.b && rgb.g > 100 && (rgb.g - rgb.r) > 10;
+}
+
+function isCyan(hex) {
+  var rgb = hexToRgb(hex);
+  if (!rgb) return false;
+  // Cyan/Toska: green & blue tinggi, red rendah
+  // Contoh: #40e4b4, #46bdc6, #32b8c8
+  return rgb.g > 140 && rgb.b > 140 && rgb.g >= rgb.b && rgb.r < 130;
+}
+
+function isRedOrOrange(hex) {
+  var rgb = hexToRgb(hex);
+  if (!rgb) return false;
+  // Red/Orange: red dominan
+  // Contoh: #ff0000, #ff9900, #fbbc04, #f6b26b, #ea9999
+  return (rgb.r > 190 && rgb.b < 140 && (rgb.r - rgb.g) > 15) || (rgb.r > 200 && rgb.b < 160 && rgb.g < 170);
 }

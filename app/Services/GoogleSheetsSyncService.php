@@ -234,7 +234,17 @@ class GoogleSheetsSyncService
         }
 
         $csvBody = (string)$response->body();
-        return $this->parseCsvContent($csvBody, $sheetName, $sheetSeller);
+        $metrics = $this->parseCsvContent($csvBody, $sheetName, $sheetSeller);
+
+        // Otomatis tarik dan sinkronkan pewarnaan sel/baris dari spreadsheet (FU POS, Sudah FU, dll)
+        try {
+            $colorRes = $this->pullColorsFromSheet($spreadsheetId, $sheetName, $sheetSeller);
+            $metrics['colors_updated'] = $colorRes['updated_count'] ?? 0;
+        } catch (\Throwable $e) {
+            Log::warning("Auto pull colors failed during syncSingleSheet: " . $e->getMessage());
+        }
+
+        return $metrics;
     }
 
     /**
@@ -642,6 +652,116 @@ class GoogleSheetsSyncService
         } catch (Throwable $e) {
             Log::warning("GoogleSheetsSyncService Webhook Filter Sync exception: " . $e->getMessage());
             return ['success' => false, 'error' => $e->getMessage()];
+        }
+    }
+
+    /**
+     * Pull cell background colors directly from Google Sheets via Webhook and synchronize to OutgoingShipment.
+     */
+    public function pullColorsFromSheet(string $spreadsheetId, ?string $sheetName = null, string $seller = 'Mitra Aliqa'): array
+    {
+        $isZaherba = str_contains(strtoupper($seller), 'ZAHERBA') || str_contains(strtoupper((string)$sheetName), 'ZAHERBA');
+        $sellerKey = $isZaherba ? 'zaherba' : 'aliqa';
+
+        $webhookUrl = SystemSetting::get("google_sheet_webhook_url_{$sellerKey}")
+            ?: (SystemSetting::get('google_sheet_webhook_url') ?: env('GOOGLE_SHEET_WEBHOOK_URL'));
+
+        if (empty($webhookUrl)) {
+            return [
+                'success' => false,
+                'message' => 'URL Google Sheet Webhook belum dikonfigurasi.',
+                'updated_count' => 0,
+            ];
+        }
+
+        $payload = [
+            'action' => 'pull_sheet_colors',
+            'spreadsheet_id' => $spreadsheetId,
+            'sheet' => $sheetName ?: 'ALL',
+            'sheet_name' => $sheetName ?: 'ALL',
+        ];
+
+        try {
+            $ch = curl_init($webhookUrl);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+            curl_setopt($ch, CURLOPT_POST, true);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
+            curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+            curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+            curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 15);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 60);
+
+            $body = curl_exec($ch);
+            $statusCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            curl_close($ch);
+
+            $data = json_decode($body, true);
+            if ($statusCode !== 200 || !isset($data['status']) || $data['status'] !== 'success') {
+                Log::warning("pullColorsFromSheet failed: HTTP {$statusCode}, Body: " . substr((string)$body, 0, 300));
+                return [
+                    'success' => false,
+                    'message' => 'Webhook Apps Script tidak merespons sukses.',
+                    'response' => $data,
+                    'updated_count' => 0,
+                ];
+            }
+
+            $colors = $data['colors'] ?? [];
+            if (empty($colors)) {
+                return [
+                    'success' => true,
+                    'message' => 'Tidak ada warna khusus (selain putih) yang ditemukan di sheet.',
+                    'updated_count' => 0,
+                ];
+            }
+
+            $updatedCount = 0;
+            $grouped = [];
+            foreach ($colors as $item) {
+                if (!empty($item['resi']) && !empty($item['color'])) {
+                    $grouped[strtoupper($item['color'])][] = trim($item['resi']);
+                }
+            }
+
+            foreach ($grouped as $color => $resis) {
+                foreach (array_chunk($resis, 500) as $chunk) {
+                    $updateData = ['color_code' => $color];
+
+                    if ($color === 'BIRU_TUA') {
+                        $updateData['fu_pos_date'] = \Illuminate\Support\Facades\DB::raw('COALESCE(fu_pos_date, NOW())');
+                        $updateData['status_kategori'] = \Illuminate\Support\Facades\DB::raw("CASE WHEN status_kategori IN ('SUKSES', 'RETUR') THEN status_kategori ELSE 'FOLLOW_UP' END");
+                    } elseif (in_array($color, ['KUNING', 'HIJAU'])) {
+                        $updateData['status_kategori'] = \Illuminate\Support\Facades\DB::raw("CASE WHEN status_kategori IN ('SUKSES', 'RETUR') THEN status_kategori ELSE 'FOLLOW_UP' END");
+                    } elseif ($color === 'BIRU') {
+                        $updateData['status_kategori'] = 'SUKSES';
+                    } elseif ($color === 'ORANGE') {
+                        $updateData['status_kategori'] = 'RETUR';
+                    }
+
+                    $affected = \App\Models\OutgoingShipment::whereIn('no_resi', $chunk)->update($updateData);
+                    $updatedCount += $affected;
+                }
+            }
+
+            \Illuminate\Support\Facades\Cache::flush();
+
+            Log::info("pullColorsFromSheet ({$sellerKey}): Synchronized {$updatedCount} resi colors from Sheet [{$sheetName}].");
+
+            return [
+                'success' => true,
+                'total_found' => count($colors),
+                'updated_count' => $updatedCount,
+                'message' => "Berhasil menyinkronkan {$updatedCount} warna resi dari Google Sheets!",
+            ];
+        } catch (\Throwable $e) {
+            Log::error("pullColorsFromSheet error: " . $e->getMessage());
+            return [
+                'success' => false,
+                'message' => 'Error: ' . $e->getMessage(),
+                'updated_count' => 0,
+            ];
         }
     }
 
