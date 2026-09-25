@@ -914,7 +914,7 @@ class DashboardController extends Controller
             $statusPosText = $shipment->status_pos ?: 'IN PROSES';
             $keteranganText = $shipment->keterangan ?: 'PROSES PENGIRIMAN POS';
             $colorCode = $shipment->color_code ?: 'PUTIH';
-            $statusKategori = 'IN_PROCESS';
+            $statusKategori = in_array($colorCode, ['KUNING', 'HIJAU', 'BIRU_TUA']) ? 'FOLLOW_UP' : ($shipment->status_kategori ?: 'IN_PROCESS');
         } elseif ($isRetur) {
             $statusPosText = $shipment->status_pos ?: 'DELIVERED (RETURN DELIVERY)';
             $keteranganText = $shipment->keterangan ?: 'DITERIMA PENGIRIM (MITRA)';
@@ -1028,8 +1028,29 @@ class DashboardController extends Controller
                 $payload[] = $this->formatShipmentForSheet($shipment, $botService);
             }
 
-            // Reverse Sync NIPOS tracking & status
+            // 1. Reverse Sync NIPOS tracking & status
             $syncRes = $syncService->reverseSyncNiposTracking($payload);
+
+            // 2. Sync FU status & cell coloring per color_code group
+            $groupedByColor = [];
+            foreach ($shipments as $shipment) {
+                $cCode = $shipment->color_code ?: 'PUTIH';
+                $groupedByColor[$cCode][] = $shipment;
+            }
+
+            foreach ($groupedByColor as $cCode => $groupShipments) {
+                $groupResis = array_values(array_filter(array_map(fn($s) => $s->no_resi, $groupShipments)));
+                if (!empty($groupResis)) {
+                    $firstItem = $groupShipments[0];
+                    $syncService->updateResiStatus(
+                        $groupResis,
+                        $cCode,
+                        $firstItem->noted,
+                        $firstItem->fu_pos_date,
+                        now()->toDateTimeString()
+                    );
+                }
+            }
 
             // Audit Trail
             foreach ($shipments as $shipment) {
@@ -1106,6 +1127,27 @@ class DashboardController extends Controller
 
             // 1. Kirim reverse sync NIPOS tracking & pewarnaan baris/resi ke Google Sheets
             $syncRes = $syncService->reverseSyncNiposTracking($payload);
+
+            // 2. Kirim update status FU per kelompok warna agar Apps Script meng-update pewarnaan sel Resi (misal BIRU_TUA)
+            $groupedByColor = [];
+            foreach ($shipments as $shipment) {
+                $cCode = $shipment->color_code ?: 'BIRU_TUA';
+                $groupedByColor[$cCode][] = $shipment;
+            }
+
+            foreach ($groupedByColor as $cCode => $groupShipments) {
+                $groupResis = array_values(array_filter(array_map(fn($s) => $s->no_resi, $groupShipments)));
+                if (!empty($groupResis)) {
+                    $firstItem = $groupShipments[0];
+                    $syncService->updateResiStatus(
+                        $groupResis,
+                        $cCode,
+                        $firstItem->noted,
+                        $firstItem->fu_pos_date,
+                        now()->toDateTimeString()
+                    );
+                }
+            }
 
             // 2. Audit Trail
             foreach ($shipments as $shipment) {
