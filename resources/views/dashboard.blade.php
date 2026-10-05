@@ -264,7 +264,7 @@
                                         <span class="badge badge-inprocess px-2 py-1"><i class="fa-solid fa-spinner me-1"></i>IN PROCESS</span>
                                     @endif
                                 </td>
-                                <td class="text-center fw-bold">{{ $item->sla_days ?? 2 }} Hari</td>
+                                <td class="text-center fw-bold">{{ $item->sla_days ?? 4 }} Hari</td>
                             </tr>
                         @empty
                             <tr>

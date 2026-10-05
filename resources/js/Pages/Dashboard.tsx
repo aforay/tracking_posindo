@@ -75,6 +75,8 @@ export interface PageProps {
       is_admin: boolean;
     } | null;
   };
+  activeDashboard?: "aliqa" | "zaherba";
+  baseRoute?: string;
   shipments?: Shipment[] | PaginatedData<Shipment>;
   postOffices?: PostOffice[];
   filters?: {
@@ -131,23 +133,23 @@ function getCardTheme(colorKey: FuStatus | null, isAliqa: boolean) {
   }
 
   switch (colorKey) {
-    case "BIRU": // Paket Sukses (Toska Aliqa / Cyan Zaherba)
+    case "BIRU": // Paket Sukses (Toska Aliqa / Cyan Zaherba #46bdc6)
       return {
-        hoverBorder: isAliqa ? "#10B981" : "#06B6D4",
-        hoverBg: isAliqa ? "#ECFDF5" : "#ECFEFF",
-        hoverShadow: isAliqa ? "rgba(16, 185, 129, 0.25)" : "rgba(6, 182, 212, 0.25)",
-        activeBorder: isAliqa ? "#059669" : "#0891B2",
-        activeRing: isAliqa ? "#34D399" : "#22D3EE",
-        activeBg: isAliqa ? "#D1FAE5" : "#CFFAFE",
+        hoverBorder: isAliqa ? "#10B981" : "#46bdc6",
+        hoverBg: isAliqa ? "#ECFDF5" : "#e8f8f9",
+        hoverShadow: isAliqa ? "rgba(16, 185, 129, 0.25)" : "rgba(70, 189, 198, 0.25)",
+        activeBorder: isAliqa ? "#059669" : "#329ea6",
+        activeRing: isAliqa ? "#34D399" : "#46bdc6",
+        activeBg: isAliqa ? "#D1FAE5" : "#cbf2f5",
       };
-    case "ORANGE": // Paket Retur (Merah Aliqa / Orange Zaherba)
+    case "ORANGE": // Paket Retur (Merah Aliqa / Orange Zaherba #fbbc04)
       return {
-        hoverBorder: isAliqa ? "#F43F5E" : "#F59E0B",
-        hoverBg: isAliqa ? "#FFF1F2" : "#FFFBEB",
-        hoverShadow: isAliqa ? "rgba(244, 63, 94, 0.25)" : "rgba(245, 158, 11, 0.25)",
-        activeBorder: isAliqa ? "#E11D48" : "#D97706",
-        activeRing: isAliqa ? "#FB7185" : "#FBBF24",
-        activeBg: isAliqa ? "#FFE4E6" : "#FEF3C7",
+        hoverBorder: isAliqa ? "#F43F5E" : "#fbbc04",
+        hoverBg: isAliqa ? "#FFF1F2" : "#fef8e7",
+        hoverShadow: isAliqa ? "rgba(244, 63, 94, 0.25)" : "rgba(251, 188, 4, 0.25)",
+        activeBorder: isAliqa ? "#E11D48" : "#dca303",
+        activeRing: isAliqa ? "#FB7185" : "#fbbc04",
+        activeBg: isAliqa ? "#FFE4E6" : "#fdebb5",
       };
     case "KUNING": // Sudah di FU
       return {
@@ -214,8 +216,14 @@ export default function Dashboard() {
   }, [pageProps?.shipments]);
 
   const [rows, setRows] = useState<Shipment[]>(shipmentList);
+  const [liveStats, setLiveStats] = useState(pageProps?.stats);
+  useEffect(() => {
+    setLiveStats(pageProps?.stats);
+  }, [pageProps?.stats]);
+
   const [postOffices, setPostOffices] = useState<PostOffice[]>(pageProps?.postOffices || []);
   const [waModalOpen, setWaModalOpen] = useState(false);
+  const [waModalTarget, setWaModalTarget] = useState<"POST_OFFICE" | "CUSTOMER">("POST_OFFICE");
   const [selectedShipmentForWa, setSelectedShipmentForWa] = useState<Shipment | null>(null);
   const [postOfficesModalOpen, setPostOfficesModalOpen] = useState(false);
 
@@ -225,28 +233,17 @@ export default function Dashboard() {
     }
   }, [pageProps?.postOffices]);
 
-  const [seller, setSeller] = useState(() => {
-    const s = pageProps?.filters?.seller;
-    if (s && s !== "ALL" && s !== "all" && s !== "Semua Seller") {
-      return s.toUpperCase().includes("ZAHERBA") ? "Mitra Zaherba" : "Mitra Aliqa";
-    }
-    if (typeof window !== "undefined") {
-      const saved = localStorage.getItem("posindo_active_seller");
-      if (saved && (saved.includes("Zaherba") || saved.includes("Aliqa"))) {
-        return saved.includes("Zaherba") ? "Mitra Zaherba" : "Mitra Aliqa";
-      }
-    }
-    return "Mitra Aliqa";
-  });
+  const isZaherba = (pageProps?.activeDashboard === "zaherba") || (pageProps?.filters?.seller?.toUpperCase().includes("ZAHERBA") ?? false);
+  const isAliqa = !isZaherba;
+  const currentSeller = isZaherba ? "Mitra Zaherba" : "Mitra Aliqa";
+  const basePath = pageProps?.baseRoute || (isZaherba ? "/zaherba" : "/aliqa");
+
+  const [seller, setSeller] = useState(currentSeller);
 
   // Sync state if server filter seller changes
   useEffect(() => {
-    const s = pageProps?.filters?.seller;
-    if (s && s !== "ALL" && s !== "all" && s !== "Semua Seller") {
-      const target = s.toUpperCase().includes("ZAHERBA") ? "Mitra Zaherba" : "Mitra Aliqa";
-      setSeller(target);
-    }
-  }, [pageProps?.filters?.seller]);
+    setSeller(currentSeller);
+  }, [currentSeller]);
 
   const [isOverdue, setIsOverdue] = useState<boolean>(() => {
     const ov = pageProps?.filters?.overdue;
@@ -259,19 +256,13 @@ export default function Dashboard() {
   }, [pageProps?.filters?.overdue]);
 
   const handleSellerChange = (newSeller: string) => {
-    const nextSeller = newSeller.toUpperCase().includes("ZAHERBA") ? "Mitra Zaherba" : "Mitra Aliqa";
+    const isTargetZaherba = newSeller.toUpperCase().includes("ZAHERBA");
+    const nextSeller = isTargetZaherba ? "Mitra Zaherba" : "Mitra Aliqa";
+    const targetUrl = isTargetZaherba ? "/zaherba" : "/aliqa";
     if (typeof window !== "undefined") {
       localStorage.setItem("posindo_active_seller", nextSeller);
     }
-    setSeller(nextSeller);
-    setMonth("all");
-    setColorFilter(null);
-    setQuery("");
-    router.get(
-      "/shipments",
-      { seller: nextSeller, month: "ALL", color: null, search: "", sort: "sheet", direction: "asc" },
-      { preserveState: false, preserveScroll: true }
-    );
+    router.visit(targetUrl);
   };
 
   useEffect(() => {
@@ -310,7 +301,7 @@ export default function Dashboard() {
 
     const timer = setTimeout(() => {
       router.get(
-        "/shipments",
+        basePath,
         { seller, month, color: colorFilter, search: query, sort, direction, overdue: isOverdue ? 1 : undefined },
         { preserveState: true, preserveScroll: true, replace: true }
       );
@@ -328,7 +319,7 @@ export default function Dashboard() {
     setSort(newSort);
     setDirection(newDir);
     router.get(
-      "/shipments",
+      basePath,
       { seller, month, color: colorFilter, search: query, sort: newSort, direction: newDir, overdue: isOverdue ? 1 : undefined },
       { preserveState: true, preserveScroll: true }
     );
@@ -354,7 +345,10 @@ export default function Dashboard() {
       if (isPaginating || isUpdatingRef.current || isReloadingRef.current || waModalOpen || postOfficesModalOpen || exportOpen) return;
 
       try {
-        const res = await fetch("/shipments/live-version", {
+        const queryParams = lastVersionRef.current
+          ? `?since=${encodeURIComponent(lastVersionRef.current)}`
+          : "";
+        const res = await fetch(`/shipments/live-version${queryParams}`, {
           headers: { Accept: "application/json" },
         });
         if (!res.ok) return;
@@ -368,24 +362,85 @@ export default function Dashboard() {
           return;
         }
 
-        // Jika versi data di server berubah (admin/CS lain mengubah status/catatan follow up)
+        // Jika versi data di server berubah (admin lain meng-update resi / status FU)
         if (lastVersionRef.current !== String(data.version)) {
           lastVersionRef.current = String(data.version);
 
-          // Cek apakah user sedang fokus mengetik di input/textarea
+          // 1. CEK APAKAH TERSEDIA DELTA PERUBAHAN: Lakukan pembaruan senyap di memori TANPA RELOAD!
+          if (Array.isArray(data.deltas) && data.deltas.length > 0) {
+            const deltaMap = new Map<string, any>();
+            data.deltas.forEach((d: any) => {
+              if (d && d.id) deltaMap.set(String(d.id), d);
+            });
+
+            // Update baris tabel secara instan di memori React
+            setRows((prev) => {
+              if (!prev || prev.length === 0) return prev;
+              let anyChanged = false;
+              const updated = prev.map((row) => {
+                const delta = deltaMap.get(String(row.id));
+                if (delta) {
+                  anyChanged = true;
+                  return {
+                    ...row,
+                    fu: (delta.fu || row.fu) as FuStatus,
+                    escalationDate: delta.escalationDate !== undefined ? delta.escalationDate : row.escalationDate,
+                    statusKategori: delta.statusKategori || row.statusKategori,
+                    nipos: delta.nipos || row.nipos,
+                    note: delta.note || delta.noted || row.note,
+                  };
+                }
+                return row;
+              });
+              return anyChanged ? updated : prev;
+            });
+
+            // Update counter KPI secara real-time di memori tanpa reload
+            setLiveStats((prev) => {
+              if (!prev) return prev;
+              const newStats = { ...prev };
+              data.deltas.forEach((d: any) => {
+                const targetFu = d.fu;
+                if (targetFu === "BIRU_TUA") {
+                  newStats.fu_pos = (newStats.fu_pos ?? 0) + 1;
+                  if (newStats.belum && newStats.belum > 0) newStats.belum -= 1;
+                } else if (targetFu === "KUNING") {
+                  newStats.sudah_fu = (newStats.sudah_fu ?? 0) + 1;
+                  if (newStats.belum && newStats.belum > 0) newStats.belum -= 1;
+                } else if (targetFu === "BIRU") {
+                  newStats.sukses = (newStats.sukses ?? 0) + 1;
+                  if (newStats.belum && newStats.belum > 0) newStats.belum -= 1;
+                } else if (targetFu === "ORANGE") {
+                  newStats.retur = (newStats.retur ?? 0) + 1;
+                  if (newStats.belum && newStats.belum > 0) newStats.belum -= 1;
+                }
+              });
+              return newStats;
+            });
+
+            // Selesai! Data sudah sinkron di layar admin tanpa ada reload halaman.
+            return;
+          }
+
+          // 2. Fallback HANYA jika delta kosong (misal import excel massal oleh admin)
+          // Berikan jeda acak (jitter 1.5 - 3.5 detik) agar 7 admin tidak menembak server bersamaan
           const activeTag = document.activeElement?.tagName;
           const isUserTyping = activeTag === "INPUT" || activeTag === "TEXTAREA";
 
           if (!isUserTyping && isMounted && !isReloadingRef.current) {
             isReloadingRef.current = true;
-            router.reload({
-              preserveState: true,
-              preserveScroll: true,
-              only: ["shipments", "stats"],
-              onFinish: () => {
-                isReloadingRef.current = false;
-              },
-            });
+            const jitterMs = Math.floor(Math.random() * 2000) + 1500;
+            setTimeout(() => {
+              if (!isMounted) return;
+              router.reload({
+                preserveState: true,
+                preserveScroll: true,
+                only: ["shipments", "stats"],
+                onFinish: () => {
+                  isReloadingRef.current = false;
+                },
+              });
+            }, jitterMs);
           }
         }
       } catch (err) {
@@ -394,7 +449,7 @@ export default function Dashboard() {
     };
 
     checkLiveVersion();
-    const interval = setInterval(checkLiveVersion, 15000);
+    const interval = setInterval(checkLiveVersion, 12000);
 
     return () => {
       isMounted = false;
@@ -423,7 +478,7 @@ export default function Dashboard() {
     }
     setIsPaginating(true);
     router.get(
-      "/shipments",
+      basePath,
       {
         seller,
         month,
@@ -465,20 +520,34 @@ export default function Dashboard() {
   }, [pageProps?.monthCounts, bySeller]);
 
   const kpi = useMemo(() => {
-    if (pageProps?.stats) {
+    const isAliqaNow = typeof seller === "string" && seller.toUpperCase().includes("ALIQA");
+    const currentStats = liveStats || pageProps?.stats;
+    if (currentStats) {
       return {
-        total: pageProps.stats.total ?? 0,
-        sukses: pageProps.stats.sukses ?? 0,
-        retur: pageProps.stats.retur ?? 0,
-        belum: pageProps.stats.belum ?? 0,
-        sudahFu: pageProps.stats.sudah_fu ?? 0,
-        fu2Kali: pageProps.stats.fu_2_kali ?? 0,
-        fuPos: pageProps.stats.fu_pos ?? 0,
-        perluFu: pageProps.stats.follow_up ?? pageProps.stats.perluFu ?? 0,
+        total: currentStats.total ?? 0,
+        sukses: currentStats.sukses ?? 0,
+        retur: currentStats.retur ?? 0,
+        belum: isAliqaNow ? ((currentStats.belum ?? 0) + (currentStats.fu_2_kali ?? 0)) : (currentStats.belum ?? 0),
+        sudahFu: currentStats.sudah_fu ?? 0,
+        fu2Kali: isAliqaNow ? 0 : (currentStats.fu_2_kali ?? 0),
+        fuPos: currentStats.fu_pos ?? 0,
+        perluFu: currentStats.follow_up ?? currentStats.perluFu ?? 0,
       };
     }
     const rList = rows || [];
     const c = (f: FuStatus) => rList.filter((r) => r?.fu === f).length;
+    if (isAliqaNow) {
+      return {
+        total: rList.length,
+        sukses: c("BIRU"),
+        retur: c("ORANGE"),
+        belum: c("PUTIH") + c("HIJAU"),
+        sudahFu: c("KUNING"),
+        fu2Kali: 0,
+        fuPos: c("BIRU_TUA"),
+        perluFu: c("KUNING") + c("BIRU_TUA"),
+      };
+    }
     return {
       total: rList.length,
       sukses: c("BIRU"),
@@ -489,7 +558,7 @@ export default function Dashboard() {
       fuPos: c("BIRU_TUA"),
       perluFu: c("KUNING") + c("HIJAU") + c("BIRU_TUA"),
     };
-  }, [pageProps?.stats, rows]);
+  }, [pageProps?.stats, rows, seller]);
 
   // Send update-status request to Laravel backend via Inertia router
   const setStatus = (ids: string[], fu: FuStatus, escalationDate?: string) => {
@@ -700,7 +769,6 @@ export default function Dashboard() {
     }
   };
 
-  const isAliqa = typeof seller === "string" && seller.toUpperCase().includes("ALIQA");
   const currentFuMeta = useMemo(() => getSellerFuMeta(seller), [seller]);
   const currentFuOrder = useMemo(() => getSellerFuOrder(seller), [seller]);
 
@@ -774,14 +842,14 @@ export default function Dashboard() {
         icon: Package,
         bg: "#F3F4F6",
         fg: "#374151",
-        sub: "seluruh resi outgoing",
+        sub: "seluruh resi zaherba",
         colorKey: null,
       },
       {
         label: "Paket Sukses",
         value: kpi.sukses,
         icon: CheckCircle2,
-        bg: "#46BDC6",
+        bg: "#46bdc6",
         fg: "#000000",
         sub: "DELIVERED",
         colorKey: "BIRU" as FuStatus,
@@ -790,34 +858,34 @@ export default function Dashboard() {
         label: "Paket Retur",
         value: kpi.retur,
         icon: RotateCcw,
-        bg: "#FBBC04",
+        bg: "#fbbc04",
         fg: "#000000",
         sub: "RETURN / GAGAL SERAH",
         colorKey: "ORANGE" as FuStatus,
       },
       {
-        label: "Belum di FU",
+        label: "Sudah di FU",
+        value: kpi.sudahFu,
+        icon: BellRing,
+        bg: "#ffff00",
+        fg: "#000000",
+        sub: "SUDAH DI FU",
+        colorKey: "KUNING" as FuStatus,
+      },
+      {
+        label: "BLM di FU",
         value: kpi.belum,
         icon: Clock,
         bg: "#FFFFFF",
         fg: "#1E293B",
-        sub: "ON PROCESS / RUNSHEET",
+        sub: "BLM DI FU",
         colorKey: "PUTIH" as FuStatus,
-      },
-      {
-        label: "Sudah di FU",
-        value: kpi.sudahFu,
-        icon: BellRing,
-        bg: "#FFFF00",
-        fg: "#422006",
-        sub: "FOLLOW-UP CS 1X",
-        colorKey: "KUNING" as FuStatus,
       },
       {
         label: "FU 2 Kali",
         value: kpi.fu2Kali,
         icon: Repeat,
-        bg: "#93C47D",
+        bg: "#93c47d",
         fg: "#14532D",
         sub: "FOLLOW-UP 2 KALI",
         colorKey: "HIJAU" as FuStatus,
@@ -826,9 +894,9 @@ export default function Dashboard() {
         label: "FU POS",
         value: kpi.fuPos,
         icon: Send,
-        bg: "#1C4587",
+        bg: "#1c4587",
         fg: "#FFFFFF",
-        sub: "ESKALASI POS PUSAT",
+        sub: "ESKALASI KC / KCU",
         colorKey: "BIRU_TUA" as FuStatus,
       },
     ];
@@ -859,9 +927,9 @@ export default function Dashboard() {
         />
 
         {/* 2. Bar Navigasi 12 Bulan (Di Bawah TopBar) */}
-        <div className="border-b border-slate-200 bg-slate-50 px-4 py-2">
-          <div className="flex w-full items-center gap-1.5 justify-between">
-            {[{ label: "Semua (Setahun)", monthNum: "all" as const, n: pageProps?.yearTotal ?? totalCount }].concat(
+        <div className="border-b border-slate-200 bg-slate-50 px-2 sm:px-4 py-1.5 overflow-x-auto pos-scroll">
+          <div className="flex w-full min-w-max xl:min-w-0 items-center gap-1 sm:gap-1.5 justify-between max-w-[1920px] 2xl:max-w-[2200px] mx-auto">
+            {[{ label: "Semua", monthNum: "all" as const, n: pageProps?.yearTotal ?? totalCount }].concat(
               MONTHS.map((m, i) => ({ label: m, monthNum: (i + 1) as never, n: monthCounts[i] ?? 0 }))
             ).map((t) => {
               const active = month === t.monthNum;
@@ -872,13 +940,13 @@ export default function Dashboard() {
                   onClick={() => {
                     setMonth(t.monthNum);
                     router.get(
-                      "/shipments",
+                      basePath,
                       { seller, month: t.monthNum === "all" ? "ALL" : t.monthNum, color: colorFilter, search: query, sort, direction, overdue: isOverdue ? 1 : undefined },
                       { preserveState: true, preserveScroll: true }
                     );
                   }}
-                  className={`relative flex items-center justify-center gap-1 rounded-lg px-2 py-1.5 text-xs font-semibold transition cursor-pointer whitespace-nowrap text-center ${
-                    isAll ? "flex-[1.25]" : "flex-1"
+                  className={`relative flex items-center justify-center gap-1 rounded-md px-1.5 py-1 text-[11px] font-semibold transition cursor-pointer whitespace-nowrap text-center ${
+                    isAll ? "flex-[1.1]" : "flex-1"
                   } ${
                     active
                       ? "bg-[#1E40AF] text-white shadow-xs font-bold ring-1 ring-blue-700"
@@ -886,7 +954,7 @@ export default function Dashboard() {
                   }`}
                 >
                   <span>{t.label}</span>
-                  <span className={`text-[10px] rounded-md px-1.5 py-0.2 ${active ? "bg-white/20 text-white font-bold" : "bg-slate-100 text-slate-500 font-medium"}`}>
+                  <span className={`text-[9.5px] rounded px-1 py-0.2 ${active ? "bg-white/20 text-white font-bold" : "bg-slate-100 text-slate-500 font-medium"}`}>
                     {nf(t.n)}
                   </span>
                 </button>
@@ -896,9 +964,9 @@ export default function Dashboard() {
         </div>
       </header>
 
-      <main className="space-y-3.5 p-4 sm:p-5 max-w-[1700px] mx-auto">
+      <main className="space-y-3.5 p-3 sm:p-4 md:p-5 w-full max-w-[1920px] 2xl:max-w-[2200px] mx-auto">
         {/* KPI Stats Cards */}
-        <section className={`grid gap-3 grid-cols-2 sm:grid-cols-3 ${isAliqa ? "lg:grid-cols-3 xl:grid-cols-6" : "lg:grid-cols-4 xl:grid-cols-7"}`}>
+        <section className={`grid gap-2.5 sm:gap-3 grid-cols-2 sm:grid-cols-3 ${isAliqa ? "md:grid-cols-3 xl:grid-cols-6" : "md:grid-cols-4 xl:grid-cols-7"}`}>
           {cards.map((c, i) => {
             const isSelected = !isOverdue && c.colorKey !== null && colorFilter === c.colorKey;
             const isHovered = hoveredCard === c.label;
@@ -916,11 +984,11 @@ export default function Dashboard() {
                   setIsOverdue(false);
                   if (c.colorKey === null) {
                     setColorFilter(null);
-                    router.get("/shipments", { seller, month, search: query, sort, direction }, { preserveState: true, preserveScroll: true });
+                    router.get(basePath, { seller, month, search: query, sort, direction }, { preserveState: true, preserveScroll: true });
                   } else if (c.colorKey) {
                     const nextColor = (colorFilter === c.colorKey && !isOverdue) ? null : c.colorKey;
                     setColorFilter(nextColor);
-                    router.get("/shipments", { seller, month, color: nextColor || undefined, search: query, sort, direction }, { preserveState: true, preserveScroll: true });
+                    router.get(basePath, { seller, month, color: nextColor || undefined, search: query, sort, direction }, { preserveState: true, preserveScroll: true });
                   }
                 }}
                 style={{
@@ -986,7 +1054,7 @@ export default function Dashboard() {
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
                       e.preventDefault();
-                      router.get("/shipments", { seller, month, color: colorFilter, search: query, sort, direction, overdue: isOverdue ? 1 : undefined }, { preserveState: true, preserveScroll: true });
+                      router.get(basePath, { seller, month, color: colorFilter, search: query, sort, direction, overdue: isOverdue ? 1 : undefined }, { preserveState: true, preserveScroll: true });
                     }
                   }}
                   placeholder="Cari resi, alamat, nama..."
@@ -997,7 +1065,7 @@ export default function Dashboard() {
                     type="button"
                     onClick={() => {
                       setQuery("");
-                      router.get("/shipments", { seller, month, color: colorFilter, search: "", sort, direction, overdue: isOverdue ? 1 : undefined }, { preserveState: true, preserveScroll: true });
+                      router.get(basePath, { seller, month, color: colorFilter, search: "", sort, direction, overdue: isOverdue ? 1 : undefined }, { preserveState: true, preserveScroll: true });
                     }}
                     className="absolute right-2.5 top-2.5 p-1 text-slate-400 hover:text-slate-600 rounded-md transition cursor-pointer"
                     title="Hapus pencarian"
@@ -1009,7 +1077,7 @@ export default function Dashboard() {
               <Button
                 type="button"
                 onClick={() => {
-                  router.get("/shipments", { seller, month, color: colorFilter, search: query, sort, direction, overdue: isOverdue ? 1 : undefined }, { preserveState: true, preserveScroll: true });
+                  router.get(basePath, { seller, month, color: colorFilter, search: query, sort, direction, overdue: isOverdue ? 1 : undefined }, { preserveState: true, preserveScroll: true });
                 }}
                 className="h-10 px-5 bg-[#1E40AF] hover:bg-blue-900 text-white font-bold text-xs rounded-xl shadow-xs shrink-0 cursor-pointer transition-colors"
               >
@@ -1061,7 +1129,7 @@ export default function Dashboard() {
                       setColorFilter(nextColor);
                       setIsOverdue(false);
                       router.get(
-                        "/shipments",
+                        basePath,
                         { seller, month, color: nextColor || undefined, search: query, sort, direction },
                         { preserveState: true, preserveScroll: true }
                       );
@@ -1092,7 +1160,7 @@ export default function Dashboard() {
                     setColorFilter(null);
                   }
                   router.get(
-                    "/shipments",
+                    basePath,
                     {
                       seller,
                       month,
@@ -1132,7 +1200,7 @@ export default function Dashboard() {
                     setColorFilter(null);
                     setIsOverdue(false);
                     router.get(
-                      "/shipments",
+                      basePath,
                       { seller, month, search: query, sort, direction },
                       { preserveState: true, preserveScroll: true }
                     );
@@ -1201,25 +1269,8 @@ export default function Dashboard() {
               className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white/95 backdrop-blur-md shadow-md p-3"
             >
               <span className="text-xs font-bold text-slate-800 bg-slate-100 border border-slate-200 px-2.5 py-1 rounded-lg mr-1">{selected.size} resi dipilih</span>
-              <Button size="sm" variant="secondary" className="cursor-pointer bg-sky-100 text-sky-800 hover:bg-sky-200 border border-sky-300 font-bold text-xs" onClick={() => bulk("BIRU")}>
-                Mark as Sukses
-              </Button>
-              <Button size="sm" variant="secondary" className="cursor-pointer bg-yellow-100 text-yellow-800 hover:bg-yellow-200 border border-yellow-300 font-bold text-xs" onClick={() => bulk("KUNING")}>
-                Mark as Sudah FU
-              </Button>
-              {!isAliqa && (
-                <Button size="sm" variant="secondary" className="cursor-pointer bg-emerald-100 text-emerald-800 hover:bg-emerald-200 border border-emerald-300 font-bold text-xs" onClick={() => bulk("HIJAU")}>
-                  Mark as FU 2 Kali
-                </Button>
-              )}
               <Button size="sm" variant="secondary" className="cursor-pointer bg-[#1E40AF] text-white hover:bg-blue-900 border border-blue-900 font-bold text-xs" onClick={() => bulk("BIRU_TUA")}>
                 {isAliqa ? "Mark as ON FU POS" : "Mark as FU POS"}
-              </Button>
-              <Button size="sm" variant="secondary" className="cursor-pointer bg-orange-100 text-orange-800 hover:bg-orange-200 border border-orange-300 font-bold text-xs" onClick={() => bulk("ORANGE")}>
-                Mark as Retur
-              </Button>
-              <Button size="sm" variant="secondary" className="cursor-pointer bg-white text-slate-700 hover:bg-slate-100 border border-slate-300 font-bold text-xs" onClick={() => bulk("PUTIH")}>
-                Mark as Belum FU
               </Button>
               <Button
                 size="sm"
@@ -1275,14 +1326,16 @@ export default function Dashboard() {
           onToggleAll={toggleAll}
           onStatus={setStatus}
           onNote={setNote}
-          onOpenWhatsApp={(shipment) => {
+          onOpenWhatsApp={(shipment, target) => {
             setSelectedShipmentForWa(shipment);
+            setWaModalTarget(target || "POST_OFFICE");
             setWaModalOpen(true);
           }}
           seller={seller}
           onSort={handleSortChange}
           sortField={sort}
           sortDirection={direction}
+          postOffices={postOffices}
         />
 
         <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-3 py-2 shadow-sm">
@@ -1402,6 +1455,7 @@ export default function Dashboard() {
         shipment={selectedShipmentForWa}
         postOffices={postOffices}
         onStatusUpdate={(ids, status) => setStatus(ids, status)}
+        initialTarget={waModalTarget}
       />
 
       <PostOfficesManagerModal

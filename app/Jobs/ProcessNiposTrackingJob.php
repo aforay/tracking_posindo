@@ -20,6 +20,7 @@ class ProcessNiposTrackingJob implements ShouldQueue
 
     public int $timeout = 600;
     public int $tries = 2;
+    public int $processedCount = 0;
 
     protected array $shipmentIds;
     protected ?string $targetUrl;
@@ -98,7 +99,15 @@ class ProcessNiposTrackingJob implements ShouldQueue
                     }
 
                     $statusPos = $res['status_pos'] ?? ($res['status'] ?? 'IN PROSES');
-                    $keterangan = $res['keterangan'] ?? ($res['penerima'] ?? 'PROSES PENGIRIMAN POS (TRANSIT)');
+                    $keterangan = $res['keterangan'] ?? ($res['penerima'] ?? '');
+
+                    if (
+                        str_contains(strtoupper($statusPos), 'ARRIVEDUNPAID') || 
+                        str_contains(strtoupper($statusPos), 'ARRIVED UNPAID') ||
+                        (str_contains(strtoupper($keterangan), 'DITERIMA') && !str_contains(strtoupper($statusPos), 'RETURN') && !str_contains(strtoupper($statusPos), 'RETUR'))
+                    ) {
+                        $statusPos = 'DELIVERED';
+                    }
 
                     $category = $res['status_kategori'] ?? $botService->categorizeStatus($statusPos, $keterangan);
                     $newColorCode = $res['color_code'] ?? $botService->determineColorCode($category);
@@ -116,7 +125,7 @@ class ProcessNiposTrackingJob implements ShouldQueue
                         $category = 'FOLLOW_UP';
                     }
 
-                    $rawSla = $res['sla_days'] ?? ($res['sla'] ?? ($shipment->sla_days ?: 2));
+                    $rawSla = !empty($res['sla_days']) ? $res['sla_days'] : (!empty($res['sla']) ? $res['sla'] : (!empty($shipment->sla_days) ? $shipment->sla_days : 4));
                     $niposRawDate = $res['tanggal_kirim'] ?? ($res['tanggal_kolekting'] ?? null);
                     $niposParsedDate = !empty($niposRawDate) ? TrackingBotService::parseDateOnly($niposRawDate) : null;
                     
@@ -130,7 +139,12 @@ class ProcessNiposTrackingJob implements ShouldQueue
                     $slaDays = $botService->extractSlaDays((string)$rawSla, $tglKirim, $category);
 
                     // Prioritize real Kantor Pos / Posisi Akhir directly from NIPOS
-                    $genericNames = ['KC PENGANTARAN', 'KC TUJUAN', 'POS PENGANTARAN', 'KC POS PENGANTARAN', 'KC POS INDONESIA', 'POS INDONESIA'];
+                    // Prioritize real Kantor Pos / Posisi Akhir directly from NIPOS (strictly KC, KCU, or SPP)
+                    $genericNames = [
+                        'KC TUJUAN', 'KC POS TUJUAN', 'KANTOR POS TUJUAN', 'KC PENGANTARAN',
+                        'KC POS PENGANTARAN', 'POS PENGANTARAN', 'KC POS INDONESIA', 'POS INDONESIA',
+                        'KANTOR POS TERKAIT', 'SEDANG MEMBACA NIPOS...', 'SEDANG MEMBACA NIPOS'
+                    ];
                     $resTujuan = !empty($res['kantor_tujuan']) ? trim((string)$res['kantor_tujuan']) : (!empty($res['posisi_akhir']) ? trim((string)$res['posisi_akhir']) : null);
                     if ($resTujuan && in_array(strtoupper($resTujuan), $genericNames)) {
                         $resTujuan = null;
@@ -142,27 +156,41 @@ class ProcessNiposTrackingJob implements ShouldQueue
                     $kantorTujuan = $resTujuan ?: $currentTujuan;
                     $kantorPosId = $shipment->kantor_pos_id;
                     $matchedOffice = PostOffice::matchByDestinationOrAddress($kantorTujuan, $shipment->alamat);
+
+                    $ktUpper = strtoupper(trim((string)$kantorTujuan));
+                    $isKcpOrDc = str_contains($ktUpper, 'KCP') ||
+                                 str_starts_with($ktUpper, 'DC ') ||
+                                 str_contains($ktUpper, ' DC ') ||
+                                 str_ends_with($ktUpper, ' DC') ||
+                                 preg_match('/\b\d{5}B\d\b/i', $ktUpper);
+
                     if ($matchedOffice) {
-                        $kantorTujuan = $matchedOffice->name;
                         $kantorPosId = $matchedOffice->id;
-                    } elseif (!empty($kantorTujuan) && (str_contains(strtoupper($kantorTujuan), 'KCP') || preg_match('/\b\d{5}B\d\b/i', $kantorTujuan))) {
-                        // KCP cannot handle follow-ups: redirect to governing KC / KCU
+                        // Always overwrite if generic, empty, or a KCP/DC
+                        if (empty($kantorTujuan) || in_array($ktUpper, $genericNames) || $isKcpOrDc) {
+                            $kantorTujuan = $matchedOffice->name;
+                        }
+                    } elseif (!empty($kantorTujuan) && $isKcpOrDc) {
+                        // KCP and DC cannot handle follow-ups: redirect to governing KC / KCU / SPP
                         $matchedFallback = PostOffice::matchByDestinationOrAddress(null, $shipment->alamat);
                         if ($matchedFallback) {
                             $kantorTujuan = $matchedFallback->name;
                             $kantorPosId = $matchedFallback->id;
                         } else {
                             $derived = \App\Http\Controllers\DashboardController::deriveKantorPosFromAddress($shipment->alamat);
-                            if (!empty($derived)) {
+                            if (!empty($derived) && !in_array(strtoupper(trim($derived)), $genericNames)) {
                                 $kantorTujuan = $derived;
                             }
                         }
                     }
 
-                    $lastLocation = $kantorTujuan ?: ($resTujuan ?: ($res['last_location'] ?? $shipment->last_location));
-                    if (!empty($lastLocation) && str_contains(strtoupper($lastLocation), 'KCP')) {
-                        $lastLocation = $kantorTujuan;
+                    // Never save generic placeholders to DB
+                    if (!empty($kantorTujuan) && in_array(strtoupper(trim((string)$kantorTujuan)), $genericNames)) {
+                        $derived = \App\Http\Controllers\DashboardController::deriveKantorPosFromAddress($shipment->alamat);
+                        $kantorTujuan = (!empty($derived) && !in_array(strtoupper(trim($derived)), $genericNames)) ? $derived : null;
                     }
+
+                    $lastLocation = $res['last_location'] ?? ($resTujuan ?: ($shipment->last_location ?: $kantorTujuan));
                     $createdAtStr = $shipment->created_at ? (is_string($shipment->created_at) ? $shipment->created_at : $shipment->created_at->toDateTimeString()) : $nowStr;
 
                     $updateBatch[] = [
@@ -188,27 +216,21 @@ class ProcessNiposTrackingJob implements ShouldQueue
                     ];
 
                     $slaStr = $botService->formatRunningSla($tglKirim, $category, $slaDays);
-                    $statusLabelMap = [
-                        'BIRU'     => 'PAKET SUKSES (DELIVERED)',
-                        'ORANGE'   => 'PAKET RETUR (RETURN)',
-                        'KUNING'   => 'SUDAH DI FU (1x)',
-                        'HIJAU'    => 'FU 2 KALI',
-                        'BIRU_TUA' => 'FU POS (ESKALASI KC/KCU)',
-                        'PUTIH'    => 'BELUM DI FOLLOW UP',
-                    ];
-                    $statusLabel = $statusLabelMap[$newColorCode] ?? 'BELUM DI FOLLOW UP';
+                    $cleanStatusPos = trim(preg_replace('/\s*\([^)]*\)/', '', (string)$statusPos));
+                    $cleanKeterangan = trim(preg_replace('/\s*\([^)]*\)/', '', (string)$keterangan));
+                    $cleanSla = trim(preg_replace('/[^0-9\-]/', '', (string)$slaStr));
 
                     $syncPayload[] = [
                         'resi'             => $shipment->no_resi,
                         'seller'           => $shipment->nama_seller,
-                        'status_pos'       => $statusPos,
-                        'keterangan'       => $keterangan,
+                        'status_pos'       => $cleanStatusPos,
+                        'keterangan'       => $cleanKeterangan,
                         'status_kategori'  => $category,
-                        'color_code'       => $newColorCode,
-                        'status_label'     => $statusLabel,
-                        'fu_type'          => $newColorCode,
-                        'sla'              => $slaStr,
-                        'sla_days'         => $slaStr,
+                        'color_code'       => null, // Bot NIPOS TIDAK merubah warna di Spreadsheet (Warna Retur & Delivered adalah hak Seller)
+                        'status_label'     => $cleanStatusPos,
+                        'fu_type'          => null,
+                        'sla'              => $cleanSla,
+                        'sla_days'         => $cleanSla,
                         'updated_at'       => $nowStr,
                         'prevent_overwrite_delivered_retur' => true,
                     ];
@@ -220,11 +242,8 @@ class ProcessNiposTrackingJob implements ShouldQueue
 
             // Bulk Batch Update / Upsert in Transaction (500 items per chunk)
             $updatedCount = count($updateBatch);
-            DB::transaction(function () use ($updateBatch, $fallbackIds) {
-                if (!empty($fallbackIds)) {
-                    DB::table('outgoing_shipments')->whereIn('id', $fallbackIds)->update(['last_tracked_at' => null]);
-                }
-
+            $this->processedCount = $updatedCount;
+            DB::transaction(function () use ($updateBatch) {
                 if (!empty($updateBatch)) {
                     foreach (array_chunk($updateBatch, 500) as $chunk) {
                         DB::table('outgoing_shipments')->upsert(

@@ -4,6 +4,7 @@ namespace App\Services;
 
 use DOMDocument;
 use DOMXPath;
+use Illuminate\Http\Client\Pool;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Throwable;
@@ -60,8 +61,8 @@ class NiposFastTracker
 
                     $poolRequests[$idx] = $pool->asForm()
                         ->withoutVerifying()
-                        ->connectTimeout(5)
-                        ->timeout(20)
+                        ->connectTimeout(8)
+                        ->timeout(30)
                         ->withHeaders($headers)
                         ->post($this->url, [
                             'vBarcode' => $vBarcode,
@@ -88,7 +89,7 @@ class NiposFastTracker
             }
         }
 
-        return $allResults;
+        return $this->resolveGoverningOfficesFromTimelines($allResults);
     }
 
     /**
@@ -164,12 +165,85 @@ class NiposFastTracker
             }
 
             $rawBody = $response->body();
-            return $this->parseHtmlResponse($rawBody);
+            $parsed = $this->parseHtmlResponse($rawBody);
+            return $this->resolveGoverningOfficesFromTimelines($parsed);
 
         } catch (Throwable $e) {
             Log::error("NiposFastTracker: Request failed: " . $e->getMessage());
             return [];
         }
+    }
+
+    /**
+     * For packages currently at KCP or DC, fetch their live chronological timeline directly from detail_lacak_banyak.php
+     * to resolve the true governing KC/KCU/SPP directly preceding the KCP in the physical delivery timeline.
+     */
+    public function resolveGoverningOfficesFromTimelines(array $results): array
+    {
+        $kcpResis = [];
+        foreach ($results as $resi => $data) {
+            $posisi = strtoupper(trim((string)($data['posisi_akhir'] ?? '')));
+            $status = strtoupper(trim((string)($data['status_akhir'] ?? '')));
+            $tujuan = strtoupper(trim((string)($data['kantor_tujuan'] ?? '')));
+
+            $isKcpOrDc = str_contains($posisi, 'KCP') ||
+                         str_starts_with($posisi, 'DC ') ||
+                         str_contains($posisi, ' DC ') ||
+                         str_ends_with($posisi, ' DC') ||
+                         preg_match('/\b\d{5}B\d\b/i', $posisi);
+
+            // Hub bandara/transit (misal: Soekarno-Hatta, Bandara, dll) dan kiriman INVEHICLE / MANIFEST
+            $isAirportOrTransit = str_contains($posisi, 'SOEKARNO') ||
+                                  str_contains($posisi, 'BANDARA') ||
+                                  str_contains($posisi, 'AIRPORT') ||
+                                  str_contains($posisi, 'JAKARTASOEKARNO') ||
+                                  str_contains($tujuan, 'SOEKARNO') ||
+                                  str_contains($tujuan, 'JAKARTASOEKARNO') ||
+                                  str_contains($status, 'INVEHICLE') ||
+                                  str_contains($status, 'MANIFEST');
+
+            if ($isKcpOrDc || $isAirportOrTransit) {
+                $kcpResis[] = $resi;
+            }
+        }
+
+        if (empty($kcpResis)) {
+            return $results;
+        }
+
+        $detailBaseUrl = 'https://pid.posindonesia.co.id/lacak/admin/detail_lacak_banyak.php';
+        $cookie = \App\Models\SystemSetting::getNiposCookie();
+        $botService = app(\App\Services\TrackingBotService::class);
+
+        try {
+            $timelineResponses = Http::pool(function (Pool $pool) use ($kcpResis, $detailBaseUrl, $cookie) {
+                foreach ($kcpResis as $resi) {
+                    $pool->as($resi)
+                        ->withoutVerifying()
+                        ->connectTimeout(4)
+                        ->timeout(10)
+                        ->withHeaders([
+                            'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                            'Cookie' => $cookie,
+                        ])->get($detailBaseUrl, ['id' => base64_encode($resi)]);
+                }
+            });
+
+            foreach ($timelineResponses as $resi => $resp) {
+                if (isset($results[$resi]) && is_array($results[$resi]) && $resp instanceof \Illuminate\Http\Client\Response && $resp->successful()) {
+                    $html = (string)$resp->body();
+                    $resolvedKC = $botService->extractKantorTujuan('', $html);
+                    if (!empty($resolvedKC) && !str_contains(strtoupper($resolvedKC), 'KCP') && !str_starts_with(strtoupper($resolvedKC), 'DC ')) {
+                        $results[$resi]['kantor_tujuan'] = $resolvedKC;
+                        $results[$resi]['last_location'] = $resolvedKC;
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+            Log::warning("NiposFastTracker: Timeline extraction failed: " . $e->getMessage());
+        }
+
+        return $results;
     }
 
     /**
@@ -266,6 +340,16 @@ class NiposFastTracker
                 if (!isset($tglKolektingColIndex) && (str_contains($headerText, 'KOLEKTING') || str_contains($headerText, 'TGL KIRIM') || str_contains($headerText, 'TANGGAL KIRIM'))) {
                     $tglKolektingColIndex = $index;
                 }
+
+                // Find IRREGULARITY column
+                if (!isset($irregularityColIndex) && str_contains($headerText, 'IRREGULARITY')) {
+                    $irregularityColIndex = $index;
+                }
+
+                // Find STATUS COD column
+                if (!isset($statusCodColIndex) && (str_contains($headerText, 'STATUS COD') || (str_contains($headerText, 'COD') && !str_contains($headerText, 'NON')))) {
+                    $statusCodColIndex = $index;
+                }
             }
         }
 
@@ -302,6 +386,12 @@ class NiposFastTracker
         }
         if ($slaColIndex === null) {
             $slaColIndex = 14;
+        }
+        if (!isset($irregularityColIndex)) {
+            $irregularityColIndex = 8;
+        }
+        if (!isset($statusCodColIndex)) {
+            $statusCodColIndex = 17;
         }
 
         // 2. EXTRACT DATA ROWS:
@@ -356,6 +446,16 @@ class NiposFastTracker
                 ? ($cols->item($tglKolektingColIndex)?->textContent ?? '')
                 : '';
 
+            // Extract Irregularity raw text
+            $irregularityRaw = (isset($irregularityColIndex) && $cols->length > $irregularityColIndex)
+                ? ($cols->item($irregularityColIndex)?->textContent ?? '')
+                : '';
+
+            // Extract Status COD raw text
+            $statusCodRaw = (isset($statusCodColIndex) && $cols->length > $statusCodColIndex)
+                ? ($cols->item($statusCodColIndex)?->textContent ?? '')
+                : '';
+
             $resi = $this->sanitizeText($resiRaw);
             $statusAkhir = $this->sanitizeText($statusAkhirRaw);
             $posisiAkhir = $this->sanitizeText($posisiAkhirRaw);
@@ -363,17 +463,65 @@ class NiposFastTracker
             $penerima = $this->sanitizeText($penerimaRaw);
             $sla = $this->sanitizeText($slaRaw);
             $tglKolekting = $this->sanitizeText($tglKolektingRaw);
+            $irregularity = $this->sanitizeText($irregularityRaw);
+            $statusCod = $this->sanitizeText($statusCodRaw);
+
+            // KCP and DC cannot be used for follow-ups; resolve to governing KC/KCU/SPP
+            $cleanTujuan = $posisiAkhir;
+            if (!empty($posisiAkhir)) {
+                $pUpper = strtoupper($posisiAkhir);
+                $isKcpOrDc = str_contains($pUpper, 'KCP') ||
+                             str_starts_with($pUpper, 'DC ') ||
+                             str_contains($pUpper, ' DC ') ||
+                             str_ends_with($pUpper, ' DC') ||
+                             preg_match('/\b\d{5}B\d\b/i', $pUpper);
+                if ($isKcpOrDc) {
+                    $matched = \App\Models\PostOffice::matchByDestinationOrAddress($posisiAkhir, $penerima);
+                    if ($matched && !str_starts_with(strtoupper($matched->name), 'DC ')) {
+                        $cleanTujuan = $matched->name;
+                    }
+                }
+            }
 
             if (!empty($resi) && !in_array(strtoupper($resi), ['BARCODE', 'NO', 'RESI', 'STATUS AKHIR'])) {
+                $slaInt = is_numeric($sla) ? (int)$sla : (preg_match('/(\d+)/', $sla, $sm) ? (int)$sm[1] : null);
+
+                $cleanPenerima = trim(preg_replace('/^[\s\-\,\:]+/', '', (string)$penerima));
+                if ($cleanPenerima === '-') {
+                    $cleanPenerima = '';
+                }
+
+                $isRetur = str_contains(strtoupper($irregularity), 'RETUR') ||
+                           str_contains(strtoupper($irregularity), 'IRREGULARITY') ||
+                           str_contains(strtoupper($statusCod), 'RETUR') ||
+                           str_contains(strtoupper($statusAkhir), 'RETUR') ||
+                           str_contains(strtoupper($statusAkhir), 'RETURN') ||
+                           str_contains(strtoupper($statusAkhir), 'DITOLAK') ||
+                           str_contains(strtoupper($statusAkhir), 'IRREGULARITY') ||
+                           str_contains(strtoupper($cleanPenerima), 'DITOLAK') ||
+                           str_contains(strtoupper($cleanPenerima), 'RETUR') ||
+                           str_contains(strtoupper($cleanPenerima), 'TOLAK');
+
+                $effectiveStatusAkhir = $statusAkhir;
+                if ($isRetur && !str_contains(strtoupper($statusAkhir), 'RETUR') && !str_contains(strtoupper($statusAkhir), 'RETURN')) {
+                    $effectiveStatusAkhir = !empty($irregularity)
+                        ? "RETUR BARANG ({$statusAkhir})"
+                        : "RETUR ({$statusAkhir})";
+                }
+
                 $results[$resi] = [
                     'resi' => $resi,
-                    'status_akhir' => $statusAkhir,
+                    'status_akhir' => $effectiveStatusAkhir,
+                    'is_retur' => $isRetur,
+                    'irregularity' => $irregularity,
+                    'status_cod' => $statusCod,
                     'posisi_akhir' => $posisiAkhir,
-                    'kantor_tujuan' => $posisiAkhir,
+                    'kantor_tujuan' => $cleanTujuan,
                     'last_location' => $posisiAkhir,
                     'kantor_kirim' => $kantorKirim,
-                    'penerima' => $penerima,
+                    'penerima' => $cleanPenerima ?: $penerima,
                     'sla' => $sla,
+                    'sla_days' => $slaInt,
                     'tanggal_kolekting' => $tglKolekting,
                     'tanggal_kirim' => $tglKolekting,
                     'barcode_index' => $barcodeColIndex,

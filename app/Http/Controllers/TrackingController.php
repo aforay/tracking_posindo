@@ -305,11 +305,15 @@ class TrackingController extends Controller
 
         foreach ($shipments as $s) {
             $rawKC = strtoupper(trim((string)$s->kantor_tujuan));
-            $isKcp = str_contains($rawKC, 'KCP');
+            $isKcpOrDc = str_contains($rawKC, 'KCP') ||
+                         str_starts_with($rawKC, 'DC ') ||
+                         str_contains($rawKC, ' DC ') ||
+                         str_ends_with($rawKC, ' DC') ||
+                         preg_match('/\b\d{5}B\d\b/i', $rawKC);
 
-            if ($isKcp) {
+            if ($isKcpOrDc) {
                 $matched = PostOffice::matchByDestinationOrAddress($s->kantor_tujuan, $s->alamat);
-                if ($matched) {
+                if ($matched && !str_starts_with(strtoupper($matched->name), 'DC ')) {
                     $s->kantor_pos_id = $matched->id;
                     $s->kantor_tujuan = $matched->name;
                     $s->last_location = $matched->name;
@@ -320,7 +324,12 @@ class TrackingController extends Controller
                 }
             }
 
-            if (!empty($rawKC) && !in_array($rawKC, $genericNames) && !$isKcp) {
+            $isAirportTransit = str_contains($rawKC, 'SOEKARNO') ||
+                                str_contains($rawKC, 'BANDARA') ||
+                                str_contains($rawKC, 'AIRPORT') ||
+                                str_contains($rawKC, 'JAKARTASOEKARNO');
+
+            if (!empty($rawKC) && !in_array($rawKC, $genericNames) && !$isKcpOrDc && !$isAirportTransit) {
                 $resolvedMap[$s->no_resi] = $s->kantor_tujuan;
                 $resolvedMap[(string)$s->id] = $s->kantor_tujuan;
             } elseif (!empty($s->no_resi)) {
@@ -338,26 +347,38 @@ class TrackingController extends Controller
                 foreach ($missingShipments as $s) {
                     if (isset($niposResults[$s->no_resi])) {
                         $data = $niposResults[$s->no_resi];
-                        $officeName = !empty($data['posisi_akhir']) ? trim($data['posisi_akhir']) : (!empty($data['kantor_tujuan']) ? trim($data['kantor_tujuan']) : null);
+                        $officeName = !empty($data['kantor_tujuan']) ? trim($data['kantor_tujuan']) : (!empty($data['posisi_akhir']) ? trim($data['posisi_akhir']) : null);
                         $hasChanges = false;
 
                         if (!empty($officeName) && !in_array(strtoupper($officeName), $genericNames)) {
                             $matched = PostOffice::matchByDestinationOrAddress($officeName, $s->alamat);
-                            if ($matched) {
+                            $isSpp = str_contains(strtoupper($officeName), 'SPP') || str_contains(strtoupper($officeName), 'MPC');
+                            $isKcpOrDc = str_contains(strtoupper($officeName), 'KCP') ||
+                                         str_starts_with(strtoupper($officeName), 'DC ') ||
+                                         str_contains(strtoupper($officeName), ' DC ') ||
+                                         preg_match('/\b\d{5}B\d\b/i', $officeName);
+
+                            if ($matched && !str_starts_with(strtoupper($matched->name), 'DC ')) {
                                 $s->kantor_pos_id = $matched->id;
-                                $s->kantor_tujuan = $matched->name;
-                                $s->last_location = $matched->name;
-                                $resolvedMap[$s->no_resi] = $matched->name;
+                                if (!$isSpp || $isKcpOrDc) {
+                                    $s->kantor_tujuan = $matched->name;
+                                    $s->last_location = $matched->name;
+                                    $resolvedMap[$s->no_resi] = $matched->name;
+                                } else {
+                                    $s->kantor_tujuan = $officeName;
+                                    $s->last_location = $officeName;
+                                    $resolvedMap[$s->no_resi] = $officeName;
+                                }
                             } else {
                                 $targetOffice = $officeName;
-                                if (str_contains(strtoupper($targetOffice), 'KCP') || preg_match('/\b\d{5}B\d\b/i', $targetOffice)) {
+                                if ($isKcpOrDc) {
                                     $matchedAddr = PostOffice::matchByDestinationOrAddress(null, $s->alamat);
-                                    if ($matchedAddr) {
+                                    if ($matchedAddr && !str_starts_with(strtoupper($matchedAddr->name), 'DC ')) {
                                         $targetOffice = $matchedAddr->name;
                                         $s->kantor_pos_id = $matchedAddr->id;
                                     } else {
                                         $derived = \App\Http\Controllers\DashboardController::deriveKantorPosFromAddress($s->alamat);
-                                        if (!empty($derived)) {
+                                        if (!empty($derived) && !in_array(strtoupper(trim($derived)), $genericNames)) {
                                             $targetOffice = $derived;
                                         }
                                     }
@@ -476,7 +497,7 @@ class TrackingController extends Controller
         $shipmentIds = $request->input('shipment_ids', []);
         $useQueue = $request->boolean('use_queue', false);
         $force = $request->boolean('force', false);
-        $limit = min(1000, max(5, (int)$request->input('limit', 500)));
+        $limit = min(2000, max(5, (int)$request->input('limit', 500)));
         $seller = $request->input('seller', null);
 
         // Session timestamp to isolate current bot run batches
@@ -544,6 +565,8 @@ class TrackingController extends Controller
             });
         }
 
+        $totalMonthPending = (clone $pendingQuery)->count();
+
         $ids = (clone $pendingQuery)
             ->orderBy('last_tracked_at', 'asc')
             ->orderBy('id', 'asc')
@@ -578,8 +601,8 @@ class TrackingController extends Controller
         }
 
         if ($useQueue) {
-            // Asynchronous Queue chunked dispatch (100 items per job for maximum throughput)
-            foreach (array_chunk($allPendingIds, 100) as $chunkIds) {
+            // Asynchronous Queue chunked dispatch (500 items per job for maximum throughput)
+            foreach (array_chunk($allPendingIds, 500) as $chunkIds) {
                 ProcessNiposTrackingJob::dispatch($chunkIds);
             }
             $msg = "Tracking Bot NIPOS berhasil dijalankan di background queue untuk {$pendingCount} resi.";
@@ -588,7 +611,7 @@ class TrackingController extends Controller
             // High-speed direct batch processing
             $job = new ProcessNiposTrackingJob($allPendingIds);
             $job->handle($this->botService);
-            $updatedCount = $pendingCount;
+            $updatedCount = $job->processedCount > 0 ? $job->processedCount : $pendingCount;
             $msg = "Berhasil memperbarui {$updatedCount} data resi dari NIPOS.";
         }
 
@@ -600,8 +623,8 @@ class TrackingController extends Controller
             $isFinished = $remainingPending === 0;
         }
 
-        // Fetch verification details of latest updated items for this batch (sample of 50 for rapid response)
-        $sampleIds = array_slice($allPendingIds, -50);
+        // Fetch verification details of latest updated items for this batch (sample of 100 for rapid response)
+        $sampleIds = array_slice($allPendingIds, -100);
         $updatedItems = OutgoingShipment::whereIn('id', $sampleIds)
             ->get(['id', 'no_resi', 'nama_seller', 'status_pos', 'keterangan', 'status_kategori', 'color_code', 'sla_days', 'last_tracked_at'])
             ->map(function ($item) {
@@ -625,7 +648,7 @@ class TrackingController extends Controller
                 'message' => $msg,
                 'processed_count' => $updatedCount,
                 'pending_count' => $remainingPending,
-                'total_pending' => $remainingPending,
+                'total_pending' => $totalMonthPending,
                 'is_running' => !$isFinished,
                 'is_finished' => $isFinished,
                 'updated_items' => $updatedItems,

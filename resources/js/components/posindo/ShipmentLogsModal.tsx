@@ -95,10 +95,14 @@ export function ShipmentLogsModal({ isOpen, onClose, shipment }: Props) {
         </DialogHeader>
 
         {/* Resi Summary Header */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-slate-50 p-3 rounded-xl border border-slate-200 text-xs">
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 bg-slate-50 p-3 rounded-xl border border-slate-200 text-xs">
           <div>
             <span className="text-[10px] text-slate-400 uppercase font-bold block">Penerima</span>
             <span className="font-semibold text-slate-800 truncate block">{shipment.penerima}</span>
+          </div>
+          <div>
+            <span className="text-[10px] text-slate-400 uppercase font-bold block">CS Sheet</span>
+            <span className="font-semibold text-indigo-700 truncate block">{shipment.namaCs || "-"}</span>
           </div>
           <div>
             <span className="text-[10px] text-slate-400 uppercase font-bold block">Status NIPOS</span>

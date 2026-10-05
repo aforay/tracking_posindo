@@ -1,0 +1,9 @@
+tunnel: 8f59bed1-1485-4da1-b55e-2e9116e537c8
+credentials-file: C:\Users\acer\.cloudflared\8f59bed1-1485-4da1-b55e-2e9116e537c8.json
+
+ingress:
+  - hostname: tracko.my.id
+    service: http://127.0.0.1:8000
+  - hostname: www.tracko.my.id
+    service: http://127.0.0.1:8000
+  - service: http_status:404

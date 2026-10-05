@@ -25,6 +25,8 @@ class PostOfficeController extends Controller
                   ->orWhereRaw('LOWER(province) LIKE ?', ["%{$lowerSearch}%"])
                   ->orWhereRaw('LOWER(code) LIKE ?', ["%{$lowerSearch}%"])
                   ->orWhereRaw('LOWER(phone_wa) LIKE ?', ["%{$lowerSearch}%"])
+                  ->orWhereRaw('LOWER(phone_wa_2) LIKE ?', ["%{$lowerSearch}%"])
+                  ->orWhereRaw('LOWER(telegram_handle) LIKE ?', ["%{$lowerSearch}%"])
                   ->orWhereRaw('LOWER(pic_name) LIKE ?', ["%{$lowerSearch}%"]);
             });
         }

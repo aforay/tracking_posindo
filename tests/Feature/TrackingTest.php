@@ -35,7 +35,7 @@ class TrackingTest extends TestCase
 
     public function test_dashboard_page_renders_successfully(): void
     {
-        $response = $this->get('/?month=AGUSTUS&year=2026');
+        $response = $this->get('/aliqa?month=AGUSTUS&year=2026');
         $response->assertStatus(200);
     }
 
@@ -117,7 +117,7 @@ class TrackingTest extends TestCase
             'last_tracked_at' => now(),
         ]);
 
-        $response = $this->get('/?search=PCP260800002ID');
+        $response = $this->get('/aliqa?search=PCP260800002ID');
         $response->assertStatus(200);
         $response->assertSee('DELIVERED');
         $response->assertSee('DITERIMA YANG BERSANGKUTAN');
@@ -167,7 +167,7 @@ class TrackingTest extends TestCase
             $prop->setAccessible(true);
             $items = $prop->getValue($job);
 
-            return count($items) > 0 && ($items[0]['status_pos'] ?? null) === 'DELIVERED (RETURN DELIVERY)';
+            return count($items) > 0 && ($items[0]['status_pos'] ?? null) === 'DELIVERED';
         });
 
         // Assert that event was also dispatched
@@ -390,9 +390,50 @@ HTML;
         $this->assertEquals(-240, $botService->extractSlaDays("P2601030000909 [ SLA : 3 hari, Kiriman sudah Over SLA => 240 hari ]"));
         $this->assertEquals(-5, $botService->extractSlaDays("Kiriman terlewati 5 hari"));
 
-        // Format running SLA
-        $this->assertEquals("Telat 240 Hari", $botService->formatRunningSla('2026-01-03', 'IN_PROCESS', 2, -240));
-        $this->assertEquals("H+3 (JALAN)", $botService->formatRunningSla('2026-08-28', 'IN_PROCESS', 2, 3));
+        // Format running SLA (HANYA ANGKA SAJA TANPA TULISAN)
+        $this->assertEquals("240", $botService->formatRunningSla('2026-01-03', 'IN_PROCESS', 2, -240));
+        $this->assertEquals("3", $botService->formatRunningSla('2026-08-28', 'IN_PROCESS', 2, 3));
+    }
+
+    public function test_over_sla_threshold_more_than_4_days_and_nipos_9_days(): void
+    {
+        $botService = app(TrackingBotService::class);
+
+        $threeDaysAgo = now()->subDays(3)->toDateString();
+        $fourDaysAgo = now()->subDays(4)->toDateString();
+        $fiveDaysAgo = now()->subDays(5)->toDateString();
+        $elevenDaysAgo = now()->subDays(11)->toDateString();
+
+        // 1. Data baru 3 hari (default SLA) -> TIDAK BOLEH Over SLA!
+        $this->assertEquals(4, $botService->extractSlaDays(null, $threeDaysAgo, 'IN_PROCESS'));
+
+        // 2. Data 4 hari (default SLA) -> MASIH dalam batas SLA (belum > 4 hari)
+        $this->assertEquals(4, $botService->extractSlaDays(null, $fourDaysAgo, 'IN_PROCESS'));
+
+        // 3. Data 5 hari (default SLA) -> LEBIH DARI 4 hari -> Over SLA 1 hari (-1)
+        $this->assertEquals(-1, $botService->extractSlaDays(null, $fiveDaysAgo, 'IN_PROCESS'));
+
+        // 4. Data di Web NIPOS SLA 9 hari, dikirim 3 hari lalu -> TIDAK BOLEH Over SLA (tetap 9 hari)!
+        $this->assertEquals(9, $botService->extractSlaDays("9", $threeDaysAgo, 'IN_PROCESS'));
+        $this->assertEquals(9, $botService->extractSlaDays("SLA : 9 hari", $threeDaysAgo, 'IN_PROCESS'));
+
+        // 5. Data di Web NIPOS SLA 9 hari, dikirim 11 hari lalu -> Over SLA 2 hari (-2)
+        $this->assertEquals(-2, $botService->extractSlaDays("9", $elevenDaysAgo, 'IN_PROCESS'));
+
+        // 6. Test parsing horizontal NIPOS table dengan SLA 9 hari
+        $htmlHorizontal = "
+            <table>
+                <thead>
+                    <tr><th>No</th><th>Barcode</th><th>Status Akhir</th><th>Penerima</th><th>SLA</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td>1</td><td>P2609010001234</td><td>ON PROCESS</td><td>Budi</td><td>9</td></tr>
+                </tbody>
+            </table>
+        ";
+        $parsed = $botService->parseStatusResult('ON PROCESS', $htmlHorizontal, 'P2609010001234');
+        $this->assertEquals(9, $parsed['sla_days']);
+        $this->assertEquals('9', $parsed['sla']);
     }
 
     /**
@@ -1078,6 +1119,50 @@ HTML;
         $responseCaps->assertSee('BAC_MALIK_TEST_01');
         $responseLower->assertSee('BAC_MALIK_TEST_01');
         $responseMixed->assertSee('BAC_MALIK_TEST_01');
+    }
+
+    /**
+     * Rule 1: When KCP is in the tracking timeline, system resolves to the KC directly above the first KCP
+     */
+    public function test_timeline_with_kcp_resolves_closest_kc_above_kcp(): void
+    {
+        $bot = app(TrackingBotService::class);
+        $events = [
+            "Bag PID106300385 telah melewati proses Receiving oleh Nurfathu Mukmin di JAKARTASOEKARNOHATTA 19400 14:28",
+            "Barang anda BAC03092656D1416B329 telah melewati proses ManifestR7 oleh Ade Maulana Ishak di JAKARTASOEKARNOHATTA 19400 dengan tujuan KCU PEKANBARU 28000 dan nomor R7 L20260905000811 17:46",
+            "Bag PID106300385 telah melewati proses Receiving oleh Minarto Purwantoko di KCU PEKANBARU 28000 16:10",
+            "Barang anda BAC03092656D1416B329 telah melewati proses ManifestR7 oleh Abdul Jalil Saragih di KCU PEKANBARU 28000 dengan tujuan KC BANGKINANG 28500 dan nomor R7 P20260908232911154 00:27",
+            "Barang anda BAC03092656D1416B329 telah melewati proses Unbagging dari bag PID106300385 oleh Alfian Pebrianto (560030037puri) di KC BANGKINANG 28500",
+            "Barang anda BAC03092656D1416B329 telah melewati proses bagging dengan nomor bag PID106658447 oleh Ari Kepri Libra (710001978) di KC BANGKINANG 28500",
+            "Barang anda BAC03092656D1416B329 telah melewati proses ManifestR7 oleh Ari Kepri Libra di KC BANGKINANG 28500 dengan tujuan KCP PASIRPENGARAIAN 28511B1 dan nomor R7 P20260909101639125 10:17",
+            "Bag PID106658447 telah melewati proses Receiving oleh Muhammad Taufik di KCP PASIRPENGARAIAN 28511B1 16:07",
+            "Barang anda BAC03092656D1416B329 telah melewati proses ManifestR7 oleh Muhammad Taufik di KCP PASIRPENGARAIAN 28511B1 dengan tujuan KCP DALUDALU 28558B1 dan nomor R7 P20260910160709177 16:07",
+            "Bag PID106658447 telah melewati proses Receiving oleh Yenni Dewiva di KCP DALUDALU 28558B1 07:35",
+            "Barang anda BAC03092656D1416B329 telah melewati proses Unbagging dari bag PID106658447 oleh Yenni Dewiva (985467939mandor) di KCP DALUDALU 28558B1",
+            "Barang BAC03092656D1416B329 anda telah melewati proses DeliveryRunsheet oleh Yenni Dewiva di KCP DALUDALU 28558B1 dan diterima oleh Ferdinan (560009940)",
+        ];
+        $rawText = implode("\n", $events);
+        $office = $bot->extractKantorTujuan($rawText, '', 'Desa dk1e simpang harapan kecamatan tambusai utara kab Rokan hulu riau');
+
+        $this->assertEquals('KC BANGKINANG', $office);
+    }
+
+    /**
+     * Rule 2: When NO KCP is in the tracking timeline, system resolves to the latest (paling akhir) KC/KCU
+     */
+    public function test_timeline_without_kcp_resolves_latest_kc(): void
+    {
+        $bot = app(TrackingBotService::class);
+        $events = [
+            "di JAKARTASOEKARNOHATTA 19400",
+            "di KCU SEMARANG 50000",
+            "di KC KUDUS 59300",
+            "DeliveryRunsheet di KC KUDUS 59300",
+        ];
+        $rawText = implode("\n", $events);
+        $office = $bot->extractKantorTujuan($rawText);
+
+        $this->assertEquals('KC KUDUS', $office);
     }
 }
 

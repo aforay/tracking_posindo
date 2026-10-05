@@ -19,7 +19,11 @@ Route::match(['get', 'post'], '/mock-nipos/lacak_item_banyakzaref.php', [Trackin
 
 // --- 2. Operational Routes (Admin & CS) ---
 Route::middleware(['role:admin,cs'])->group(function () {
-    Route::get('/', [DashboardController::class, 'index'])->name('dashboard.index');
+    Route::get('/', function () {
+        return redirect()->route('dashboard.aliqa');
+    })->name('dashboard.index');
+    Route::get('/aliqa', [DashboardController::class, 'aliqa'])->name('dashboard.aliqa');
+    Route::get('/zaherba', [DashboardController::class, 'zaherba'])->name('dashboard.zaherba');
     Route::get('/shipments', [DashboardController::class, 'index'])->name('shipments.index');
     Route::get('/shipments/live-version', [DashboardController::class, 'liveVersion'])->name('shipments.live_version');
 
@@ -48,6 +52,9 @@ Route::middleware(['role:admin,cs'])->group(function () {
     // Sync status & schedule monitors
     Route::get('/sync/progress', [DashboardController::class, 'syncProgress'])->name('sync.progress');
     Route::get('/sync/schedule-status', [DashboardController::class, 'syncScheduleStatus'])->name('sync.schedule_status');
+
+    // Active Devices Online Monitor
+    Route::get('/active-devices', [DashboardController::class, 'activeDevices'])->name('devices.active');
 });
 
 // --- 3. Admin-Only Restricted Routes (Dangerous & Sensitive Operations) ---

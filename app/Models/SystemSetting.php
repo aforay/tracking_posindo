@@ -28,9 +28,17 @@ class SystemSetting extends Model
      */
     public static function set(string $key, mixed $value): void
     {
+        $valStr = (string)$value;
+        if (str_contains($key, 'webhook_url') && !empty($valStr)) {
+            // Automatically sanitize duplicated or malformed script.google.com URLs
+            if (preg_match('/(https:\/\/script\.google\.com\/macros\/s\/[a-zA-Z0-9_\-]+\/exec)/', $valStr, $m)) {
+                $valStr = $m[1];
+            }
+        }
+
         static::updateOrCreate(
             ['key' => $key],
-            ['value' => (string)$value]
+            ['value' => $valStr]
         );
     }
 

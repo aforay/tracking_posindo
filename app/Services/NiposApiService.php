@@ -175,6 +175,7 @@ class NiposApiService
             $petugasUpdate = $cols->item(11) ? self::sanitizeText($cols->item(11)->textContent) : '';
             $penerima = $cols->item(12) ? self::sanitizeText($cols->item(12)->textContent) : '';
             $sla = $cols->item(14) ? self::sanitizeText($cols->item(14)->textContent) : '';
+            $slaInt = is_numeric($sla) ? (int)$sla : (preg_match('/(\d+)/', $sla, $sm) ? (int)$sm[1] : null);
 
             $results[$noResi] = [
                 'no_resi' => $noResi,
@@ -188,6 +189,7 @@ class NiposApiService
                 'petugas_update' => $petugasUpdate,
                 'penerima' => $penerima,
                 'sla' => $sla,
+                'sla_days' => $slaInt,
                 'col_1_raw' => $noResi,
                 'col_5_raw' => $col5Raw,
                 'col_7_raw' => $col7Raw,

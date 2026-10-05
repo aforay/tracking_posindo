@@ -18,7 +18,7 @@ class TrackAllNiposCommand extends Command
      * @var string
      */
     protected $signature = 'nipos:track-all
-                            {--chunk=50 : Number of pending resis per batch chunk}
+                            {--chunk=500 : Number of pending resis per batch chunk}
                             {--limit=0 : Maximum total resis to track (0 = all non-final)}';
 
     /**
@@ -26,7 +26,7 @@ class TrackAllNiposCommand extends Command
      *
      * @var string
      */
-    protected $description = 'Track all non-final shipments from NIPos API in safe chunks (50-100 per batch)';
+    protected $description = 'Track all non-final shipments from NIPos API in safe chunks (500 per batch)';
 
     /**
      * Execute the console command.
@@ -104,7 +104,7 @@ class TrackAllNiposCommand extends Command
                         $shipment->status_kategori = $category;
                         $shipment->color_code = $color;
 
-                        $shipment->sla_days = $res['sla_days'] ?? ($res['sla'] ?? ($shipment->sla_days ?: 2));
+                        $shipment->sla_days = !empty($res['sla_days']) ? $res['sla_days'] : (!empty($res['sla']) ? $res['sla'] : (!empty($shipment->sla_days) ? $shipment->sla_days : 4));
                         $shipment->last_tracked_at = $now;
                         $shipment->save();
                         $totalUpdated++;

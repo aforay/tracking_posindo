@@ -155,7 +155,7 @@ class PushSheetUpdatesCommand extends Command
                           : ($monthSheetMapZaherba[$mNum] ?? 'AGUSTUS (ZAHERBA)');
 
                       $botService = app(\App\Services\TrackingBotService::class);
-                      $slaStr = $botService->formatRunningSla($shipment->tanggal_kirim, $shipment->status_kategori ?: 'IN_PROCESS', $shipment->sla_days ?: 2);
+                      $slaStr = $botService->formatRunningSla($shipment->tanggal_kirim, $shipment->status_kategori ?: 'IN_PROCESS', $shipment->sla_days ?: 4);
 
                       if ($isInProcess) {
                           $statusPosText = $shipment->status_pos ?: 'IN PROSES';

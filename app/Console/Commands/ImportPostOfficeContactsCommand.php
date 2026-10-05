@@ -141,7 +141,7 @@ class ImportPostOfficeContactsCommand extends Command
             ['name' => 'DC MAROS', 'city' => 'Maros', 'phone_wa' => '+62 812-4469-2002'],
             ['name' => 'KC CIKARANG', 'city' => 'Cikarang', 'phone_wa' => '+62 858-6150-0121'],
             ['name' => 'KC BUNTOK 73700', 'city' => 'Buntok', 'code' => '73700', 'phone_wa' => '+62 822-5328-8228'],
-            ['name' => 'MPS JAKARTA PREMIER', 'city' => 'Jakarta', 'phone_wa' => '+62 812-9360-8434'],
+            ['name' => 'SPP JAKARTA PREMIER', 'city' => 'Jakarta', 'phone_wa' => '+62 812-9360-8434'],
             ['name' => 'KC BUKITTINGGI 26100', 'city' => 'Bukittinggi', 'code' => '26100', 'phone_wa' => '+62 852-6593-3118'],
             ['name' => 'KC SAWAHLUNTO 27400', 'city' => 'Sawahlunto', 'code' => '27400', 'phone_wa' => '+62 812-6138-4901'],
             ['name' => 'KC KOTABUMI 34500', 'city' => 'Kotabumi', 'code' => '34500', 'phone_wa' => '+62 821-7548-5926'],

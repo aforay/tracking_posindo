@@ -247,38 +247,24 @@ function doPost(e) {
             const item = itemMap[cellResi];
             const rowNumber = r + 1;
 
-            const colorCode = String(item.color_code || item.status_color || 'PUTIH').toUpperCase();
-            const hexColor = COLOR_HEX_MAP[colorCode] || '#FFFFFF';
-
-            // 1. Pewarnaan: Khusus BIRU_TUA (FU POS), hanya sel Resi yang diwarnai!
-            if (colorCode === 'BIRU_TUA') {
-              if (resiCol >= 0) {
-                sheet.getRange(rowNumber, resiCol + 1).setBackground(hexColor).setFontColor('#FFFFFF');
-              }
-            } else {
-              // Status selain FU POS: Mewarnai seluruh baris data
-              if (isAliqaSheet) {
-                sheet.getRange(rowNumber, 3, 1, 16).setBackground(hexColor);
-              } else {
-                sheet.getRange(rowNumber, 3, 1, 8).setBackground(hexColor);
-              }
-            }
+            // 1. Bot NIPOS TIDAK merubah warna di Spreadsheet (Warna Retur & Delivered adalah hak Seller)
+            // Background baris/sel resi tidak diubah sama sekali agar warna Seller tetap utuh.
 
             // 2. Update Sel Kolom 'Status NIPOS' (Lindungi Formula '=' jika ada)
             const statusPos = item.status_pos || item.status_nipos || item.status;
             if (trackingPosCol >= 0 && statusPos) {
               const currentFormula = formulas[r] ? formulas[r][trackingPosCol] : '';
               if (!currentFormula || !currentFormula.startsWith('=')) {
-                sheet.getRange(rowNumber, trackingPosCol + 1).setValue(String(statusPos));
+                sheet.getRange(rowNumber, trackingPosCol + 1).setValue(String(statusPos).replace(/\s*\([^)]*\)/g, '').trim());
               }
             }
 
-            // 3. Update Sel Kolom 'Keterangan' (Lindungi Formula '=' jika ada)
-            const keterangan = item.keterangan || item.note;
-            if (keteranganCol >= 0 && keterangan) {
+            // 3. Update Sel Kolom 'Keterangan' (Lindungi Formula '=' jika ada) - Kalo kosong ya kosong
+            if (keteranganCol >= 0 && (item.keterangan !== undefined || item.note !== undefined)) {
+              const keterangan = item.keterangan || item.note || '';
               const currentFormula = formulas[r] ? formulas[r][keteranganCol] : '';
               if (!currentFormula || !currentFormula.startsWith('=')) {
-                sheet.getRange(rowNumber, keteranganCol + 1).setValue(String(keterangan));
+                sheet.getRange(rowNumber, keteranganCol + 1).setValue(String(keterangan).replace(/\(TRANSIT\)/gi, '').trim());
               }
             }
 
@@ -287,7 +273,7 @@ function doPost(e) {
             if (slaCol >= 0 && slaVal !== undefined && slaVal !== null) {
               const currentFormula = formulas[r] ? formulas[r][slaCol] : '';
               if (!currentFormula || !currentFormula.startsWith('=')) {
-                const formattedSla = (typeof slaVal === 'number' || !isNaN(slaVal)) ? (Math.round(Number(slaVal))) : String(slaVal);
+                const formattedSla = String(slaVal).replace(/\s*\([^)]*\)/g, '').trim();
                 sheet.getRange(rowNumber, slaCol + 1).setValue(formattedSla);
               }
             }
@@ -315,6 +301,15 @@ function doPost(e) {
     const note = data.note || '';
     const escalationDate = data.escalation_date || '';
 
+    // ATURAN KERAS: Spreadsheet CUMA BERUBAH KETIKA ADA YG PUSH WARNA FU POS (BIRU_TUA)!
+    if (statusColor !== 'BIRU_TUA') {
+      return ContentService.createTextOutput(JSON.stringify({
+        status: 'success',
+        updated_count: 0,
+        message: 'Spreadsheet hanya boleh berubah saat push FU POS (Biru Tua). Aksi selain FU POS diabaikan.'
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
     if (resiList.length === 0) {
       return ContentService.createTextOutput(JSON.stringify({
         status: 'error',
@@ -322,7 +317,7 @@ function doPost(e) {
       })).setMimeType(ContentService.MimeType.JSON);
     }
 
-    const hexColor = COLOR_HEX_MAP[statusColor] || '#FFFFFF';
+    const hexColor = COLOR_HEX_MAP[statusColor] || '#1F4E79';
     let updatedCount = 0;
     const updatedResis = [];
     const targetResiMap = {};
@@ -340,9 +335,6 @@ function doPost(e) {
       const isAliqaSheet = sheetNameUpper.indexOf('ALIQA') !== -1 || String(data.seller || '').toUpperCase().indexOf('ALIQA') !== -1;
 
       let resiCol = -1;
-      let trackingPosCol = -1;
-      let keteranganCol = -1;
-      let fuPosDateCol = -1;
 
       for (let hRow = 0; hRow < Math.min(3, values.length); hRow++) {
         const headers = values[hRow].map(function(h) {
@@ -352,24 +344,14 @@ function doPost(e) {
         headers.forEach(function(h, idx) {
           if (['resi', 'noresi', 'barcode', 'awb', 'barcodeitem'].indexOf(h) !== -1 && resiCol === -1) {
             resiCol = idx;
-          } else if (['trackingpos', 'statuspos', 'status', 'nipos', 'statusnipos', 'statusniposl', 'statusakhir', 'tracking'].indexOf(h) !== -1 && trackingPosCol === -1) {
-            trackingPosCol = idx;
-          } else if (['keterangan', 'note', 'alasan', 'penerimaketerangank', 'penerima', 'penerimaketerangan', 'posketerangan'].indexOf(h) !== -1 && keteranganCol === -1) {
-            keteranganCol = idx;
-          } else if (['fubycs', 'fuposdate', 'tglfu', 'escalationdate'].indexOf(h) !== -1 && fuPosDateCol === -1) {
-            fuPosDateCol = idx;
           }
         });
       }
 
       if (isAliqaSheet) {
         if (resiCol === -1) resiCol = 2; // Kolom C (Resi, index 2)
-        if (keteranganCol === -1) keteranganCol = 15; // Kolom P (Keterangan, index 15)
-        if (trackingPosCol === -1) trackingPosCol = 16; // Kolom Q (Tracking POS, index 16)
       } else {
         if (resiCol === -1) resiCol = 4; // Kolom E (Resi, index 4)
-        if (keteranganCol === -1) keteranganCol = 10; // Kolom K (Keterangan, index 10)
-        if (trackingPosCol === -1) trackingPosCol = 11; // Kolom L (Tracking POS, index 11)
       }
 
       for (let r = 1; r < values.length; r++) {
@@ -384,30 +366,13 @@ function doPost(e) {
         if (cellResi && targetResiMap[cellResi]) {
           const rowNumber = r + 1;
 
-          if (targetStatus === 'BIRU_TUA' || hexColor === '#1F4E79') {
-            if (resiCol >= 0) {
-              sheet.getRange(rowNumber, resiCol + 1).setBackground(hexColor).setFontColor('#FFFFFF');
-            }
-          } else {
-            if (isAliqaSheet) {
-              sheet.getRange(rowNumber, 3, 1, 16).setBackground(hexColor);
-            } else {
-              sheet.getRange(rowNumber, 3, 1, 8).setBackground(hexColor);
-            }
+          // Pewarnaan di Spreadsheet HANYA untuk FU POS (BIRU_TUA), dan HANYA di kolom RESI SAJA!
+          // Kolom lain (Status, Keterangan, SLA, Nama, Alamat, dll) TIDAK DISENTUH SAMA SEKALI!
+          if (resiCol >= 0) {
+            sheet.getRange(rowNumber, resiCol + 1).setBackground(hexColor).setFontColor('#FFFFFF');
           }
 
-          if (trackingPosCol >= 0) {
-            sheet.getRange(rowNumber, trackingPosCol + 1).setValue(statusLabel);
-          }
-
-          if (keteranganCol >= 0 && note) {
-            sheet.getRange(rowNumber, keteranganCol + 1).setValue(note);
-          }
-
-          if (fuPosDateCol >= 0 && escalationDate) {
-            sheet.getRange(rowNumber, fuPosDateCol + 1).setValue(escalationDate);
-          }
-
+          delete targetResiMap[cellResi];
           updatedCount++;
           updatedResis.push(cellResi);
         }

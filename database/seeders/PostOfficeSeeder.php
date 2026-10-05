@@ -106,7 +106,7 @@ class PostOfficeSeeder extends Seeder
             // Maluku & Papua
             ['code' => '97000', 'name' => 'KCU AMBON 97000', 'city' => 'Ambon', 'province' => 'Maluku', 'phone_wa' => '6281297009700', 'pic_name' => 'CS Antaran Pos Maluku', 'notes' => 'Ambon, Maluku Tengah, Seram, Buru, Tual, Kepulauan Aru'],
             ['code' => '97700', 'name' => 'KC TERNATE 97700', 'city' => 'Ternate', 'province' => 'Maluku Utara', 'phone_wa' => '6281297709770', 'pic_name' => 'CS Pos Malut', 'notes' => 'Ternate, Tidore, Halmahera'],
-            ['code' => '99000', 'name' => 'KCU JAYAPURA 99000', 'city' => 'Jayapura', 'province' => 'Papua', 'phone_wa' => '6281299009900', 'pic_name' => 'CS Antaran Pos Papua', 'notes' => 'Jayapura, Keerom, Sarmi, Biak, Yapen, Merauke, Wamena, Timika, Nabire, Sorong, Manokwari'],
+            ['code' => '99000', 'name' => 'SPP JAYAPURA', 'city' => 'Jayapura', 'province' => 'Papua', 'phone_wa' => '6281299009900', 'pic_name' => 'CS Antaran Pos Papua', 'notes' => 'Jayapura, Keerom, Sarmi, Biak, Yapen, Merauke, Wamena, Timika, Nabire, Sorong, Manokwari'],
             ['code' => '98400', 'name' => 'KC SORONG 98400', 'city' => 'Sorong', 'province' => 'Papua Barat Daya', 'phone_wa' => '6281298409840', 'pic_name' => 'CS Pos Sorong & Raja Ampat', 'notes' => 'Kota & Kab. Sorong, Raja Ampat, Tambrauw, Maybrat'],
         ];
 

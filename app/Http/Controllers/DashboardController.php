@@ -32,18 +32,35 @@ class DashboardController extends Controller
     }
 
     /**
+     * Dedicated Dashboard for Mitra Aliqa
+     */
+    public function aliqa(Request $request)
+    {
+        return $this->index($request, 'Mitra Aliqa');
+    }
+
+    /**
+     * Dedicated Dashboard for Mitra Zaherba
+     */
+    public function zaherba(Request $request)
+    {
+        return $this->index($request, 'Mitra Zaherba');
+    }
+
+    /**
      * Display CS Monitoring Dashboard via Inertia React
      */
-    public function index(Request $request)
+    public function index(Request $request, ?string $forcedSeller = null)
     {
-        // Dummy data seeding removed - ensure stats return 0 when database is empty
-
-        $rawSeller = $request->input('seller');
-        if (empty($rawSeller) || $rawSeller === 'Semua Seller' || $rawSeller === 'ALL') {
-            $rawSeller = session('selected_seller', 'Mitra Aliqa');
+        // 1. Strict Seller Resolution (Clean isolation between Aliqa & Zaherba)
+        if ($forcedSeller !== null) {
+            $selectedSeller = $forcedSeller;
+        } elseif ($request->routeIs('dashboard.zaherba') || $request->is('zaherba') || str_contains(strtoupper((string)$request->input('seller')), 'ZAHERBA')) {
+            $selectedSeller = 'Mitra Zaherba';
+        } else {
+            $selectedSeller = 'Mitra Aliqa';
         }
-        $selectedSeller = str_contains(strtoupper((string)$rawSeller), 'ZAHERBA') ? 'Mitra Zaherba' : 'Mitra Aliqa';
-        session(['selected_seller' => $selectedSeller]);
+        $baseRoute = ($selectedSeller === 'Mitra Zaherba') ? '/zaherba' : '/aliqa';
         $selectedKategori = $request->input('kategori');
         $selectedMonth = $request->input('month', 'ALL');
         $selectedYear = $request->input('year', date('Y'));
@@ -133,45 +150,135 @@ class DashboardController extends Controller
             $query->whereIn('nama_seller', $sellerCandidates);
         }
 
-        // 3. Color & Kategori Filter
+        // 3. Color & Kategori Filter (Strictly Mutually Exclusive matching KPI Cards)
         if (!empty($selectedColor) && $selectedColor !== 'ALL') {
             $cUpper = strtoupper($selectedColor);
             $query->where(function ($q) use ($cUpper) {
                 if ($cUpper === 'BIRU') {
-                    $q->where('color_code', 'BIRU')
-                      ->orWhere(function ($sub) {
-                          $sub->where(function ($c) {
-                              $c->whereNull('color_code')->orWhere('color_code', '');
-                          })->where('status_kategori', 'SUKSES');
-                      });
+                    $q->where(function ($sub) {
+                        $sub->where('status_kategori', 'SUKSES')
+                            ->orWhere('status_pos', 'DELIVERED')
+                            ->orWhere('color_code', 'BIRU');
+                    });
                 } elseif ($cUpper === 'ORANGE') {
-                    $q->where('color_code', 'ORANGE')
-                      ->orWhere(function ($sub) {
-                          $sub->where(function ($c) {
-                              $c->whereNull('color_code')->orWhere('color_code', '');
-                          })->where('status_kategori', 'RETUR');
-                      });
+                    $q->where(function ($sub) {
+                        $sub->where('status_kategori', 'RETUR')
+                            ->orWhere('color_code', 'ORANGE')
+                            ->orWhere('status_pos', 'LIKE', '%RETURN%')
+                            ->orWhere('status_pos', 'LIKE', '%RETUR%')
+                            ->orWhere('status_pos', 'LIKE', '%DITOLAK%')
+                            ->orWhere('keterangan', 'LIKE', '%RETURN%')
+                            ->orWhere('keterangan', 'LIKE', '%RETUR%')
+                            ->orWhere('keterangan', 'LIKE', '%DITOLAK%');
+                    })->where(function ($sub) {
+                        $sub->where('status_pos', '!=', 'DELIVERED')
+                            ->where('status_kategori', '!=', 'SUKSES')
+                            ->where('color_code', '!=', 'BIRU');
+                    });
                 } elseif ($cUpper === 'KUNING') {
                     $q->where('color_code', 'KUNING')
-                      ->orWhere(function ($sub) {
-                          $sub->where(function ($c) {
-                              $c->whereNull('color_code')->orWhere('color_code', '');
-                          })->where('status_kategori', 'FOLLOW_UP');
+                      ->whereNotIn('status_kategori', ['SUKSES', 'RETUR'])
+                      ->where(function ($sub) {
+                          $sub->where('status_pos', '!=', 'DELIVERED')
+                              ->orWhereNull('status_pos');
+                      })
+                      ->where(function ($sub) {
+                          $sub->where('status_pos', '!=', 'DELIVERED (RETURN DELIVERY)')
+                              ->where('status_pos', 'NOT LIKE', '%RETURN%')
+                              ->where('status_pos', 'NOT LIKE', '%RETUR%')
+                              ->where('status_pos', 'NOT LIKE', '%DITOLAK%')
+                              ->orWhereNull('status_pos');
+                      })
+                      ->where(function ($sub) {
+                          $sub->where('keterangan', 'NOT LIKE', '%DITERIMA PENGIRIM%')
+                              ->where('keterangan', 'NOT LIKE', '%RETURN%')
+                              ->where('keterangan', 'NOT LIKE', '%RETUR%')
+                              ->where('keterangan', 'NOT LIKE', '%DITOLAK%')
+                              ->orWhereNull('keterangan');
+                      });
+                } elseif ($cUpper === 'BIRU_TUA') {
+                    $q->where('color_code', 'BIRU_TUA')
+                      ->whereNotIn('status_kategori', ['SUKSES', 'RETUR'])
+                      ->where(function ($sub) {
+                          $sub->where('status_pos', '!=', 'DELIVERED')
+                              ->orWhereNull('status_pos');
+                      })
+                      ->where(function ($sub) {
+                          $sub->where('status_pos', '!=', 'DELIVERED (RETURN DELIVERY)')
+                              ->where('status_pos', 'NOT LIKE', '%RETURN%')
+                              ->where('status_pos', 'NOT LIKE', '%RETUR%')
+                              ->where('status_pos', 'NOT LIKE', '%DITOLAK%')
+                              ->orWhereNull('status_pos');
+                      })
+                      ->where(function ($sub) {
+                          $sub->where('keterangan', 'NOT LIKE', '%DITERIMA PENGIRIM%')
+                              ->where('keterangan', 'NOT LIKE', '%RETURN%')
+                              ->where('keterangan', 'NOT LIKE', '%RETUR%')
+                              ->where('keterangan', 'NOT LIKE', '%DITOLAK%')
+                              ->orWhereNull('keterangan');
+                      });
+                } elseif ($cUpper === 'HIJAU') {
+                    $q->where('color_code', 'HIJAU')
+                      ->whereNotIn('status_kategori', ['SUKSES', 'RETUR'])
+                      ->where(function ($sub) {
+                          $sub->where('status_pos', '!=', 'DELIVERED')
+                              ->orWhereNull('status_pos');
+                      })
+                      ->where(function ($sub) {
+                          $sub->where('status_pos', '!=', 'DELIVERED (RETURN DELIVERY)')
+                              ->where('status_pos', 'NOT LIKE', '%RETURN%')
+                              ->where('status_pos', 'NOT LIKE', '%RETUR%')
+                              ->where('status_pos', 'NOT LIKE', '%DITOLAK%')
+                              ->orWhereNull('status_pos');
+                      })
+                      ->where(function ($sub) {
+                          $sub->where('keterangan', 'NOT LIKE', '%DITERIMA PENGIRIM%')
+                              ->where('keterangan', 'NOT LIKE', '%RETURN%')
+                              ->where('keterangan', 'NOT LIKE', '%RETUR%')
+                              ->where('keterangan', 'NOT LIKE', '%DITOLAK%')
+                              ->orWhereNull('keterangan');
                       });
                 } elseif ($cUpper === 'PUTIH') {
-                    $q->where('color_code', 'PUTIH')
-                      ->orWhere(function ($sub) {
-                          $sub->where(function ($c) {
-                              $c->whereNull('color_code')->orWhere('color_code', '');
-                          })->where(function ($sub2) {
-                              $sub2->where('status_kategori', 'IN_PROCESS')
-                                   ->orWhereNull('status_kategori')
-                                   ->orWhere('status_kategori', '')
-                                   ->orWhereNotIn('status_kategori', ['SUKSES', 'RETUR', 'FOLLOW_UP']);
-                          });
-                      });
-                } elseif ($cUpper === 'HIJAU' || $cUpper === 'BIRU_TUA') {
-                    $q->where('color_code', $cUpper);
+                    // Filter BELUM DI FU (PUTIH):
+                    // Resi yang belum sukses (bukan DELIVERED/SUKSES/BIRU)
+                    // DAN MUTLAK bukan RETUR (bukan RETUR/RETURN/DITOLAK/ORANGE) -> Langsung masuk PAKET RETUR
+                    // DAN belum di-FU CS (bukan Kuning, Hijau, Biru Tua)
+                    $isAliqa = !empty($selectedSeller) && stripos($selectedSeller, 'ALIQA') !== false;
+                    $q->where(function ($sub) {
+                        $sub->where('status_pos', '!=', 'DELIVERED')
+                            ->orWhereNull('status_pos');
+                    })
+                    ->where(function ($sub) {
+                        $sub->where('status_pos', '!=', 'DELIVERED (RETURN DELIVERY)')
+                            ->where('status_pos', 'NOT LIKE', '%RETURN%')
+                            ->where('status_pos', 'NOT LIKE', '%RETUR%')
+                            ->where('status_pos', 'NOT LIKE', '%DITOLAK%')
+                            ->orWhereNull('status_pos');
+                    })
+                    ->where(function ($sub) {
+                        $sub->where('keterangan', 'NOT LIKE', '%DITERIMA PENGIRIM%')
+                            ->where('keterangan', 'NOT LIKE', '%RETURN%')
+                            ->where('keterangan', 'NOT LIKE', '%RETUR%')
+                            ->where('keterangan', 'NOT LIKE', '%DITOLAK%')
+                            ->orWhereNull('keterangan');
+                    })
+                    ->where(function ($sub) {
+                        $sub->whereNotIn('status_kategori', ['SUKSES', 'RETUR'])
+                            ->orWhereNull('status_kategori');
+                    })
+                    ->where(function ($sub) {
+                        $sub->whereNotIn('color_code', ['BIRU', 'ORANGE'])
+                            ->orWhereNull('color_code');
+                    })
+                    ->where(function ($sub) use ($isAliqa) {
+                        if ($isAliqa) {
+                            $sub->whereNotIn('color_code', ['BIRU_TUA', 'KUNING'])
+                                ->orWhereNull('color_code');
+                        } else {
+                            $sub->whereNotIn('color_code', ['BIRU_TUA', 'KUNING', 'HIJAU'])
+                                ->orWhereNull('color_code');
+                        }
+                    });
                 } else {
                     $q->where('color_code', $cUpper);
                 }
@@ -210,8 +317,9 @@ class DashboardController extends Controller
                 }
                 $q->orWhereRaw('LOWER(no_resi) LIKE ?', ["%{$lowerRaw}%"]);
 
-                // 2. Direct partial match on customer name, phone, address, office, status
+                // 2. Direct partial match on customer name, cs, phone, address, office, status
                 $q->orWhereRaw('LOWER(nama_penerima) LIKE ?', ["%{$lowerRaw}%"])
+                  ->orWhereRaw('LOWER(nama_cs) LIKE ?', ["%{$lowerRaw}%"])
                   ->orWhereRaw('LOWER(no_hp) LIKE ?', ["%{$lowerRaw}%"])
                   ->orWhereRaw('LOWER(alamat) LIKE ?', ["%{$lowerRaw}%"])
                   ->orWhereRaw('LOWER(kantor_tujuan) LIKE ?', ["%{$lowerRaw}%"])
@@ -245,6 +353,8 @@ class DashboardController extends Controller
 
         // 5. Overdue / Lewat SLA / Macet > 4 Hari Filter
         $fourDaysAgo = now()->subDays(4)->toDateString();
+        $isSqlite = DB::connection()->getDriverName() === 'sqlite';
+        $datediffExpr = $isSqlite ? "(julianday('now') - julianday(tanggal_kirim))" : "DATEDIFF(CURRENT_DATE, tanggal_kirim)";
         if ($isOverdue) {
             $query->where(function ($q) {
                 $q->whereNull('status_kategori')
@@ -252,7 +362,18 @@ class DashboardController extends Controller
             })->where(function ($q) {
                 $q->whereNull('color_code')
                   ->orWhereNotIn('color_code', ['BIRU', 'ORANGE']);
-            })->whereDate('tanggal_kirim', '<=', $fourDaysAgo);
+            })->where(function ($q) use ($fourDaysAgo, $datediffExpr) {
+                $q->where(function ($sub) use ($datediffExpr) {
+                    $sub->whereNotNull('sla_days')
+                        ->where('sla_days', '>', 4)
+                        ->whereRaw("{$datediffExpr} > sla_days");
+                })->orWhere(function ($sub) use ($fourDaysAgo) {
+                    $sub->where(function ($s) {
+                        $s->whereNull('sla_days')
+                          ->orWhere('sla_days', '<=', 4);
+                    })->whereDate('tanggal_kirim', '<=', $fourDaysAgo);
+                });
+            });
         }
 
         // Sorting: Default urut persis seperti baris di Spreadsheet dari atas ke bawah (id asc)
@@ -264,6 +385,10 @@ class DashboardController extends Controller
             $query->orderBy('tanggal_kirim', $sortDirection)->orderBy('id', 'asc');
         } elseif ($sortBy === 'resi') {
             $query->orderBy('no_resi', $sortDirection);
+        } elseif ($sortBy === 'cs') {
+            $query->orderByRaw("CASE WHEN nama_cs IS NULL OR nama_cs = '' THEN 1 ELSE 0 END")
+                  ->orderBy('nama_cs', $sortDirection)
+                  ->orderBy('id', 'asc');
         } else {
             // Jika ada filter bulan, urutkan berdasarkan tanggal_kirim + id agar query index range bekerja 10x lebih cepat
             if ($mNum !== null) {
@@ -320,15 +445,34 @@ class DashboardController extends Controller
         }
 
         $formattedShipmentsData = collect($paginatedShipments->items())->map(function ($s) use ($officeMapById) {
-            $fu = 'PUTIH';
-            if (!empty($s->color_code)) {
-                $fu = strtoupper($s->color_code);
-            } elseif ($s->status_kategori === 'SUKSES') {
+            $isDelivered = ($s->status_kategori === 'SUKSES') || 
+                           ($s->color_code === 'BIRU') ||
+                           ($s->status_pos === 'DELIVERED') || 
+                           (str_contains(strtoupper((string)$s->status_pos), 'DELIVERED') && !str_contains(strtoupper((string)$s->status_pos), 'FAILED') && !str_contains(strtoupper((string)$s->status_pos), 'RETURN')) ||
+                           (str_contains(strtoupper((string)$s->status_pos), 'DITERIMA') && !str_contains(strtoupper((string)$s->status_pos), 'RETURN') && !str_contains(strtoupper((string)$s->status_pos), 'RETUR')) ||
+                           (str_contains(strtoupper((string)$s->keterangan), 'DITERIMA') && !str_contains(strtoupper((string)$s->keterangan), 'PENGIRIM') && !str_contains(strtoupper((string)$s->status_pos), 'RETURN')) ||
+                           ($s->status_pos === 'ARRIVEDUNPAID');
+            $isRetur = !$isDelivered && (
+                ($s->status_kategori === 'RETUR') || 
+                ($s->color_code === 'ORANGE') ||
+                str_contains(strtoupper((string)$s->status_pos), 'RETURN') ||
+                str_contains(strtoupper((string)$s->status_pos), 'RETUR') ||
+                str_contains(strtoupper((string)$s->status_pos), 'DITOLAK') ||
+                str_contains(strtoupper((string)$s->keterangan), 'RETURN') ||
+                str_contains(strtoupper((string)$s->keterangan), 'RETUR') ||
+                str_contains(strtoupper((string)$s->keterangan), 'DITOLAK')
+            );
+
+            if ($isDelivered) {
                 $fu = 'BIRU';
-            } elseif ($s->status_kategori === 'RETUR') {
+            } elseif ($isRetur) {
                 $fu = 'ORANGE';
-            } elseif ($s->status_kategori === 'FOLLOW_UP') {
+            } elseif ($s->color_code === 'BIRU_TUA') {
+                $fu = 'BIRU_TUA';
+            } elseif ($s->color_code === 'KUNING') {
                 $fu = 'KUNING';
+            } elseif ($s->color_code === 'HIJAU') {
+                $fu = 'HIJAU';
             } else {
                 $fu = 'PUTIH';
             }
@@ -344,42 +488,115 @@ class DashboardController extends Controller
 
             // Match post office for destination / KC
             $office = null;
-            if (!empty($s->kantor_pos_id) && isset($officeMapById[$s->kantor_pos_id])) {
-                $office = $officeMapById[$s->kantor_pos_id];
-            } else {
+            $rawKT = strtoupper(trim((string)$s->kantor_tujuan));
+            $isAirportTransit = str_contains($rawKT, 'SOEKARNO') ||
+                                str_contains($rawKT, 'BANDARA') ||
+                                str_contains($rawKT, 'AIRPORT') ||
+                                str_contains($rawKT, 'JAKARTASOEKARNO');
+            $isGenericKT = empty($rawKT) || in_array($rawKT, [
+                'KC TUJUAN', 'KC POS TUJUAN', 'KANTOR POS TUJUAN', 'KC PENGANTARAN',
+                'KC POS PENGANTARAN', 'POS PENGANTARAN', 'KC POS INDONESIA', 'POS INDONESIA',
+                'KANTOR POS TERKAIT', 'SEDANG MEMBACA NIPOS...', 'SEDANG MEMBACA NIPOS'
+            ]) || $isAirportTransit;
+
+            if (!$isGenericKT) {
                 $office = \App\Models\PostOffice::matchByDestinationOrAddress($s->kantor_tujuan, $s->alamat);
             }
+            if (!$office && !empty($s->kantor_pos_id) && isset($officeMapById[$s->kantor_pos_id])) {
+                $candidateOffice = $officeMapById[$s->kantor_pos_id];
+                // Only use officeMapById if it is consistent with kantor_tujuan or if kantor_tujuan was generic
+                if ($isGenericKT || stripos($candidateOffice->name, $rawKT) !== false || stripos($rawKT, $candidateOffice->name) !== false) {
+                    $office = $candidateOffice;
+                }
+            }
+            if (!$office) {
+                $office = \App\Models\PostOffice::matchByDestinationOrAddress($isAirportTransit ? null : $s->kantor_tujuan, $s->alamat);
+            }
 
-            $genericNames = ['KC TUJUAN', 'KANTOR POS TUJUAN', 'KC PENGANTARAN', 'KC POS PENGANTARAN', 'POS PENGANTARAN', 'KC POS INDONESIA', 'POS INDONESIA'];
+            $genericNames = [
+                'KC TUJUAN', 'KC POS TUJUAN', 'KANTOR POS TUJUAN', 'KC PENGANTARAN',
+                'KC POS PENGANTARAN', 'POS PENGANTARAN', 'KC POS INDONESIA', 'POS INDONESIA',
+                'KANTOR POS TERKAIT', 'SEDANG MEMBACA NIPOS...', 'SEDANG MEMBACA NIPOS'
+            ];
+            $rawKT = strtoupper(trim((string)$s->kantor_tujuan));
+            $rawLL = strtoupper(trim((string)$s->last_location));
+            $isKcpOrDc = str_contains($rawKT, 'KCP') ||
+                         str_starts_with($rawKT, 'DC ') ||
+                         str_contains($rawKT, ' DC ') ||
+                         str_ends_with($rawKT, ' DC') ||
+                         preg_match('/\b\d{5}B\d\b/i', $rawKT);
+            $isSpp = str_contains($rawKT, 'SPP') || str_contains($rawKT, 'MPC');
+
+            $isRetur = ($fu === 'ORANGE') ||
+                       ($s->status_kategori === 'RETUR') ||
+                       str_contains(strtoupper((string)$s->status_pos), 'RETUR') ||
+                       str_contains(strtoupper((string)$s->keterangan), 'RETUR') ||
+                       str_contains(strtoupper((string)$s->status_pos), 'IRREGULARITY') ||
+                       str_contains(strtoupper((string)$s->keterangan), 'IRREGULARITY') ||
+                       str_contains(strtoupper((string)$s->status_pos), 'DITOLAK');
+
             $kantorTujuan = null;
-            if ($office && !empty($office->name)) {
-                $kantorTujuan = strtoupper(trim($office->name));
-            } elseif (!empty($s->kantor_tujuan) && !in_array(strtoupper(trim($s->kantor_tujuan)), $genericNames)) {
-                $kantorTujuan = strtoupper(trim($s->kantor_tujuan));
-            } elseif (!empty($s->last_location) && !in_array(strtoupper(trim($s->last_location)), $genericNames)) {
-                $kantorTujuan = strtoupper(trim($s->last_location));
-            } else {
-                // Try extracting from status_pos or keterangan if it mentions "di KC ..." or "tujuan KC ..."
-                $fromStatus = $this->botService->extractKantorTujuan($s->status_pos ?? '', $s->keterangan ?? '', $s->alamat ?? '');
-                if (!empty($fromStatus) && !in_array(strtoupper(trim($fromStatus)), $genericNames)) {
-                    $kantorTujuan = strtoupper(trim($fromStatus));
-                } else {
-                    $derived = self::deriveKantorPosFromAddress($s->alamat);
-                    $kantorTujuan = (!empty($derived) && !in_array(strtoupper(trim($derived)), $genericNames)) ? $derived : null;
+            // 0. For RETUR packages: active return location (SPP or return KC) takes precedence over obsolete outbound KC
+            if ($isRetur) {
+                if (str_contains($rawLL, 'SPP') || str_contains($rawLL, 'MPC')) {
+                    $kantorTujuan = $rawLL;
+                } elseif (str_contains($rawKT, 'SPP') || str_contains($rawKT, 'MPC')) {
+                    $kantorTujuan = $rawKT;
+                } elseif (preg_match('/\b(SPP|KC|KCU)\s+([A-Za-z0-9\s\.\,\-\/]+?)(?=(?:\s+(?:oleh|dan|telah|dengan|tujuan|Tanggal|Petugas|\d{2}:\d{2}|\[|<))|[\n\r]|$)/i', (string)$s->status_pos, $spm)) {
+                    $candSP = trim($spm[1] . ' ' . $spm[2]);
+                    $candSPUpper = strtoupper(preg_replace('/\s+/', ' ', $candSP));
+                    if (!str_contains($candSPUpper, 'KCP') && !str_starts_with($candSPUpper, 'DC ') && !str_contains($candSPUpper, ' DC ') && !str_contains($candSPUpper, 'MPC')) {
+                        $kantorTujuan = $candSPUpper;
+                    }
                 }
             }
 
-            // KCP cannot handle follow-ups: redirect to governing KC / KCU
-            if (!empty($kantorTujuan) && (str_contains($kantorTujuan, 'KCP') || preg_match('/\b\d{5}B\d\b/i', $kantorTujuan) || !$office)) {
-                $matchedKcp = \App\Models\PostOffice::matchByDestinationOrAddress($kantorTujuan, $s->alamat);
-                if ($matchedKcp) {
+            if (!$kantorTujuan) {
+                if ($isSpp) {
+                    // 1. MUST PRESERVE exact SPP / MPC (e.g. SPP JAKARTA, SPP SURABAYA)
+                    $kantorTujuan = $rawKT;
+                } elseif ($isKcpOrDc && $office && !empty($office->name) && !str_starts_with(strtoupper($office->name), 'DC ')) {
+                    // 2. KCP / DC redirect display to governing KC / KCU / SPP (e.g. KCU SERANG 42100)
+                    $kantorTujuan = strtoupper(trim($office->name));
+                } elseif (!empty($s->kantor_tujuan) && !in_array($rawKT, $genericNames) && !$isKcpOrDc && !$isAirportTransit) {
+                    $kantorTujuan = $rawKT;
+                } elseif (!empty($s->last_location) && !in_array($rawLL, $genericNames) && !str_contains($rawLL, 'KCP') && !str_starts_with($rawLL, 'DC ') && !str_contains($rawLL, 'SOEKARNO') && !str_contains($rawLL, 'BANDARA')) {
+                    $kantorTujuan = $rawLL;
+                } elseif ($office && !empty($office->name) && !str_starts_with(strtoupper($office->name), 'DC ')) {
+                    $kantorTujuan = strtoupper(trim($office->name));
+                } else {
+                    // Try extracting from status_pos or keterangan if it mentions "di KC ..." or "tujuan KC ..."
+                    $fromStatus = $this->botService->extractKantorTujuan($s->status_pos ?? '', $s->keterangan ?? '', $s->alamat ?? '');
+                    if (!empty($fromStatus) && !in_array(strtoupper(trim($fromStatus)), $genericNames)) {
+                        $kantorTujuan = strtoupper(trim($fromStatus));
+                    } else {
+                        $derived = self::deriveKantorPosFromAddress($s->alamat);
+                        $kantorTujuan = (!empty($derived) && !in_array(strtoupper(trim($derived)), $genericNames)) ? $derived : null;
+                    }
+                }
+            }
+
+            // KCP and DC cannot handle follow-ups: redirect to governing KC / KCU / SPP
+            if (!empty($kantorTujuan) && (str_contains($kantorTujuan, 'KCP') || str_starts_with($kantorTujuan, 'DC ') || str_contains($kantorTujuan, 'SOEKARNO') || str_contains($kantorTujuan, 'BANDARA') || in_array($kantorTujuan, $genericNames) || !$office)) {
+                $matchedKcp = \App\Models\PostOffice::matchByDestinationOrAddress(
+                    (str_contains($kantorTujuan, 'SOEKARNO') || str_contains($kantorTujuan, 'BANDARA')) ? null : $kantorTujuan,
+                    $s->alamat
+                );
+                if ($matchedKcp && !str_starts_with(strtoupper($matchedKcp->name), 'DC ')) {
                     $kantorTujuan = strtoupper(trim($matchedKcp->name));
                     $office = $matchedKcp;
-                } elseif (str_contains($kantorTujuan, 'KCP')) {
+                } else {
                     $derived = self::deriveKantorPosFromAddress($s->alamat);
-                    if (!empty($derived)) {
+                    if (!empty($derived) && !in_array(strtoupper(trim($derived)), $genericNames)) {
                         $kantorTujuan = $derived;
                     }
+                }
+            }
+
+            if (!empty($kantorTujuan) && (!$office || stripos($office->name, $kantorTujuan) === false)) {
+                $rematched = \App\Models\PostOffice::matchByDestinationOrAddress($kantorTujuan, $s->alamat);
+                if ($rematched) {
+                    $office = $rematched;
                 }
             }
 
@@ -392,30 +609,41 @@ class DashboardController extends Controller
             $isDelivered = !$isRetur && (($fu === 'BIRU') || ($s->status_kategori === 'SUKSES'));
             $isFinal = $isDelivered || $isRetur;
 
-            $sla = (int)($s->sla_days ?? 2);
-            if (!$isFinal && !empty($s->tanggal_kirim)) {
+            // Target SLA: default minimum 4 days (Over SLA jika > 4 hari), atau SLA spesifik NIPOS (misal 9 hari)
+            $targetSla = 4;
+            if ($s->sla_days !== null && $s->sla_days > 0) {
+                $targetSla = max(4, (int)$s->sla_days);
+            }
+
+            $sla = $targetSla;
+            if (!$isDelivered && !empty($s->tanggal_kirim)) {
                 try {
                     $tglKirim = \Carbon\Carbon::parse($s->tanggal_kirim)->startOfDay();
                     $today = now()->startOfDay();
                     $elapsedDays = abs((int)$today->diffInDays($tglKirim));
-                    $targetSla = ($s->sla_days !== null && $s->sla_days > 0) ? $s->sla_days : 2;
 
                     if ($s->sla_days !== null && $s->sla_days < 0) {
+                        // Sudah eksplisit Over SLA dari teks NIPOS (misal -240)
                         $sla = $s->sla_days;
                     } elseif ($elapsedDays > $targetSla) {
+                        // Paket melewati target SLA (> 4 hari atau > 9 hari NIPOS) -> minus hari telat
                         $sla = -1 * ($elapsedDays - $targetSla);
                     } else {
-                        $sla = max(0, $targetSla - $elapsedDays);
+                        // Masih dalam SLA: tampilkan target SLA (misal 9 hari atau 4 hari)
+                        $sla = $targetSla;
                     }
                 } catch (\Throwable $e) {
-                    $sla = (int)($s->sla_days ?? 2);
+                    $sla = $targetSla;
                 }
+            } elseif ($s->sla_days !== null) {
+                $sla = $s->sla_days;
             }
 
             return [
                 'id' => (string)$s->id,
                 'resi' => $s->no_resi,
                 'seller' => $rowSeller,
+                'namaCs' => $s->nama_cs ?: null,
                 'tanggalKirim' => $tglStr,
                 'tujuan' => $s->alamat ?? '-',
                 'penerima' => $s->nama_penerima ?? '-',
@@ -429,10 +657,12 @@ class DashboardController extends Controller
                 'escalationDate' => $s->fu_pos_date,
                 'lastTrackedAt' => $s->last_tracked_at ? (is_string($s->last_tracked_at) ? $s->last_tracked_at : $s->last_tracked_at->format('Y-m-d H:i')) : null,
                 'statusKategori' => $s->status_kategori,
-                'kantorTujuan' => $kantorTujuan,
+                'kantorTujuan' => $kantorTujuan ? preg_replace('/\bMPS\b/i', 'SPP', $kantorTujuan) : null,
                 'kantorPosPhone' => $office ? $office->phone_wa : '',
+                'kantorPosPhone2' => $office ? $office->phone_wa_2 : '',
+                'kantorPosTelegram' => $office ? $office->telegram_handle : '',
                 'kantorPosPic' => $office ? ($office->pic_name ?: $office->name) : '',
-                'lastLocation' => $s->last_location ?: $kantorTujuan,
+                'lastLocation' => $s->last_location ? preg_replace('/\bMPS\b/i', 'SPP', $s->last_location) : ($kantorTujuan ? preg_replace('/\bMPS\b/i', 'SPP', $kantorTujuan) : null),
             ];
         })->toArray();
 
@@ -478,31 +708,119 @@ class DashboardController extends Controller
 
                 $fourDaysAgo = now()->subDays(4)->toDateString();
                 $todayStart = now()->startOfDay()->toDateTimeString();
-                $statsRow = (clone $statsBaseQuery)->selectRaw("
-                    COUNT(*) as total,
-                    SUM(CASE WHEN color_code = 'BIRU' OR ((color_code IS NULL OR color_code = '') AND status_kategori = 'SUKSES') THEN 1 ELSE 0 END) as sukses,
-                    SUM(CASE WHEN color_code = 'ORANGE' OR ((color_code IS NULL OR color_code = '') AND status_kategori = 'RETUR') THEN 1 ELSE 0 END) as retur,
-                    SUM(CASE WHEN color_code = 'PUTIH' OR ((color_code IS NULL OR color_code = '') AND (status_kategori = 'IN_PROCESS' OR status_kategori IS NULL OR status_kategori = '' OR status_kategori NOT IN ('SUKSES', 'RETUR', 'FOLLOW_UP'))) THEN 1 ELSE 0 END) as belum,
-                    SUM(CASE WHEN color_code = 'KUNING' OR ((color_code IS NULL OR color_code = '') AND status_kategori = 'FOLLOW_UP') THEN 1 ELSE 0 END) as sudah_fu,
-                    SUM(CASE WHEN color_code = 'HIJAU' THEN 1 ELSE 0 END) as fu_2_kali,
-                    SUM(CASE WHEN color_code = 'BIRU_TUA' THEN 1 ELSE 0 END) as fu_pos,
-                    SUM(CASE WHEN color_code IN ('KUNING', 'HIJAU', 'BIRU_TUA') OR ((color_code IS NULL OR color_code = '') AND status_kategori = 'FOLLOW_UP') THEN 1 ELSE 0 END) as follow_up,
-                    SUM(CASE WHEN last_tracked_at IS NOT NULL THEN 1 ELSE 0 END) as tracked,
-                    SUM(CASE WHEN (
-                        (status_kategori IS NULL OR status_kategori NOT IN ('SUKSES', 'RETUR')) 
-                        AND (color_code IS NULL OR color_code NOT IN ('BIRU', 'ORANGE')) 
-                        AND tanggal_kirim <= '{$fourDaysAgo}'
-                    ) THEN 1 ELSE 0 END) as overdue,
-                    SUM(CASE WHEN (
-                        (status_pos IS NULL OR status_pos = '' OR status_pos LIKE '%PROCESS%' 
-                        OR status_kategori NOT IN ('SUKSES', 'RETUR') OR status_kategori IS NULL 
-                        OR color_code NOT IN ('BIRU', 'ORANGE') OR color_code IS NULL 
-                        OR status_pos IN ('unBag', 'UNBAG', 'INVEHICLE', 'INLOCATION', 'inBag', 'INBAG', 'DELIVERYRUNSHEET', 'FAILEDTODELIVERED', 'ARRIVEDUNPAID', 'Irregularity', 'MANIFEST', 'ARRIVAL', 'DEPARTURE')
-                        OR ((status_kategori = 'RETUR' OR color_code = 'ORANGE') AND (status_pos IS NULL OR (status_pos NOT LIKE '%RETURN DELIVERY%' AND status_pos NOT LIKE '%RETURN TO SENDER%' AND status_pos NOT LIKE '%DITERIMA PENGIRIM%'))))
-                        AND (status_pos IS NULL OR status_pos NOT LIKE '%DELIVERED%' OR status_pos LIKE '%RETURN%')
-                        AND (last_tracked_at IS NULL OR last_tracked_at < '{$todayStart}')
-                    ) THEN 1 ELSE 0 END) as pending
-                ")->first();
+                $isSqlite = DB::connection()->getDriverName() === 'sqlite';
+                $datediffExpr = $isSqlite ? "(julianday('now') - julianday(tanggal_kirim))" : "DATEDIFF(CURRENT_DATE, tanggal_kirim)";
+                $isAliqaSeller = !empty($selectedSeller) && stripos($selectedSeller, 'ALIQA') !== false;
+
+                if ($isAliqaSeller) {
+                    $statsRow = (clone $statsBaseQuery)->selectRaw("
+                        COUNT(*) as total,
+                        SUM(CASE WHEN status_kategori = 'SUKSES' OR status_pos = 'DELIVERED' OR color_code = 'BIRU' THEN 1 ELSE 0 END) as sukses,
+                        SUM(CASE WHEN (status_pos != 'DELIVERED' AND status_kategori != 'SUKSES' AND color_code != 'BIRU') AND (status_kategori = 'RETUR' OR color_code = 'ORANGE' OR status_pos LIKE '%RETURN%' OR status_pos LIKE '%RETUR%' OR status_pos LIKE '%DITOLAK%' OR keterangan LIKE '%RETURN%' OR keterangan LIKE '%RETUR%' OR keterangan LIKE '%DITOLAK%') THEN 1 ELSE 0 END) as retur,
+                        SUM(CASE WHEN (
+                            (status_pos != 'DELIVERED' OR status_pos IS NULL)
+                            AND (status_pos != 'DELIVERED (RETURN DELIVERY)' AND status_pos NOT LIKE '%RETURN%' AND status_pos NOT LIKE '%RETUR%' AND status_pos NOT LIKE '%DITOLAK%' OR status_pos IS NULL)
+                            AND (keterangan NOT LIKE '%DITERIMA PENGIRIM%' AND keterangan NOT LIKE '%RETURN%' AND keterangan NOT LIKE '%RETUR%' AND keterangan NOT LIKE '%DITOLAK%' OR keterangan IS NULL)
+                            AND (status_kategori != 'SUKSES' AND status_kategori != 'RETUR' OR status_kategori IS NULL)
+                            AND color_code = 'BIRU_TUA'
+                        ) THEN 1 ELSE 0 END) as fu_pos,
+                        SUM(CASE WHEN (
+                            (status_pos != 'DELIVERED' OR status_pos IS NULL)
+                            AND (status_pos != 'DELIVERED (RETURN DELIVERY)' AND status_pos NOT LIKE '%RETURN%' AND status_pos NOT LIKE '%RETUR%' AND status_pos NOT LIKE '%DITOLAK%' OR status_pos IS NULL)
+                            AND (keterangan NOT LIKE '%DITERIMA PENGIRIM%' AND keterangan NOT LIKE '%RETURN%' AND keterangan NOT LIKE '%RETUR%' AND keterangan NOT LIKE '%DITOLAK%' OR keterangan IS NULL)
+                            AND (status_kategori != 'SUKSES' AND status_kategori != 'RETUR' OR status_kategori IS NULL)
+                            AND color_code = 'KUNING'
+                        ) THEN 1 ELSE 0 END) as sudah_fu,
+                        0 as fu_2_kali,
+                        SUM(CASE WHEN (
+                            (status_pos != 'DELIVERED' OR status_pos IS NULL)
+                            AND (status_pos != 'DELIVERED (RETURN DELIVERY)' AND status_pos NOT LIKE '%RETURN%' AND status_pos NOT LIKE '%RETUR%' AND status_pos NOT LIKE '%DITOLAK%' OR status_pos IS NULL)
+                            AND (keterangan NOT LIKE '%DITERIMA PENGIRIM%' AND keterangan NOT LIKE '%RETURN%' AND keterangan NOT LIKE '%RETUR%' AND keterangan NOT LIKE '%DITOLAK%' OR keterangan IS NULL)
+                            AND (status_kategori != 'SUKSES' AND status_kategori != 'RETUR' OR status_kategori IS NULL)
+                            AND (color_code NOT IN ('BIRU', 'ORANGE', 'BIRU_TUA', 'KUNING') OR color_code IS NULL)
+                        ) THEN 1 ELSE 0 END) as belum,
+                        SUM(CASE WHEN (
+                            (status_pos != 'DELIVERED' OR status_pos IS NULL)
+                            AND (status_pos != 'DELIVERED (RETURN DELIVERY)' AND status_pos NOT LIKE '%RETURN%' AND status_pos NOT LIKE '%RETUR%' AND status_pos NOT LIKE '%DITOLAK%' OR status_pos IS NULL)
+                            AND (keterangan NOT LIKE '%DITERIMA PENGIRIM%' AND keterangan NOT LIKE '%RETURN%' AND keterangan NOT LIKE '%RETUR%' AND keterangan NOT LIKE '%DITOLAK%' OR keterangan IS NULL)
+                            AND (status_kategori != 'SUKSES' AND status_kategori != 'RETUR' OR status_kategori IS NULL)
+                            AND color_code IN ('KUNING', 'BIRU_TUA')
+                        ) THEN 1 ELSE 0 END) as follow_up,
+                        SUM(CASE WHEN last_tracked_at IS NOT NULL THEN 1 ELSE 0 END) as tracked,
+                        SUM(CASE WHEN (
+                            (status_kategori IS NULL OR status_kategori NOT IN ('SUKSES', 'RETUR')) 
+                            AND (color_code IS NULL OR color_code NOT IN ('BIRU', 'ORANGE')) 
+                            AND (
+                                (sla_days > 4 AND {$datediffExpr} > sla_days)
+                                OR
+                                ((sla_days IS NULL OR sla_days <= 4) AND tanggal_kirim <= '{$fourDaysAgo}')
+                            )
+                        ) THEN 1 ELSE 0 END) as overdue,
+                        SUM(CASE WHEN (
+                            (status_pos IS NULL OR status_pos = '' OR status_pos LIKE '%PROCESS%' 
+                            OR status_kategori NOT IN ('SUKSES', 'RETUR') OR status_kategori IS NULL 
+                            OR color_code NOT IN ('BIRU', 'ORANGE') OR color_code IS NULL 
+                            OR status_pos IN ('unBag', 'UNBAG', 'INVEHICLE', 'INLOCATION', 'inBag', 'INBAG', 'DELIVERYRUNSHEET', 'FAILEDTODELIVERED', 'ARRIVEDUNPAID', 'Irregularity', 'MANIFEST', 'ARRIVAL', 'DEPARTURE')
+                            OR ((status_kategori = 'RETUR' OR color_code = 'ORANGE') AND (status_pos IS NULL OR (status_pos NOT LIKE '%RETURN DELIVERY%' AND status_pos NOT LIKE '%RETURN TO SENDER%' AND status_pos NOT LIKE '%DITERIMA PENGIRIM%'))))
+                            AND (status_pos IS NULL OR status_pos NOT LIKE '%DELIVERED%' OR status_pos LIKE '%RETURN%')
+                            AND (last_tracked_at IS NULL OR last_tracked_at < '{$todayStart}')
+                        ) THEN 1 ELSE 0 END) as pending
+                    ")->first();
+                } else {
+                    $statsRow = (clone $statsBaseQuery)->selectRaw("
+                        COUNT(*) as total,
+                        SUM(CASE WHEN status_kategori = 'SUKSES' OR status_pos = 'DELIVERED' OR color_code = 'BIRU' THEN 1 ELSE 0 END) as sukses,
+                        SUM(CASE WHEN (status_pos != 'DELIVERED' AND status_kategori != 'SUKSES' AND color_code != 'BIRU') AND (status_kategori = 'RETUR' OR color_code = 'ORANGE' OR status_pos LIKE '%RETURN%' OR status_pos LIKE '%RETUR%' OR status_pos LIKE '%DITOLAK%' OR keterangan LIKE '%RETURN%' OR keterangan LIKE '%RETUR%' OR keterangan LIKE '%DITOLAK%') THEN 1 ELSE 0 END) as retur,
+                        SUM(CASE WHEN (
+                            (status_pos != 'DELIVERED' OR status_pos IS NULL)
+                            AND (status_pos != 'DELIVERED (RETURN DELIVERY)' AND status_pos NOT LIKE '%RETURN%' AND status_pos NOT LIKE '%RETUR%' AND status_pos NOT LIKE '%DITOLAK%' OR status_pos IS NULL)
+                            AND (keterangan NOT LIKE '%DITERIMA PENGIRIM%' AND keterangan NOT LIKE '%RETURN%' AND keterangan NOT LIKE '%RETUR%' AND keterangan NOT LIKE '%DITOLAK%' OR keterangan IS NULL)
+                            AND (status_kategori != 'SUKSES' AND status_kategori != 'RETUR' OR status_kategori IS NULL)
+                            AND color_code = 'BIRU_TUA'
+                        ) THEN 1 ELSE 0 END) as fu_pos,
+                        SUM(CASE WHEN (
+                            (status_pos != 'DELIVERED' OR status_pos IS NULL)
+                            AND (status_pos != 'DELIVERED (RETURN DELIVERY)' AND status_pos NOT LIKE '%RETURN%' AND status_pos NOT LIKE '%RETUR%' AND status_pos NOT LIKE '%DITOLAK%' OR status_pos IS NULL)
+                            AND (keterangan NOT LIKE '%DITERIMA PENGIRIM%' AND keterangan NOT LIKE '%RETURN%' AND keterangan NOT LIKE '%RETUR%' AND keterangan NOT LIKE '%DITOLAK%' OR keterangan IS NULL)
+                            AND (status_kategori != 'SUKSES' AND status_kategori != 'RETUR' OR status_kategori IS NULL)
+                            AND color_code = 'KUNING'
+                        ) THEN 1 ELSE 0 END) as sudah_fu,
+                        SUM(CASE WHEN (
+                            (status_pos != 'DELIVERED' OR status_pos IS NULL)
+                            AND (status_pos != 'DELIVERED (RETURN DELIVERY)' AND status_pos NOT LIKE '%RETURN%' AND status_pos NOT LIKE '%RETUR%' AND status_pos NOT LIKE '%DITOLAK%' OR status_pos IS NULL)
+                            AND (keterangan NOT LIKE '%DITERIMA PENGIRIM%' AND keterangan NOT LIKE '%RETURN%' AND keterangan NOT LIKE '%RETUR%' AND keterangan NOT LIKE '%DITOLAK%' OR keterangan IS NULL)
+                            AND (status_kategori != 'SUKSES' AND status_kategori != 'RETUR' OR status_kategori IS NULL)
+                            AND color_code = 'HIJAU'
+                        ) THEN 1 ELSE 0 END) as fu_2_kali,
+                        SUM(CASE WHEN (
+                            (status_pos != 'DELIVERED' OR status_pos IS NULL)
+                            AND (status_pos != 'DELIVERED (RETURN DELIVERY)' AND status_pos NOT LIKE '%RETURN%' AND status_pos NOT LIKE '%RETUR%' AND status_pos NOT LIKE '%DITOLAK%' OR status_pos IS NULL)
+                            AND (keterangan NOT LIKE '%DITERIMA PENGIRIM%' AND keterangan NOT LIKE '%RETURN%' AND keterangan NOT LIKE '%RETUR%' AND keterangan NOT LIKE '%DITOLAK%' OR keterangan IS NULL)
+                            AND (status_kategori != 'SUKSES' AND status_kategori != 'RETUR' OR status_kategori IS NULL)
+                            AND (color_code NOT IN ('BIRU', 'ORANGE', 'BIRU_TUA', 'KUNING', 'HIJAU') OR color_code IS NULL)
+                        ) THEN 1 ELSE 0 END) as belum,
+                        SUM(CASE WHEN (status_pos != 'DELIVERED' OR status_pos LIKE '%RETURN%' OR status_pos IS NULL) AND (status_kategori != 'SUKSES' OR status_kategori IS NULL) AND color_code IN ('KUNING', 'HIJAU', 'BIRU_TUA') THEN 1 ELSE 0 END) as follow_up,
+                        SUM(CASE WHEN last_tracked_at IS NOT NULL THEN 1 ELSE 0 END) as tracked,
+                        SUM(CASE WHEN (
+                            (status_kategori IS NULL OR status_kategori NOT IN ('SUKSES', 'RETUR')) 
+                            AND (color_code IS NULL OR color_code NOT IN ('BIRU', 'ORANGE')) 
+                            AND (
+                                (sla_days > 4 AND {$datediffExpr} > sla_days)
+                                OR
+                                ((sla_days IS NULL OR sla_days <= 4) AND tanggal_kirim <= '{$fourDaysAgo}')
+                            )
+                        ) THEN 1 ELSE 0 END) as overdue,
+                        SUM(CASE WHEN (
+                            (status_pos IS NULL OR status_pos = '' OR status_pos LIKE '%PROCESS%' 
+                            OR status_kategori NOT IN ('SUKSES', 'RETUR') OR status_kategori IS NULL 
+                            OR color_code NOT IN ('BIRU', 'ORANGE') OR color_code IS NULL 
+                            OR status_pos IN ('unBag', 'UNBAG', 'INVEHICLE', 'INLOCATION', 'inBag', 'INBAG', 'DELIVERYRUNSHEET', 'FAILEDTODELIVERED', 'ARRIVEDUNPAID', 'Irregularity', 'MANIFEST', 'ARRIVAL', 'DEPARTURE')
+                            OR ((status_kategori = 'RETUR' OR color_code = 'ORANGE') AND (status_pos IS NULL OR (status_pos NOT LIKE '%RETURN DELIVERY%' AND status_pos NOT LIKE '%RETURN TO SENDER%' AND status_pos NOT LIKE '%DITERIMA PENGIRIM%'))))
+                            AND (status_pos IS NULL OR status_pos NOT LIKE '%DELIVERED%' OR status_pos LIKE '%RETURN%')
+                            AND (last_tracked_at IS NULL OR last_tracked_at < '{$todayStart}')
+                        ) THEN 1 ELSE 0 END) as pending
+                    ")->first();
+                }
 
                 return [
                     'stats' => [
@@ -630,6 +948,8 @@ class DashboardController extends Controller
             'googleSheetUrlZaherba' => fn() => SystemSetting::get('google_sheet_url_zaherba', env('GOOGLE_SHEET_URL_ZAHERBA', 'https://docs.google.com/spreadsheets/d/1wUqPnU1_QOq6WocHwpxAhjhScjlb_ZhhSy8I2WqGQKw/edit')),
             'googleSheetWebhookUrlAliqa' => fn() => SystemSetting::get('google_sheet_webhook_url_aliqa', SystemSetting::get('google_sheet_webhook_url', env('GOOGLE_SHEET_WEBHOOK_URL', ''))),
             'googleSheetWebhookUrlZaherba' => fn() => SystemSetting::get('google_sheet_webhook_url_zaherba', ''),
+            'activeDashboard' => $isZaherba ? 'zaherba' : 'aliqa',
+            'baseRoute' => $baseRoute,
             'filters' => [
                 'seller' => $selectedSeller,
                 'kategori' => $selectedKategori,
@@ -721,14 +1041,31 @@ class DashboardController extends Controller
 
     /**
      * Bumper versi data agar semua tab/browser admin/CS auto-refresh instan
+     * Dapat merekam delta perubahan baris untuk pembaruan senyap (in-memory update tanpa reload)
      */
-    public static function bumpDataVersion(): void
+    public static function bumpDataVersion(?array $deltas = null): void
     {
-        Cache::forever('shipments_data_version', (string) microtime(true));
+        $version = (string) microtime(true);
+        Cache::forever('shipments_data_version', $version);
+
+        if (!empty($deltas)) {
+            $recent = Cache::get('shipments_recent_deltas', []);
+            if (!is_array($recent)) {
+                $recent = [];
+            }
+            foreach ($deltas as $d) {
+                $d['version'] = $version;
+                array_unshift($recent, $d);
+            }
+            // Batasi riwayat perubahan terbaru hingga 300 item di RAM Cache
+            $recent = array_slice($recent, 0, 300);
+            Cache::put('shipments_recent_deltas', $recent, now()->addHours(6));
+        }
     }
 
     /**
      * Endpoint ringan (baca RAM Cache < 1ms) untuk mendeteksi perubahan data secara real-time
+     * Mengembalikan deltas jika browser klien mengirimkan parameter 'since'
      */
     public function liveVersion(Request $request)
     {
@@ -738,8 +1075,23 @@ class DashboardController extends Controller
             Cache::forever('shipments_data_version', $version);
         }
 
+        $sinceVersion = $request->query('since');
+        $deltas = [];
+
+        if (!empty($sinceVersion) && (string)$sinceVersion !== (string)$version) {
+            $allDeltas = Cache::get('shipments_recent_deltas', []);
+            if (is_array($allDeltas)) {
+                foreach ($allDeltas as $item) {
+                    if (isset($item['version']) && (float)$item['version'] > (float)$sinceVersion) {
+                        $deltas[] = $item;
+                    }
+                }
+            }
+        }
+
         return response()->json([
             'version' => $version,
+            'deltas' => $deltas,
             'timestamp' => now()->toIso8601String(),
         ]);
     }
@@ -778,7 +1130,17 @@ class DashboardController extends Controller
         }
 
         OutgoingShipment::whereIn('id', $ids)->update($updateData);
-        self::bumpDataVersion();
+
+        $deltas = [];
+        foreach ($ids as $sId) {
+            $deltas[] = [
+                'id' => (string)$sId,
+                'fu' => $fu,
+                'escalationDate' => $escDate,
+                'statusKategori' => $kategori,
+            ];
+        }
+        self::bumpDataVersion($deltas);
 
         // Audit Trail: Catat riwayat ke tabel shipment_logs
         foreach ($ids as $sId) {
@@ -836,7 +1198,15 @@ class DashboardController extends Controller
         }
 
         $shipment->save();
-        self::bumpDataVersion();
+        $deltas = [[
+            'id' => (string)$shipment->id,
+            'fu' => $shipment->color_code,
+            'escalationDate' => $shipment->fu_pos_date,
+            'noted' => $shipment->noted,
+            'note' => $shipment->noted,
+            'statusKategori' => $shipment->status_kategori,
+        ]];
+        self::bumpDataVersion($deltas);
 
         // Audit Trail: Catat riwayat ke tabel shipment_logs
         $logDetails = [];
@@ -904,7 +1274,7 @@ class DashboardController extends Controller
             ? ($monthSheetMapAliqa[$mNum] ?? 'AGUSTUS 2026 (FP ALIQA)')
             : ($monthSheetMapZaherba[$mNum] ?? 'AGUSTUS (ZAHERBA)');
 
-        $slaStr = $botService->formatRunningSla($shipment->tanggal_kirim, $shipment->status_kategori ?: 'IN_PROCESS', $shipment->sla_days ?: 2);
+        $slaStr = $botService->formatRunningSla($shipment->tanggal_kirim, $shipment->status_kategori ?: 'IN_PROCESS', $shipment->sla_days ?: 4);
 
         $isDelivered = $shipment->status_kategori === 'SUKSES';
         $isRetur = $shipment->status_kategori === 'RETUR';
@@ -1219,7 +1589,17 @@ class DashboardController extends Controller
                 'status_pos' => $kategori === 'SUKSES' ? 'DELIVERED' : ($kategori === 'RETUR' ? 'DELIVERED (RETURN DELIVERY)' : 'PERLU FOLLOW UP CS'),
                 'updated_at' => now(),
             ]);
-            self::bumpDataVersion();
+            $deltas = [];
+            $niposStatus = $kategori === 'SUKSES' ? 'DELIVERED' : ($kategori === 'RETUR' ? 'DELIVERED (RETURN DELIVERY)' : 'PERLU FOLLOW UP CS');
+            foreach ($ids as $sId) {
+                $deltas[] = [
+                    'id' => (string)$sId,
+                    'fu' => $action,
+                    'statusKategori' => $kategori,
+                    'nipos' => $niposStatus,
+                ];
+            }
+            self::bumpDataVersion($deltas);
 
             // Audit Trail: Catat riwayat bulk action ke tabel shipment_logs
             foreach ($ids as $sId) {
@@ -1367,13 +1747,13 @@ class DashboardController extends Controller
 
                     // Jika URL atau ID spreadsheet diganti, hapus data lama seller ini di database agar bersih
                     if (($oldId && $oldId !== $id) || ($oldUrl && $oldUrl !== $aliqaUrl) || $request->boolean('reset_aliqa_data')) {
-                        $countDeleted = OutgoingShipment::whereIn('nama_seller', ['Mitra Aliqa', 'Aliqa'])->delete();
-                        Cache::flush();
+                        $countDeleted = OutgoingShipment::fastPurgeSellers(['Mitra Aliqa', 'Aliqa']);
                         $clearedNotes[] = "Data lama Mitra Aliqa ({$countDeleted} data) berhasil dibersihkan dari database karena URL spreadsheet berubah.";
                     }
 
                     SystemSetting::set('google_sheet_url_aliqa', $aliqaUrl);
                     SystemSetting::set('google_sheet_id_aliqa', $id);
+                    SystemSetting::set('last_synced_spreadsheet_id_aliqa', $id);
                     // Also update legacy key for backward compat
                     SystemSetting::set('google_sheet_url', $aliqaUrl);
                     SystemSetting::set('google_sheet_id', $id);
@@ -1390,13 +1770,13 @@ class DashboardController extends Controller
 
                     // Jika URL atau ID spreadsheet diganti, hapus data lama seller ini di database agar bersih
                     if (($oldId && $oldId !== $id) || ($oldUrl && $oldUrl !== $zaherbaUrl) || $request->boolean('reset_zaherba_data')) {
-                        $countDeleted = OutgoingShipment::whereIn('nama_seller', ['Mitra Zaherba', 'Zaherba'])->delete();
-                        Cache::flush();
+                        $countDeleted = OutgoingShipment::fastPurgeSellers(['Mitra Zaherba', 'Zaherba']);
                         $clearedNotes[] = "Data lama Mitra Zaherba ({$countDeleted} data) berhasil dibersihkan dari database karena URL spreadsheet berubah.";
                     }
 
                     SystemSetting::set('google_sheet_url_zaherba', $zaherbaUrl);
                     SystemSetting::set('google_sheet_id_zaherba', $id);
+                    SystemSetting::set('last_synced_spreadsheet_id_zaherba', $id);
                 }
             }
 
@@ -1456,8 +1836,7 @@ class DashboardController extends Controller
         $oldUrl = SystemSetting::get("google_sheet_url_{$sellerKey}");
 
         if (($oldId && $oldId !== $id) || ($oldUrl && $oldUrl !== $url) || $request->boolean('reset_seller_data')) {
-            $deleted = OutgoingShipment::whereIn('nama_seller', [$sellerName, trim(preg_replace('/^Mitra\s+/i', '', $sellerName))])->delete();
-            Cache::flush();
+            $deleted = OutgoingShipment::fastPurgeSellers([$sellerName, trim(preg_replace('/^Mitra\s+/i', '', $sellerName))]);
         }
 
         SystemSetting::set("google_sheet_url_{$sellerKey}", $url);
@@ -1486,8 +1865,7 @@ class DashboardController extends Controller
         $sellerName = $isZaherba ? 'Mitra Zaherba' : 'Mitra Aliqa';
         $aliases = [$sellerName, trim(preg_replace('/^Mitra\s+/i', '', $sellerName))];
 
-        $deleted = OutgoingShipment::whereIn('nama_seller', $aliases)->delete();
-        Cache::flush();
+        $deleted = OutgoingShipment::fastPurgeSellers($aliases);
 
         return response()->json([
             'success' => true,
@@ -1504,10 +1882,21 @@ class DashboardController extends Controller
         $url = trim($request->input('url', ''));
         $webhookUrl = trim($request->input('webhook_url', ''));
         $seller = $request->input('seller', 'Aliqa');
+        $isZaherba = str_contains(strtoupper((string)$seller), 'ZAHERBA');
+        $sellerKey = $isZaherba ? 'zaherba' : 'aliqa';
+        $sellerName = $isZaherba ? 'Mitra Zaherba' : 'Mitra Aliqa';
+        $shortName = $isZaherba ? 'Zaherba' : 'Aliqa';
 
         if (!empty($url)) {
             $id = SystemSetting::extractSpreadsheetId($url);
             if ($id) {
+                $lastSyncedId = SystemSetting::get("last_synced_spreadsheet_id_{$sellerKey}");
+                if ($lastSyncedId && $lastSyncedId !== $id) {
+                    OutgoingShipment::fastPurgeSellers([$sellerName, $shortName]);
+                }
+                SystemSetting::set("last_synced_spreadsheet_id_{$sellerKey}", $id);
+                SystemSetting::set("google_sheet_url_{$sellerKey}", $url);
+                SystemSetting::set("google_sheet_id_{$sellerKey}", $id);
                 SystemSetting::set('google_sheet_url', $url);
                 SystemSetting::set('google_sheet_id', $id);
             }
@@ -1525,6 +1914,8 @@ class DashboardController extends Controller
             return redirect()->back()->with('error', 'Gagal sinkronisasi Google Sheets: ' . $e->getMessage());
         }
     }
+
+
 
     /**
      * Explicit trigger to sync filter state to Google Spreadsheet
@@ -1546,9 +1937,13 @@ class DashboardController extends Controller
      */
     public function syncDiscover(Request $request)
     {
+        @set_time_limit(180);
+        @ini_set('max_execution_time', '180');
+
         $url = trim($request->input('url', ''));
         $webhookUrl = trim($request->input('webhook_url', ''));
         $targetMonth = $request->input('month');
+        $targetMonths = $request->input('months');
         $targetSheet = $request->input('sheet');
         $seller = $request->input('seller', 'Mitra Aliqa');
         $isZaherba = str_contains(strtoupper((string)$seller), 'ZAHERBA');
@@ -1582,42 +1977,101 @@ class DashboardController extends Controller
             SystemSetting::set('google_sheet_webhook_url', $webhookUrl);
         }
 
+        // Auto-Isolasi Data: HANYA jika spreadsheet ID berganti atau user secara eksplisit meminta reset
+        $sellerKey = $isZaherba ? 'zaherba' : 'aliqa';
+        $sellerName = $isZaherba ? 'Mitra Zaherba' : 'Mitra Aliqa';
+        $shortName = $isZaherba ? 'Zaherba' : 'Aliqa';
+        $lastSyncedId = SystemSetting::get("last_synced_spreadsheet_id_{$sellerKey}");
+        $isDifferentSheet = ($lastSyncedId && $lastSyncedId !== $spreadsheetId);
+
+        if ($isDifferentSheet || $request->boolean('reset_old_data')) {
+            OutgoingShipment::fastPurgeSellers([$sellerName, $shortName]);
+        }
+        SystemSetting::set("last_synced_spreadsheet_id_{$sellerKey}", $spreadsheetId);
+
         try {
             $syncService = app(\App\Services\GoogleSheetsSyncService::class);
             $sheetNames = $syncService->discoverSheetNames($spreadsheetId, $seller);
 
-            // Filter sheetNames if targetSheet or targetMonth is passed
+            $monthKeywords = [
+                1 => ['JAN', 'JANUARI'], 2 => ['FEB', 'FEBRUARI'], 3 => ['MAR', 'MARET'],
+                4 => ['APR', 'APRIL'], 5 => ['MEI', 'MAY'], 6 => ['JUN', 'JUNI'],
+                7 => ['JUL', 'JULI'], 8 => ['AGT', 'AGUS', 'AGUSTUS', 'AUG'], 9 => ['SEP', 'SEPTEMBER'],
+                10 => ['OKT', 'OKTOBER', 'OCT'], 11 => ['NOV', 'NOVEMBER'], 12 => ['DES', 'DESEMBER', 'DEC'],
+            ];
+
+            // 1. Filter by specific sheet tab name if provided
             if (!empty($targetSheet) && strtoupper((string)$targetSheet) !== 'ALL') {
                 $tUpper = strtoupper(trim($targetSheet));
                 $filtered = array_filter($sheetNames, fn($s) => str_contains(strtoupper($s), $tUpper) || strtoupper($s) === $tUpper);
                 if (!empty($filtered)) {
                     $sheetNames = array_values($filtered);
                 }
-            } elseif (!empty($targetMonth) && strtoupper((string)$targetMonth) !== 'ALL' && (string)$targetMonth !== '0') {
-                $mNum = (int)$targetMonth;
-                if ($mNum >= 1 && $mNum <= 12) {
-                    $monthKeywords = [
-                        1 => ['JAN', 'JANUARI'], 2 => ['FEB', 'FEBRUARI'], 3 => ['MAR', 'MARET'],
-                        4 => ['APR', 'APRIL'], 5 => ['MEI', 'MAY'], 6 => ['JUN', 'JUNI'],
-                        7 => ['JUL', 'JULI'], 8 => ['AGT', 'AGUS', 'AGUSTUS', 'AUG'], 9 => ['SEP', 'SEPTEMBER'],
-                        10 => ['OKT', 'OKTOBER', 'OCT'], 11 => ['NOV', 'NOVEMBER'], 12 => ['DES', 'DESEMBER', 'DEC'],
-                    ];
-                    $keywords = $monthKeywords[$mNum] ?? [];
-                    $filtered = array_filter($sheetNames, function ($sName) use ($keywords) {
-                        $sUpper = strtoupper($sName);
-                        foreach ($keywords as $kw) {
-                            if (str_contains($sUpper, $kw)) return true;
+            }
+            // 2. Filter by multiple months (array e.g. [7, 8, 9] or comma string "7,8,9")
+            elseif (!empty($targetMonths)) {
+                $mList = is_array($targetMonths) ? $targetMonths : explode(',', (string)$targetMonths);
+                $mList = array_map('trim', $mList);
+
+                // If 'ALL' is in the array, keep all discovered sheets
+                if (!in_array('ALL', array_map('strtoupper', $mList))) {
+                    $allKeywords = [];
+                    foreach ($mList as $mItem) {
+                        $mNum = (int)$mItem;
+                        if ($mNum >= 1 && $mNum <= 12 && isset($monthKeywords[$mNum])) {
+                            $allKeywords = array_merge($allKeywords, $monthKeywords[$mNum]);
                         }
-                        return false;
-                    });
-                    $sheetNames = array_values($filtered);
-                    if (empty($sheetNames)) {
-                        $mName = $monthKeywords[$mNum][1] ?? "Bulan {$mNum}";
-                        return response()->json([
-                            'success' => false,
-                            'message' => "Tab/Sheet untuk {$mName} tidak ditemukan di Google Spreadsheet.",
-                            'sheet_names' => []
-                        ], 404);
+                    }
+
+                    if (!empty($allKeywords)) {
+                        $filtered = array_filter($sheetNames, function ($sName) use ($allKeywords) {
+                            $sUpper = strtoupper($sName);
+                            foreach ($allKeywords as $kw) {
+                                if (str_contains($sUpper, $kw)) return true;
+                            }
+                            return false;
+                        });
+                        $filteredValues = array_values($filtered);
+                        if (!empty($filteredValues)) {
+                            $sheetNames = $filteredValues;
+                        }
+                    }
+                }
+            }
+            // 3. Fallback to single targetMonth
+            elseif (!empty($targetMonth) && strtoupper((string)$targetMonth) !== 'ALL' && (string)$targetMonth !== '0') {
+                if (in_array(strtolower((string)$targetMonth), ['current', 'latest'])) {
+                    $lastSheet = end($sheetNames);
+                    if ($lastSheet) {
+                        $sheetNames = [$lastSheet];
+                    }
+                } else {
+                    $mNum = (int)$targetMonth;
+                    if ($mNum >= 1 && $mNum <= 12) {
+                        $keywords = $monthKeywords[$mNum] ?? [];
+                        $filtered = array_filter($sheetNames, function ($sName) use ($keywords) {
+                            $sUpper = strtoupper($sName);
+                            foreach ($keywords as $kw) {
+                                if (str_contains($sUpper, $kw)) return true;
+                            }
+                            return false;
+                        });
+                        $filteredValues = array_values($filtered);
+                        if (!empty($filteredValues)) {
+                            $sheetNames = $filteredValues;
+                        } else {
+                            if (!empty($sheetNames)) {
+                                $lastSheet = end($sheetNames);
+                                $sheetNames = [$lastSheet];
+                            } else {
+                                $mName = $monthKeywords[$mNum][1] ?? "Bulan {$mNum}";
+                                return response()->json([
+                                    'success' => false,
+                                    'message' => "Tab/Sheet untuk {$mName} belum tersedia di Google Spreadsheet {$seller}.",
+                                    'sheet_names' => []
+                                ], 404);
+                            }
+                        }
                     }
                 }
             }
@@ -1637,9 +2091,13 @@ class DashboardController extends Controller
      */
     public function syncSingleSheet(Request $request)
     {
+        @set_time_limit(300);
+        @ini_set('max_execution_time', '300');
+
         $spreadsheetId = $request->input('spreadsheet_id');
         $sheetName = $request->input('sheet_name');
         $seller = $request->input('seller', 'Aliqa');
+        $withColors = $request->boolean('with_colors', true);
 
         if (empty($spreadsheetId) || empty($sheetName)) {
             return response()->json(['success' => false, 'message' => 'Parameter spreadsheet_id atau sheet_name kurang.'], 400);
@@ -1647,7 +2105,7 @@ class DashboardController extends Controller
 
         try {
             $syncService = app(\App\Services\GoogleSheetsSyncService::class);
-            $metrics = $syncService->syncSingleSheet($spreadsheetId, $sheetName, $seller);
+            $metrics = $syncService->syncSingleSheet($spreadsheetId, $sheetName, $seller, $withColors);
             return response()->json([
                 'success' => true,
                 'processed' => $metrics['processed'] ?? 0,
@@ -1671,8 +2129,9 @@ class DashboardController extends Controller
 
             $spreadsheetId = $request->input('spreadsheet_id');
             if (empty($spreadsheetId)) {
-                $url = SystemSetting::get("google_sheet_url_{$sellerKey}")
-                    ?: (SystemSetting::get('google_sheet_url') ?: '');
+                $url = $request->input('url')
+                    ?: (SystemSetting::get("google_sheet_url_{$sellerKey}")
+                    ?: (SystemSetting::get('google_sheet_url') ?: ''));
                 $spreadsheetId = SystemSetting::extractSpreadsheetId($url);
             }
             if (empty($spreadsheetId)) {
@@ -1714,7 +2173,9 @@ class DashboardController extends Controller
 
             $result = $syncService->pullColorsFromSheet($spreadsheetId, $sheetName, $seller);
 
-            return response()->json($result);
+            return response()->json(array_merge($result, [
+                'total_colors_updated' => $result['updated_count'] ?? 0,
+            ]));
         } catch (\Throwable $e) {
             \Illuminate\Support\Facades\Log::error("syncSheetColors error: " . $e->getMessage());
             return response()->json([
@@ -1855,7 +2316,7 @@ class DashboardController extends Controller
                     ? ($monthSheetMapAliqa[$mNum] ?? 'AGUSTUS 2026 (FP ALIQA)')
                     : ($monthSheetMapZaherba[$mNum] ?? 'AGUSTUS (ZAHERBA)'));
 
-                $slaStr = $botService->formatRunningSla($shipment->tanggal_kirim, $shipment->status_kategori ?: 'IN_PROCESS', $shipment->sla_days ?: 2);
+                $slaStr = $botService->formatRunningSla($shipment->tanggal_kirim, $shipment->status_kategori ?: 'IN_PROCESS', $shipment->sla_days ?: 4);
 
                 if ($isInProcess) {
                     $statusPosText = $shipment->status_pos ?: 'IN PROSES';
@@ -1976,24 +2437,21 @@ class DashboardController extends Controller
             return strtoupper(trim($matched->name));
         }
 
-        // 2. Extract Kota / Kabupaten / Kecamatan from address text
+        // 2. Extract Kota / Kabupaten from address text (NEVER KECAMATAN!)
         if (preg_match('/\b(?:Kota|Kab(?:upaten)?\.?)\s+([A-Za-z\s]+?)(?=[,\.\n\r]|\s+(?:Kab|Kota|Desa|Kel|Rt|Rw|\d{5})|$)/i', $addr, $m)) {
             $cleanCity = trim(preg_replace('/\s+/', ' ', $m[1]));
             $firstWord = explode(' ', $cleanCity)[0];
-            if (strlen($firstWord) >= 3 && !in_array(strtoupper($firstWord), ['INDONESIA', 'TUJUAN', 'POS', 'PENGANTARAN'])) {
+            if (strlen($firstWord) >= 3 && !in_array(strtoupper($firstWord), ['INDONESIA', 'TUJUAN', 'POS', 'PENGANTARAN', 'KECAMATAN', 'KEC'])) {
+                $cityMatch = \App\Models\PostOffice::matchByDestinationOrAddress($cleanCity, null);
+                if ($cityMatch && !empty($cityMatch->name)) {
+                    return strtoupper(trim($cityMatch->name));
+                }
                 return 'KC ' . strtoupper($cleanCity);
             }
         }
 
-        if (preg_match('/\b(?:Kecamatan|Kec\.?)\s+([A-Za-z\s]+?)(?=[,\.\n\r]|\s+(?:Kab|Kota|Desa|Kel|Rt|Rw|\d{5})|$)/i', $addr, $m)) {
-            $cleanKec = trim(preg_replace('/\s+/', ' ', $m[1]));
-            $words = explode(' ', $cleanKec);
-            $kecName = implode(' ', array_slice($words, 0, 2));
-            if (strlen($kecName) >= 3 && !in_array(strtoupper($kecName), ['INDONESIA', 'TUJUAN', 'POS'])) {
-                return 'KC KEC. ' . strtoupper($kecName);
-            }
-        }
-
+        // Kecamatan is NEVER a KC (KC stands for Kantor Cabang, not Kecamatan).
+        // If it cannot be mapped to a known KC/KCU, return empty so NIPOS tracks the official governing KC.
         return '';
     }
 
@@ -2030,7 +2488,7 @@ class DashboardController extends Controller
         $upperPos = strtoupper((string)($statusPos ?: $shipment->status_pos));
         $upperFu = strtoupper((string)$fuStatus);
 
-        if (str_contains($upperPos, 'RETURN') || str_contains($upperPos, 'RETUR') || str_contains($upperFu, 'RETUR') || $upperFu === 'ORANGE') {
+        if (str_contains($upperPos, 'RETURN') || str_contains($upperPos, 'RETUR') || str_contains($upperPos, 'IRREGULARITY') || str_contains($upperPos, 'DITOLAK') || str_contains($upperFu, 'RETUR') || str_contains($upperFu, 'IRREGULARITY') || str_contains($upperFu, 'DITOLAK') || $upperFu === 'ORANGE') {
             $shipment->status_kategori = 'RETUR';
             $shipment->color_code = 'ORANGE';
             $changed = true;
@@ -2054,7 +2512,14 @@ class DashboardController extends Controller
 
         if ($changed) {
             $shipment->save();
-            self::bumpDataVersion();
+            $deltas = [[
+                'id' => (string)$shipment->id,
+                'fu' => $shipment->color_code,
+                'statusKategori' => $shipment->status_kategori,
+                'nipos' => $shipment->status_pos,
+                'keterangan' => $shipment->keterangan,
+            ]];
+            self::bumpDataVersion($deltas);
             \App\Models\ShipmentLog::logAction(
                 $shipment->id,
                 'SHEET_INBOUND',
@@ -2071,6 +2536,106 @@ class DashboardController extends Controller
                 'status_kategori' => $shipment->status_kategori,
                 'color_code' => $shipment->color_code,
             ],
+        ]);
+    }
+
+    /**
+     * Get and track active online devices
+     */
+    public function activeDevices(Request $request)
+    {
+        $user = auth()->user();
+        $ip = $request->ip() ?? '127.0.0.1';
+        $ua = (string) $request->userAgent();
+
+        // Deteksi jenis perangkat
+        $deviceType = 'PC / Laptop';
+        if (preg_match('/(Android)/i', $ua)) {
+            $deviceType = 'HP Android';
+        } elseif (preg_match('/(iPhone)/i', $ua)) {
+            $deviceType = 'iPhone';
+        } elseif (preg_match('/(iPad)/i', $ua)) {
+            $deviceType = 'iPad';
+        } elseif (preg_match('/(Macintosh|Mac OS)/i', $ua)) {
+            $deviceType = 'MacBook';
+        } elseif (preg_match('/(Windows)/i', $ua)) {
+            $deviceType = 'PC / Laptop Windows';
+        }
+
+        // Deteksi browser
+        $browser = 'Browser';
+        if (preg_match('/Edg\/([0-9]+)/i', $ua)) {
+            $browser = 'Microsoft Edge';
+        } elseif (preg_match('/Chrome\/([0-9]+)/i', $ua)) {
+            $browser = 'Google Chrome';
+        } elseif (preg_match('/Safari\/([0-9]+)/i', $ua) && !preg_match('/Chrome/i', $ua)) {
+            $browser = 'Safari';
+        } elseif (preg_match('/Firefox\/([0-9]+)/i', $ua)) {
+            $browser = 'Firefox';
+        }
+
+        $deviceKey = md5($ip . '_' . $deviceType . '_' . ($user ? $user->id : 'guest'));
+
+        $cacheKey = 'tracko_online_devices_v1';
+        $devices = Cache::get($cacheKey, []);
+        if (!is_array($devices)) {
+            $devices = [];
+        }
+
+        $now = now()->timestamp;
+        // Bersihkan perangkat yang tidak aktif lebih dari 4 menit (240 detik)
+        $devices = array_filter($devices, function ($d) use ($now) {
+            return isset($d['last_seen']) && ($now - $d['last_seen'] < 240);
+        });
+
+        // Simpan / perbarui perangkat saat ini
+        $devices[$deviceKey] = [
+            'id' => $deviceKey,
+            'ip' => $ip,
+            'user_name' => $user ? $user->name : 'Pengguna',
+            'user_role' => $user ? strtoupper($user->role ?? 'CS') : 'GUEST',
+            'device_type' => $deviceType,
+            'browser' => $browser,
+            'last_seen' => $now,
+        ];
+
+        Cache::put($cacheKey, $devices, now()->addMinutes(10));
+
+        // Format data untuk dikirim ke frontend
+        $deviceList = [];
+        foreach ($devices as $key => $d) {
+            $diff = $now - $d['last_seen'];
+            if ($diff < 15) {
+                $human = 'Aktif baru saja';
+            } elseif ($diff < 60) {
+                $human = $diff . ' detik lalu';
+            } else {
+                $human = floor($diff / 60) . ' menit lalu';
+            }
+
+            $deviceList[] = [
+                'id' => $d['id'],
+                'ip' => $d['ip'],
+                'user_name' => $d['user_name'],
+                'user_role' => $d['user_role'],
+                'device_type' => $d['device_type'],
+                'browser' => $d['browser'],
+                'last_seen_human' => $human,
+                'is_current' => ($key === $deviceKey),
+            ];
+        }
+
+        // Urutkan perangkat saat ini paling atas
+        usort($deviceList, function ($a, $b) {
+            if ($a['is_current']) return -1;
+            if ($b['is_current']) return 1;
+            return 0;
+        });
+
+        return response()->json([
+            'success' => true,
+            'count' => count($deviceList),
+            'devices' => $deviceList,
         ]);
     }
 }

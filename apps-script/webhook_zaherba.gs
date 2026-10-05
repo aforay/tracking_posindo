@@ -32,12 +32,12 @@
 
 // KONFIGURASI WARNA KHUSUS MITRA ZAHERBA
 var ZAHERBA_COLORS = {
-  BIRU:     '#46BDC6',  // Sukses / Delivered (#46BDC6)
-  ORANGE:   '#FBBC04',  // Retur / Return (#FBBC04)
-  KUNING:   '#FFFF00',  // Sudah di FU (#FFFF00)
-  HIJAU:    '#93C47D',  // FU 2 Kali (#93C47D)
-  BIRU_TUA: '#1F4E79',  // FU POS - KHUSUS KOLOM RESI (#1F4E79)
-  PUTIH:    '#FFFFFF'   // Belum di FU / Reset (#FFFFFF)
+  BIRU:     '#46BDC6',  // Paket Sukses (#46bdc6)
+  ORANGE:   '#FBBC04',  // Paket Retur (#fbbc04)
+  KUNING:   '#FFFF00',  // Sudah di FU (#ffff00)
+  HIJAU:    '#93C47D',  // FU 2 Kali (#93c47d)
+  BIRU_TUA: '#1C4587',  // FU POS (#1c4587)
+  PUTIH:    '#FFFFFF'   // Belum di FU (#ffffff)
 };
 
 var CONFIG = {
@@ -93,15 +93,8 @@ function applyColorToSelection(colorType) {
     var r = startRow + i;
     if (r <= (hdr ? hdr.rowIndex : 2)) continue; // Lewati header
 
-    if (colorType === 'BIRU_TUA') {
-      // KHUSUS FU POS: Hanya kolom Resi yang diwarnai
-      sheet.getRange(r, cResi).setBackground(hex).setFontColor(fg);
-    } else {
-      // Status umum: Mewarnai Kolom C (3) s/d Kolom J (10) khas Zaherba
-      sheet.getRange(r, 3, 1, 8).setBackground(hex);
-      // Jika sebelumnya sel resi biru tua font putih, kembalikan font color resi ke default
-      sheet.getRange(r, cResi).setFontColor('#000000');
-    }
+    // HANYA kolom Resi yang diwarnai (Kolom selain RESI tidak berubah warna)
+    sheet.getRange(r, cResi).setBackground(hex).setFontColor(fg);
   }
 }
 
@@ -153,132 +146,38 @@ function doPost(e) {
 }
 
 /**
- * Update Bulk Status Bot Tracking NIPOS (Reverse Sync Web -> Sheets)
+ * Update Bulk Status Bot Tracking NIPOS
+ * ATURAN KERAS: Bot NIPOS TIDAK BOLEH merubah apa pun di Spreadsheet (warna, keterangan, SLA tetap utuh)!
+ * Update NIPOS hanya dilakukan di Web Tracko.
  */
 function handleNiposUpdate(data) {
-  var items = data.items || [];
-  if (!items.length) return { status: 'success', updated_count: 0, message: 'No items to update' };
-
-  var resiMap = {};
-  items.forEach(function(it) {
-    if (it && it.resi) {
-      resiMap[String(it.resi).trim().toUpperCase()] = it;
-    }
-  });
-
-  var ss = getSpreadsheet(data);
-  var allSheets = ss.getSheets();
-  var sheetsToScan = [];
-
-  // Prioritaskan sheet bulan yang cocok
-  var hintSheet = String(data.sheet || data.sheet_name || (items[0] && (items[0].sheet || items[0].sheet_name)) || '').trim();
-  if (hintSheet) {
-    var matched = findSheetByName(ss, hintSheet);
-    if (matched) {
-      sheetsToScan.push(matched);
-    }
-  }
-
-  // Tambahkan sheet lainnya sebagai fallback
-  var scannedIds = {};
-  sheetsToScan.forEach(function(sh) { scannedIds[sh.getSheetId()] = true; });
-  allSheets.forEach(function(sh) {
-    if (!scannedIds[sh.getSheetId()]) {
-      sheetsToScan.push(sh);
-    }
-  });
-
-  var totalUpdated = 0;
-
-  for (var sIdx = 0; sIdx < sheetsToScan.length; sIdx++) {
-    if (Object.keys(resiMap).length === 0) break;
-
-    var sheet = sheetsToScan[sIdx];
-    var hdr = findHeaderRow(sheet);
-    if (!hdr) continue;
-
-    var cResi = findCol(hdr, CONFIG.COL_RESI) || 5;       // Kolom E (Resi)
-    var cKet  = findCol(hdr, CONFIG.COL_KETERANGAN) || 11; // Kolom K (Keterangan)
-    var cPos  = findCol(hdr, CONFIG.COL_STATUS_POS) || 12; // Kolom L (Tracking POS)
-    var cSla  = findCol(hdr, CONFIG.COL_SLA) || 13;        // Kolom M (SLA)
-
-    var lastRow = sheet.getLastRow();
-    var numRows = lastRow - hdr.rowIndex;
-    if (numRows <= 0) continue;
-
-    // Baca kolom resi secara cepat
-    var resiVals = sheet.getRange(hdr.rowIndex + 1, cResi, numRows, 1).getValues();
-    var matchedRows = [];
-    var rowResiMap = {};
-
-    for (var i = 0; i < numRows; i++) {
-      var rVal = String(resiVals[i][0] || '').trim().toUpperCase();
-      if (rVal && resiMap[rVal]) {
-        var actualRow = hdr.rowIndex + 1 + i;
-        matchedRows.push(actualRow);
-        rowResiMap[actualRow] = rVal;
-      }
-    }
-
-    if (matchedRows.length === 0) continue;
-
-    // Update setiap baris yang cocok
-    for (var m = 0; m < matchedRows.length; m++) {
-      var rowNum = matchedRows[m];
-      var resi = rowResiMap[rowNum];
-      var item = resiMap[resi];
-      if (!item) continue;
-
-      var colorKey = (item.color_code || 'PUTIH').toUpperCase();
-      var hex = ZAHERBA_COLORS[colorKey] || '#FFFFFF';
-
-      // 1. Pewarnaan Khas Zaherba
-      if (colorKey === 'BIRU_TUA') {
-        // KHUSUS FU POS: Hanya sel Resi yang diwarnai biru tua + font putih
-        sheet.getRange(rowNum, cResi).setBackground(hex).setFontColor('#FFFFFF');
-      } else {
-        // Status selain FU POS: Warnai Kolom C (3) s/d Kolom J (10)
-        sheet.getRange(rowNum, 3, 1, 8).setBackground(hex);
-        // Pastikan font text resi tetap hitam
-        sheet.getRange(rowNum, cResi).setFontColor('#000000');
-      }
-
-      // 2. Update Status POS (Kolom L)
-      if (cPos && item.status_pos) {
-        sheet.getRange(rowNum, cPos).setValue(item.status_pos);
-      }
-
-      // 3. Update Keterangan (Kolom K)
-      if (cKet && item.keterangan) {
-        sheet.getRange(rowNum, cKet).setValue(item.keterangan);
-      }
-
-      // 4. Update SLA jika ada
-      if (cSla && item.sla) {
-        sheet.getRange(rowNum, cSla).setValue(item.sla);
-      }
-
-      delete resiMap[resi];
-      totalUpdated++;
-    }
-  }
-
   return {
     status: 'success',
     seller: 'Mitra Zaherba',
-    updated_count: totalUpdated,
-    message: 'Berhasil memperbarui ' + totalUpdated + ' resi di spreadsheet Zaherba.'
+    updated_count: 0,
+    message: 'Bot NIPOS hanya dilakukan di Web Tracko. Spreadsheet tidak disentuh sama sekali.'
   };
 }
 
 /**
  * Update Status Follow Up CS dari Dashboard Modal / Button
+ * ATURAN KERAS: Spreadsheet CUMA BERUBAH KETIKA ADA YG PUSH WARNA FU POS (BIRU_TUA)!
  */
 function handleFuStatusUpdate(data) {
   var resiList = data.resis || data.resi_list || [];
   var fuType   = (data.fu_type || data.color_code || 'PUTIH').toUpperCase();
   var hex      = ZAHERBA_COLORS[fuType] || '#FFFFFF';
   var fg       = (fuType === 'BIRU_TUA') ? '#FFFFFF' : '#000000';
+
+  // JIKA BUKAN BIRU_TUA (FU POS), JANGAN SENTUH SPREADSHEET SAMA SEKALI!
+  if (fuType !== 'BIRU_TUA') {
+    return {
+      status: 'success',
+      seller: 'Mitra Zaherba',
+      updated_count: 0,
+      message: 'Spreadsheet hanya boleh berubah saat push FU POS (Biru Tua). Aksi selain FU POS diabaikan.'
+    };
+  }
 
   var resiSet = {};
   resiList.forEach(function(r) {
@@ -329,13 +228,10 @@ function handleFuStatusUpdate(data) {
       if (rVal && resiSet[rVal]) {
         var rowNum = hdr.rowIndex + 1 + i;
 
+        // Pewarnaan di Spreadsheet oleh Admin HANYA untuk status FU POS (BIRU_TUA)!
+        // Warna Retur dan Sukses adalah hak/wewenang Seller di Spreadsheet.
         if (fuType === 'BIRU_TUA') {
-          // KHUSUS FU POS: Hanya sel Resi yang diwarnai biru tua + font putih
           sheet.getRange(rowNum, cResi).setBackground(hex).setFontColor(fg);
-        } else {
-          // Status umum: Warnai Kolom C (3) s/d Kolom J (10)
-          sheet.getRange(rowNum, 3, 1, 8).setBackground(hex);
-          sheet.getRange(rowNum, cResi).setFontColor('#000000');
         }
 
         delete resiSet[rVal];
@@ -366,13 +262,16 @@ function findHeaderRow(sheet) {
       }
     }
   }
-  return null;
+  // Fallback khusus Mitra Zaherba jika tidak ada baris label "No Resi":
+  // Baris 1 adalah judul Form, Kolom E (index 5) adalah kolom No Resi
+  return { rowIndex: 1, headers: [] };
 }
 
 /**
  * Mencari nomor kolom (1-indexed) berdasarkan keyword
  */
 function findCol(hdr, keywords) {
+  if (!hdr || !hdr.headers || !hdr.headers.length) return null;
   for (var c = 0; c < hdr.headers.length; c++) {
     var h = hdr.headers[c];
     if (keywords.some(function(k) { return h === k || h.indexOf(k) !== -1; })) {
@@ -493,7 +392,16 @@ function handlePullColors(data) {
 
   if (hintSheetName && hintSheetName.toUpperCase() !== 'ALL') {
     var matched = findSheetByName(ss, hintSheetName);
-    if (matched) sheetsToScan.push(matched);
+    if (matched) {
+      sheetsToScan.push(matched);
+    } else {
+      return {
+        status: 'success',
+        total_found: 0,
+        colors: [],
+        message: 'Sheet [' + hintSheetName + '] tidak ditemukan.'
+      };
+    }
   }
   if (sheetsToScan.length === 0) {
     sheetsToScan = ss.getSheets();
@@ -513,7 +421,7 @@ function handlePullColors(data) {
     var numRows = lastRow - hdr.rowIndex;
     if (numRows <= 0) continue;
 
-    var maxCols = Math.min(15, sheet.getLastColumn());
+    var maxCols = Math.min(12, sheet.getLastColumn());
     var resiVals = sheet.getRange(hdr.rowIndex + 1, cResi, numRows, 1).getValues();
     var allBgs   = sheet.getRange(hdr.rowIndex + 1, 1, numRows, maxCols).getBackgrounds();
     var fuVals   = cFu ? sheet.getRange(hdr.rowIndex + 1, cFu, numRows, 1).getValues() : null;
@@ -552,56 +460,57 @@ function classifyRowColor(resiHex, fuHex, rowHexes, fuText) {
     if (fuText.indexOf('FU 2') !== -1 || fuText.indexOf('FU2') !== -1 || fuText.indexOf('2 KALI') !== -1 || fuText.indexOf('2X') !== -1 || fuText === 'HIJAU') return 'HIJAU';
     if (fuText.indexOf('DELIVERED') !== -1 || fuText.indexOf('SUKSES') !== -1) return 'BIRU';
     if (fuText.indexOf('RETUR') !== -1 || fuText.indexOf('RETURN') !== -1) return 'ORANGE';
+    if (fuText.indexOf('BELUM') !== -1 || fuText === 'PUTIH') return 'PUTIH';
   }
 
-  // 2. KHUSUS FU POS: Sel Resi atau Sel FU berwarna biru
-  if (isBlue(resiHex) || isBlue(fuHex)) {
+  // 2. KHUSUS FU POS ZAHERBA: Hanya sel Resi (atau FU) yang berwarna Biru Tua Gelap (#1C4587)
+  if (isDarkBlue(resiHex) || isDarkBlue(fuHex)) {
     return 'BIRU_TUA';
   }
 
-  // 3. Cek warna di sepanjang baris (dan sel resi/FU)
-  var hasYellow = isYellow(resiHex) || isYellow(fuHex);
-  var hasGreen  = isGreen(resiHex) || isGreen(fuHex);
-  var hasCyan   = isCyan(resiHex) || isCyan(fuHex);
-  var hasRed    = isRedOrOrange(resiHex) || isRedOrOrange(fuHex);
-  var hasBlue   = false;
+  // 3. Scan warna pada seluruh sel baris (kolom C s/d J)
+  var hasCyan = false;     // #46BDC6 (Paket Sukses)
+  var hasRed = false;      // #FBBC04 (Paket Retur)
+  var hasYellow = false;   // #FFFF00 (Sudah di FU)
+  var hasGreen = false;    // #93C47D (FU 2 Kali)
+  var hasDarkBlue = false; // #1C4587 (FU POS)
 
   if (rowHexes && rowHexes.length) {
     for (var c = 0; c < rowHexes.length; c++) {
       var h = String(rowHexes[c] || '').trim().toLowerCase();
-      if (!h || h === '#ffffff' || h === 'white') continue;
+      if (!h || h === '#ffffff' || h === 'white' || h === '#f0f0f0') continue;
 
       if (isCyan(h)) {
         hasCyan = true;
-      } else if (isBlue(h)) {
-        hasBlue = true;
+      } else if (isDarkBlue(h)) {
+        hasDarkBlue = true;
+      } else if (isRedOrOrange(h)) {
+        hasRed = true;
       } else if (isYellow(h)) {
         hasYellow = true;
       } else if (isGreen(h)) {
         hasGreen = true;
-      } else if (isRedOrOrange(h)) {
-        hasRed = true;
       }
     }
   }
 
-  // Prioritas penentuan status FU:
-  // 1. Biru (ON FU POS / Eskalasi KC)
-  if (hasBlue) return 'BIRU_TUA';
-  // 2. Kuning (SUDAH DI FU)
-  if (hasYellow) return 'KUNING';
-  // 3. Hijau (FU 2 Kali)
-  if (hasGreen) return 'HIJAU';
-  // 4. Toska / Cyan (Delivered)
+  // Prioritas Penentuan Warna Sesuai Standar Zaherba:
+  // 1. Biru Tua Gelap (#1C4587) -> FU POS
+  if (hasDarkBlue || isDarkBlue(resiHex)) return 'BIRU_TUA';
+  // 2. Biru Toska (#46BDC6) -> Paket Sukses
   if (hasCyan) return 'BIRU';
-  // 5. Merah / Orange (Retur)
+  // 3. Orange/Amber (#FBBC04) -> Paket Retur
   if (hasRed) return 'ORANGE';
+  // 4. Kuning Terang (#FFFF00) -> Sudah di FU
+  if (hasYellow) return 'KUNING';
+  // 5. Hijau Muda (#93C47D) -> FU 2 Kali
+  if (hasGreen) return 'HIJAU';
 
   return 'PUTIH';
 }
 
 function hexToRgb(hex) {
-  if (!hex || hex === '#ffffff' || hex === 'white') return null;
+  if (!hex || hex === '#ffffff' || hex === 'white' || hex === '#f0f0f0') return null;
   hex = hex.replace('#', '');
   if (hex.length === 3) hex = hex[0]+hex[0]+hex[1]+hex[1]+hex[2]+hex[2];
   if (hex.length !== 6) return null;
@@ -609,36 +518,41 @@ function hexToRgb(hex) {
   return { r: (num >> 16) & 255, g: (num >> 8) & 255, b: num & 255 };
 }
 
-function isBlue(hex) {
-  var rgb = hexToRgb(hex);
-  if (!rgb) return false;
-  return rgb.b > rgb.g && rgb.b > (rgb.r * 1.15) && rgb.b > 75;
-}
-
+// 1. FU POS Zaherba: #1C4587 (r=28, g=69, b=135) - Biru Tua Gelap
 function isDarkBlue(hex) {
-  return isBlue(hex);
-}
-
-function isYellow(hex) {
   var rgb = hexToRgb(hex);
   if (!rgb) return false;
-  return rgb.r > 180 && rgb.g > 160 && (rgb.r - rgb.b) > 25 && (rgb.g - rgb.b) > 15;
+  return rgb.b > 85 && rgb.b > (rgb.r * 1.5) && rgb.b > (rgb.g * 1.1) && rgb.r < 75 && rgb.g < 115;
 }
 
-function isGreen(hex) {
-  var rgb = hexToRgb(hex);
-  if (!rgb) return false;
-  return rgb.g > rgb.r && rgb.g > rgb.b && rgb.g > 100 && (rgb.g - rgb.r) > 10;
+function isBlue(hex) {
+  return isDarkBlue(hex);
 }
 
+// 2. Paket Sukses Zaherba: #46BDC6 (r=70, g=189, b=198) - Biru Toska / Cyan Terang
 function isCyan(hex) {
   var rgb = hexToRgb(hex);
   if (!rgb) return false;
-  return rgb.g > 140 && rgb.b > 140 && rgb.g >= rgb.b && rgb.r < 130;
+  return rgb.b > 140 && rgb.g > 140 && rgb.r < 120;
 }
 
+// 3. Paket Retur Zaherba: #FBBC04 (r=251, g=188, b=4) - Amber / Kuning Emas / Orange
 function isRedOrOrange(hex) {
   var rgb = hexToRgb(hex);
   if (!rgb) return false;
-  return (rgb.r > 190 && rgb.b < 140 && (rgb.r - rgb.g) > 15) || (rgb.r > 200 && rgb.b < 160 && rgb.g < 170);
+  return rgb.r > 190 && rgb.b < 70 && (rgb.r - rgb.g) >= 30;
+}
+
+// 4. Sudah di FU Zaherba: #FFFF00 (r=255, g=255, b=0) - Kuning Terang Murni
+function isYellow(hex) {
+  var rgb = hexToRgb(hex);
+  if (!rgb) return false;
+  return rgb.r > 190 && rgb.g > 190 && rgb.b < 70 && Math.abs(rgb.r - rgb.g) < 25;
+}
+
+// 5. FU 2 Kali Zaherba: #93C47D (r=147, g=196, b=125) - Hijau Muda Lembut
+function isGreen(hex) {
+  var rgb = hexToRgb(hex);
+  if (!rgb) return false;
+  return rgb.g > 140 && rgb.g > (rgb.r + 20) && rgb.g > (rgb.b + 20);
 }

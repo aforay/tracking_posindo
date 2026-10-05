@@ -23,10 +23,11 @@ class GoogleSheetsSyncService
      * @param string|null $spreadsheetIdOrUrl Custom Google Sheet URL or ID
      * @param string $defaultSeller Default seller name if blank
      * @param string|null $targetSheet Target specific sheet name (e.g. "AGUSTUS (ZAHERBA)")
-     * @param int|string|null $targetMonth Target specific month number (1-12) or ALL
+     * @param int|string|array|null $targetMonth Target specific month number (1-12), comma list, array, or ALL
+     * @param bool $withColors Whether to pull colors from Google Sheets once at the end
      * @return array Sync metrics summary
      */
-    public function sync(?string $spreadsheetIdOrUrl = null, string $defaultSeller = 'Aliqa', ?string $targetSheet = null, $targetMonth = null): array
+    public function sync(?string $spreadsheetIdOrUrl = null, string $defaultSeller = 'Aliqa', ?string $targetSheet = null, $targetMonth = null, bool $withColors = true): array
     {
         @ini_set('memory_limit', '2048M');
         @set_time_limit(0);
@@ -56,6 +57,20 @@ class GoogleSheetsSyncService
         $startMsg = "GoogleSheetsSyncService: Starting sync for Spreadsheet ID [{$spreadsheetId}] (Seller: {$defaultSeller})";
         Log::info($startMsg);
 
+        // Auto-Isolasi Data: Jika spreadsheet ID berbeda atau sinkronisasi semua sheet, hapus data lama seller agar tidak tercampur
+        $sellerName = $isAliqaSeller ? 'Mitra Aliqa' : 'Mitra Zaherba';
+        $shortName = $isAliqaSeller ? 'Aliqa' : 'Zaherba';
+        $sellerKey = $isAliqaSeller ? 'aliqa' : 'zaherba';
+
+        $lastSyncedId = SystemSetting::get("last_synced_spreadsheet_id_{$sellerKey}");
+        $isDifferentSheet = ($lastSyncedId && $lastSyncedId !== $spreadsheetId);
+        // Auto-Isolasi Data: HANYA jika spreadsheet ID berbeda (link spreadsheet diganti baru), hapus data lama seller agar tidak tercampur
+        if ($isDifferentSheet) {
+            $deletedCount = \App\Models\OutgoingShipment::fastPurgeSellers([$sellerName, $shortName]);
+            Log::info("GoogleSheetsSyncService Auto-Isolasi: Dibersihkan {$deletedCount} data lama {$sellerName} karena link spreadsheet berganti.");
+        }
+        SystemSetting::set("last_synced_spreadsheet_id_{$sellerKey}", $spreadsheetId);
+
         // 2. Discover Sheet Names (Januari - Desember)
         $sheetNames = $this->discoverSheetNames($spreadsheetId, $defaultSeller);
 
@@ -68,25 +83,38 @@ class GoogleSheetsSyncService
             if (!empty($filtered)) {
                 $sheetNames = array_values($filtered);
             }
-        } elseif (!empty($targetMonth) && (string)$targetMonth !== 'ALL' && (string)$targetMonth !== '0') {
-            $mNum = (int)$targetMonth;
-            if ($mNum >= 1 && $mNum <= 12) {
-                $monthKeywords = [
-                    1 => ['JAN', 'JANUARI'], 2 => ['FEB', 'FEBRUARI'], 3 => ['MAR', 'MARET'],
-                    4 => ['APR', 'APRIL'], 5 => ['MEI', 'MAY'], 6 => ['JUN', 'JUNI'],
-                    7 => ['JUL', 'JULI'], 8 => ['AGT', 'AGUS', 'AGUSTUS', 'AUG'], 9 => ['SEP', 'SEPTEMBER'],
-                    10 => ['OKT', 'OKTOBER', 'OCT'], 11 => ['NOV', 'NOVEMBER'], 12 => ['DES', 'DESEMBER', 'DEC'],
-                ];
-                $keywords = $monthKeywords[$mNum] ?? [];
-                $filtered = array_filter($sheetNames, function ($sName) use ($keywords) {
-                    $sUpper = strtoupper($sName);
-                    foreach ($keywords as $kw) {
-                        if (str_contains($sUpper, $kw)) return true;
+        } elseif (!empty($targetMonth) && strtoupper((string)(is_array($targetMonth) ? implode(',', $targetMonth) : $targetMonth)) !== 'ALL' && (string)(is_array($targetMonth) ? implode(',', $targetMonth) : $targetMonth) !== '0') {
+            $monthKeywords = [
+                1 => ['JAN', 'JANUARI'], 2 => ['FEB', 'FEBRUARI'], 3 => ['MAR', 'MARET'],
+                4 => ['APR', 'APRIL'], 5 => ['MEI', 'MAY'], 6 => ['JUN', 'JUNI'],
+                7 => ['JUL', 'JULI'], 8 => ['AGT', 'AGUS', 'AGUSTUS', 'AUG'], 9 => ['SEP', 'SEPTEMBER'],
+                10 => ['OKT', 'OKTOBER', 'OCT'], 11 => ['NOV', 'NOVEMBER'], 12 => ['DES', 'DESEMBER', 'DEC'],
+            ];
+
+            $mList = is_array($targetMonth) ? $targetMonth : explode(',', (string)$targetMonth);
+            $mList = array_map('trim', $mList);
+
+            if (!in_array('ALL', array_map('strtoupper', $mList))) {
+                $allKeywords = [];
+                foreach ($mList as $mItem) {
+                    $mNum = (int)$mItem;
+                    if ($mNum >= 1 && $mNum <= 12 && isset($monthKeywords[$mNum])) {
+                        $allKeywords = array_merge($allKeywords, $monthKeywords[$mNum]);
                     }
-                    return false;
-                });
-                if (!empty($filtered)) {
-                    $sheetNames = array_values($filtered);
+                }
+
+                if (!empty($allKeywords)) {
+                    $filtered = array_filter($sheetNames, function ($sName) use ($allKeywords) {
+                        $sUpper = strtoupper($sName);
+                        foreach ($allKeywords as $kw) {
+                            if (str_contains($sUpper, $kw)) return true;
+                        }
+                        return false;
+                    });
+                    $filteredValues = array_values($filtered);
+                    if (!empty($filteredValues)) {
+                        $sheetNames = $filteredValues;
+                    }
                 }
             }
         }
@@ -182,6 +210,31 @@ class GoogleSheetsSyncService
             'total_rows_inserted' => $totalInserted,
         ];
 
+        $totalColors = 0;
+        if ($withColors) {
+            \Illuminate\Support\Facades\Cache::put('sync_progress', [
+                'is_syncing' => true,
+                'current_sheet' => 'Menyinkronkan Warna...',
+                'current_sheet_index' => count($processedSheets),
+                'total_sheets' => count($processedSheets),
+                'processed_rows' => $totalProcessed,
+                'inserted_rows' => $totalInserted,
+                'percentage' => 95,
+                'message' => 'Menyinkronkan warna status FU dari Google Sheets...',
+                'updated_at' => now()->toDateTimeString(),
+            ], 3600);
+
+            try {
+                $colorRes = $this->pullColorsFromSheet($spreadsheetId, $targetSheet ?: null, $defaultSeller);
+                $totalColors = $colorRes['updated_count'] ?? 0;
+                Log::info("GoogleSheetsSyncService: Finished pulling colors. Updated: {$totalColors}");
+            } catch (Throwable $e) {
+                Log::warning("GoogleSheetsSyncService: pullColorsFromSheet error: " . $e->getMessage());
+            }
+        }
+
+        $doneSummary['colors_updated'] = $totalColors;
+
         \Illuminate\Support\Facades\Cache::put('sync_progress', [
             'is_syncing' => false,
             'current_sheet' => 'Selesai',
@@ -190,7 +243,7 @@ class GoogleSheetsSyncService
             'processed_rows' => $totalProcessed,
             'inserted_rows' => $totalInserted,
             'percentage' => 100,
-            'message' => "Sinkronisasi selesai! {$totalProcessed} baris data berhasil disinkronkan.",
+            'message' => "Sinkronisasi selesai! {$totalProcessed} baris data" . ($totalColors > 0 ? " dan {$totalColors} warna status FU" : "") . " berhasil disinkronkan.",
             'updated_at' => now()->toDateTimeString(),
         ], 3600);
 
@@ -209,8 +262,11 @@ class GoogleSheetsSyncService
     /**
      * Sync a single Google Sheet tab
      */
-    public function syncSingleSheet(string $spreadsheetId, string $sheetName, string $defaultSeller = 'Aliqa'): array
+    public function syncSingleSheet(string $spreadsheetId, string $sheetName, string $defaultSeller = 'Aliqa', bool $withColors = false): array
     {
+        @set_time_limit(300);
+        @ini_set('max_execution_time', '300');
+
         $sheetSeller = $defaultSeller;
         if (str_contains(strtoupper($sheetName), 'ZAHERBA')) {
             $sheetSeller = 'Mitra Zaherba';
@@ -220,11 +276,17 @@ class GoogleSheetsSyncService
 
         $csvUrl = "https://docs.google.com/spreadsheets/d/{$spreadsheetId}/gviz/tq?tqx=out:csv&sheet=" . urlencode($sheetName);
 
-        $response = Http::timeout(30)
+        $response = Http::timeout(60)
             ->retry(2, 500)
+            ->withOptions([
+                'curl' => [
+                    CURLOPT_ENCODING => '', // GZIP / Deflate streaming for fast download
+                ],
+            ])
             ->withHeaders([
                 'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                 'Accept' => 'text/csv,text/plain,*/*',
+                'Accept-Encoding' => 'gzip, deflate',
             ])
             ->get($csvUrl);
 
@@ -236,12 +298,16 @@ class GoogleSheetsSyncService
         $csvBody = (string)$response->body();
         $metrics = $this->parseCsvContent($csvBody, $sheetName, $sheetSeller);
 
-        // Otomatis tarik dan sinkronkan pewarnaan sel/baris dari spreadsheet (FU POS, Sudah FU, dll)
-        try {
-            $colorRes = $this->pullColorsFromSheet($spreadsheetId, $sheetName, $sheetSeller);
-            $metrics['colors_updated'] = $colorRes['updated_count'] ?? 0;
-        } catch (\Throwable $e) {
-            Log::warning("Auto pull colors failed during syncSingleSheet: " . $e->getMessage());
+        // Tarik dan sinkronkan pewarnaan sel/baris dari spreadsheet HANYA jika diminta (withColors = true)
+        if ($withColors) {
+            try {
+                $colorRes = $this->pullColorsFromSheet($spreadsheetId, $sheetName, $sheetSeller);
+                $metrics['colors_updated'] = $colorRes['updated_count'] ?? 0;
+            } catch (\Throwable $e) {
+                Log::warning("Auto pull colors failed during syncSingleSheet: " . $e->getMessage());
+            }
+        } else {
+            $metrics['colors_updated'] = 0;
         }
 
         return $metrics;
@@ -395,6 +461,19 @@ class GoogleSheetsSyncService
             return ['success' => false, 'message' => 'No tracking items provided'];
         }
 
+        // ATURAN KERAS: RUN BOT NIPOS JANGAN SAMPAI MERUBAH SPREADSHEET!
+        // Update NIPOS hanya dilakukan di Web Tracko saja. Spreadsheet cuma berubah saat push FU POS.
+        Log::info("GoogleSheetsSyncService: Ignored reverse sync to spreadsheet for " . count($trackingItems) . " resis. Bot NIPOS updates are strictly kept on Web Tracko.");
+        return [
+            'success' => true,
+            'message' => 'Bot NIPOS tracking updates are strictly kept on Web Tracko. Spreadsheet untouched.',
+            'webhook_sent' => false,
+            'webhook_success' => true,
+            'items_count' => count($trackingItems),
+            'updated_count' => count($trackingItems),
+            'spreadsheet_id' => '',
+        ];
+
         $sellerName = $trackingItems[0]['seller'] ?? '';
         $isZaherba = str_contains(strtoupper((string)$sellerName), 'ZAHERBA');
         $sellerKey = $isZaherba ? 'zaherba' : 'aliqa';
@@ -507,6 +586,18 @@ class GoogleSheetsSyncService
             'PUTIH'    => 'BELUM DI FOLLOW UP',
         ];
         $statusLabel = $statusLabelMap[$statusColor] ?? $statusColor;
+
+        // Di Spreadsheet, warna RETUR (ORANGE) dan DELIVERED (BIRU) adalah wewenang mutlak Seller!
+        // Admin dari Web Tracking HANYA diizinkan merubah status FU POS (BIRU_TUA).
+        if ($statusColor === 'BIRU' || $statusColor === 'ORANGE') {
+            Log::info("GoogleSheetsSyncService: Ignored updating color {$statusColor} to Spreadsheet for " . count($resiList) . " resis (Color RETUR & DELIVERED are managed exclusively by Seller).");
+            return [
+                'success' => true,
+                'message' => "Warna {$statusColor} di Spreadsheet adalah wewenang Seller dan tidak diubah oleh Admin.",
+                'resi_count' => count($resiList),
+                'spreadsheet_id' => $spreadsheetId,
+            ];
+        }
 
         $logMsg = "GoogleSheetsSyncService Two-Way Sync ({$sellerKey}): Updating " . count($resiList) . " resis → {$statusColor} ({$statusLabel}) on Spreadsheet [{$spreadsheetId}]";
         Log::info($logMsg);
@@ -660,6 +751,8 @@ class GoogleSheetsSyncService
      */
     public function pullColorsFromSheet(string $spreadsheetId, ?string $sheetName = null, string $seller = 'Mitra Aliqa'): array
     {
+        @set_time_limit(180);
+
         $isZaherba = str_contains(strtoupper($seller), 'ZAHERBA') || str_contains(strtoupper((string)$sheetName), 'ZAHERBA');
         $sellerKey = $isZaherba ? 'zaherba' : 'aliqa';
 
@@ -691,7 +784,7 @@ class GoogleSheetsSyncService
             curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
             curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
             curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 15);
-            curl_setopt($ch, CURLOPT_TIMEOUT, 60);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 120);
 
             $body = curl_exec($ch);
             $statusCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -721,27 +814,91 @@ class GoogleSheetsSyncService
             $grouped = [];
             foreach ($colors as $item) {
                 if (!empty($item['resi']) && !empty($item['color'])) {
-                    $grouped[strtoupper($item['color'])][] = trim($item['resi']);
+                    $r = trim((string)$item['resi']);
+                    $rUpper = strtoupper($r);
+                    if (strlen($r) < 8 || in_array($rUpper, ['BELUM DI PROSES', 'RESI', 'NO RESI', 'BARCODE', 'AWB'])) {
+                        continue;
+                    }
+                    $grouped[strtoupper($item['color'])][] = $r;
                 }
             }
 
             foreach ($grouped as $color => $resis) {
-                foreach (array_chunk($resis, 500) as $chunk) {
-                    $updateData = ['color_code' => $color];
+                // Sesuai aturan: Data final (SUKSES & RETUR) TIDAK DIAMBIL dari Spreadsheet
+                // karena data tracking bot NIPOS dari Pos Indonesia lebih valid.
+                // Spreadsheet HANYA digunakan untuk data follow up: BIRU_TUA (FU POS), KUNING (SUDAH FU), PUTIH (BELUM FU).
+                if ($color === 'BIRU' || $color === 'ORANGE') {
+                    Log::info("pullColorsFromSheet: Lewati warna {$color} dari spreadsheet karena data final dikelola oleh Bot Tracking NIPOS.");
+                    continue;
+                }
 
-                    if ($color === 'BIRU_TUA') {
-                        $updateData['fu_pos_date'] = \Illuminate\Support\Facades\DB::raw('COALESCE(fu_pos_date, NOW())');
-                        $updateData['status_kategori'] = \Illuminate\Support\Facades\DB::raw("CASE WHEN status_kategori IN ('SUKSES', 'RETUR') THEN status_kategori ELSE 'FOLLOW_UP' END");
-                    } elseif (in_array($color, ['KUNING', 'HIJAU'])) {
-                        $updateData['status_kategori'] = \Illuminate\Support\Facades\DB::raw("CASE WHEN status_kategori IN ('SUKSES', 'RETUR') THEN status_kategori ELSE 'FOLLOW_UP' END");
-                    } elseif ($color === 'BIRU') {
-                        $updateData['status_kategori'] = 'SUKSES';
-                    } elseif ($color === 'ORANGE') {
-                        $updateData['status_kategori'] = 'RETUR';
+                foreach (array_chunk($resis, 500) as $chunk) {
+                    // Ambil nomor resi yang sudah FINAL di sistem kita agar TIDAK PERNAH ditimpa
+                    $finalResis = \App\Models\OutgoingShipment::whereIn('no_resi', $chunk)
+                        ->where(function($q) {
+                            // 1. Final Sukses
+                            $q->where(function($sub) {
+                                $sub->where('status_kategori', 'SUKSES')
+                                    ->orWhere('color_code', 'BIRU')
+                                    ->orWhere(function($s) {
+                                        $s->where('status_pos', 'DELIVERED')
+                                          ->where('status_pos', 'NOT LIKE', '%RETURN%');
+                                    });
+                            })
+                            // 2. Atau Final Retur
+                            ->orWhere(function($sub) {
+                                $sub->where('status_kategori', 'RETUR')
+                                    ->orWhere('color_code', 'ORANGE')
+                                    ->orWhere('status_pos', 'LIKE', '%RETURN%')
+                                    ->orWhere('status_pos', 'LIKE', '%RETUR%')
+                                    ->orWhere('status_pos', 'LIKE', '%DITOLAK%')
+                                    ->orWhere('keterangan', 'LIKE', '%RETURN%')
+                                    ->orWhere('keterangan', 'LIKE', '%RETUR%')
+                                    ->orWhere('keterangan', 'LIKE', '%DITOLAK%');
+                            });
+                        })
+                        ->pluck('no_resi')->toArray();
+
+                    // HANYA resi non-final yang boleh diperbarui warna/status FU-nya dari Spreadsheet
+                    $nonFinalChunk = array_values(array_diff($chunk, $finalResis));
+                    if (empty($nonFinalChunk)) {
+                        continue;
                     }
 
-                    $affected = \App\Models\OutgoingShipment::whereIn('no_resi', $chunk)->update($updateData);
-                    $updatedCount += $affected;
+                    if ($color === 'BIRU_TUA') {
+                        $affFuPos = \App\Models\OutgoingShipment::whereIn('no_resi', $nonFinalChunk)
+                            ->update([
+                                'color_code' => 'BIRU_TUA',
+                                'fu_pos_date' => \Illuminate\Support\Facades\DB::raw('COALESCE(fu_pos_date, NOW())'),
+                                'status_kategori' => 'FOLLOW_UP',
+                            ]);
+                        $updatedCount += $affFuPos;
+                    } elseif ($color === 'KUNING') {
+                        $affected = \App\Models\OutgoingShipment::whereIn('no_resi', $nonFinalChunk)
+                            ->update([
+                                'color_code' => 'KUNING',
+                                'status_kategori' => 'FOLLOW_UP',
+                            ]);
+                        $updatedCount += $affected;
+                    } elseif ($color === 'HIJAU') {
+                        $updateData = ['status_kategori' => 'FOLLOW_UP'];
+                        if ($sellerKey === 'aliqa') {
+                            $updateData['color_code'] = 'PUTIH';
+                            $updateData['status_kategori'] = 'IN_PROCESS';
+                        } else {
+                            $updateData['color_code'] = 'HIJAU';
+                        }
+                        $affected = \App\Models\OutgoingShipment::whereIn('no_resi', $nonFinalChunk)
+                            ->update($updateData);
+                        $updatedCount += $affected;
+                    } elseif ($color === 'PUTIH') {
+                        $affected = \App\Models\OutgoingShipment::whereIn('no_resi', $nonFinalChunk)
+                            ->update([
+                                'color_code' => 'PUTIH',
+                                'status_kategori' => 'IN_PROCESS',
+                            ]);
+                        $updatedCount += $affected;
+                    }
                 }
             }
 

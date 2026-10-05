@@ -44,7 +44,7 @@ if %ERRORLEVEL% NEQ 0 (
     echo [WARNING] Database MySQL belum menyala di port 3306!
     if exist "C:\xampp\mysql\bin\mysqld.exe" (
         echo [INFO] Menyalakan MySQL XAMPP secara otomatis...
-        start "MySQL Server (XAMPP)" /min "C:\xampp\mysql\bin\mysqld.exe" --defaults-file=C:\xampp\mysql\bin\my.ini --standalone
+        start "MySQL Server (XAMPP)" /D "C:\xampp\mysql" /min "C:\xampp\mysql\bin\mysqld.exe" --defaults-file=C:\xampp\mysql\bin\my.ini --standalone
         timeout /t 3 >nul
     ) else (
         echo [PERINGATAN] Silakan buka XAMPP Control Panel dan klik START pada MySQL!
@@ -98,7 +98,11 @@ start /min cmd /c "timeout /t 2 >nul & start http://localhost:8000"
 
 :: 7. Jalankan server Laravel pada semua interface jaringan (0.0.0.0) dengan 10 Multi-Worker paralel
 set PHP_CLI_SERVER_WORKERS=10
-php artisan serve --host=0.0.0.0 --port=8000
+for /f "tokens=5" %%p in ('netstat -ano ^| findstr :8000 ^| findstr LISTENING') do (
+    taskkill /PID %%p /F >nul 2>nul
+)
+
+php artisan serve --host=0.0.0.0 --port=8000 --no-reload
 
 :: 8. Bersihkan proses background saat server ditutup
 taskkill /FI "WINDOWTITLE eq Tracking Posindo - Queue Worker*" /F >nul 2>nul

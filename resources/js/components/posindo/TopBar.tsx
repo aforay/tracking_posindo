@@ -1,7 +1,7 @@
-import { useMemo, useEffect, useState } from "react";
+import { useMemo, useEffect, useState, useCallback, useRef } from "react";
 import { router } from "@inertiajs/react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Truck, Bot, Loader2, CheckCircle2, Zap, RefreshCw, Send, Building2, AlertCircle, Check, ArrowUpRight, Search, Cookie, LogOut, ShieldCheck, User, Users, KeyRound, AlertTriangle, ChevronDown, Trash2 } from "lucide-react";
+import { Truck, Bot, Loader2, CheckCircle2, Zap, RefreshCw, Send, Building2, AlertCircle, Check, ArrowUpRight, Search, Cookie, LogOut, ShieldCheck, User, Users, KeyRound, AlertTriangle, ChevronDown, Trash2, Package, Palette, Laptop, Smartphone, Radio } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -74,11 +74,20 @@ export function TopBar({
     if (typeof month === "string" && !isNaN(Number(month)) && Number(month) >= 1 && Number(month) <= 12) {
       return Number(month);
     }
+    // Jika filter month adalah "all" / belum dipilih spesifik:
+    // Cek apakah ada bulan yang memiliki data pending tracking (prioritaskan bulan terbaru yang ada data)
+    if (monthPendingCounts && Array.isArray(monthPendingCounts)) {
+      for (let m = monthPendingCounts.length; m >= 1; m--) {
+        if ((monthPendingCounts[m - 1] ?? 0) > 0) {
+          return m;
+        }
+      }
+    }
     const nowMonth = new Date().getMonth() + 1;
-    return nowMonth >= 1 && nowMonth <= 12 ? nowMonth : 5;
-  }, [month]);
+    return nowMonth >= 1 && nowMonth <= 12 ? nowMonth : 9;
+  }, [month, monthPendingCounts]);
 
-  const activeBotMonthName = monthNames[activeBotMonth - 1] || "Agustus";
+  const activeBotMonthName = monthNames[activeBotMonth - 1] || "September";
 
   const userInitials = useMemo(() => {
     if (!currentUser?.name) return "AP";
@@ -105,9 +114,62 @@ export function TopBar({
     }
     return "Mitra Aliqa";
   }, [seller]);
+  const defaultSyncMonth = activeBotMonth;
+  const [selectedSyncMonths, setSelectedSyncMonths] = useState<number[]>([defaultSyncMonth]);
+  const [isSyncAllMonths, setIsSyncAllMonths] = useState<boolean>(false);
   const [selectedSyncMonth, setSelectedSyncMonth] = useState<string>("current");
+  const [includeFuColors, setIncludeFuColors] = useState<boolean>(true);
+  const [isSyncingColors, setIsSyncingColors] = useState<boolean>(false);
   const [sheetSyncOpen, setSheetSyncOpen] = useState(false);
   const [sheetSettingsOpen, setSheetSettingsOpen] = useState(false);
+
+  // Auto-sync default month when seller or activeBotMonth changes
+  useEffect(() => {
+    if (!isSyncAllMonths && selectedSyncMonths.length === 1) {
+      setSelectedSyncMonths([activeBotMonth]);
+    }
+  }, [activeBotMonth]);
+
+  const handlePresetCurrentMonth = () => {
+    setIsSyncAllMonths(false);
+    setSelectedSyncMonths([activeBotMonth]);
+  };
+
+  const handlePresetLast3Months = () => {
+    setIsSyncAllMonths(false);
+    const cur = activeBotMonth;
+    const m1 = cur - 2 <= 0 ? cur - 2 + 12 : cur - 2;
+    const m2 = cur - 1 <= 0 ? cur - 1 + 12 : cur - 1;
+    const months = Array.from(new Set([m1, m2, cur])).sort((a, b) => a - b);
+    setSelectedSyncMonths(months);
+  };
+
+  const handlePresetLast4Months = () => {
+    setIsSyncAllMonths(false);
+    const cur = activeBotMonth;
+    const m1 = cur - 3 <= 0 ? cur - 3 + 12 : cur - 3;
+    const m2 = cur - 2 <= 0 ? cur - 2 + 12 : cur - 2;
+    const m3 = cur - 1 <= 0 ? cur - 1 + 12 : cur - 1;
+    const months = Array.from(new Set([m1, m2, m3, cur])).sort((a, b) => a - b);
+    setSelectedSyncMonths(months);
+  };
+
+  const handlePresetAllMonths = () => {
+    setIsSyncAllMonths(true);
+    setSelectedSyncMonths([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+  };
+
+  const toggleMonthSelection = (mNum: number) => {
+    setIsSyncAllMonths(false);
+    setSelectedSyncMonths((prev) => {
+      if (prev.includes(mNum)) {
+        if (prev.length === 1) return prev; // keep at least 1 month
+        return prev.filter((m) => m !== mNum);
+      } else {
+        return [...prev, mNum].sort((a, b) => a - b);
+      }
+    });
+  };
 
   // Per-seller URL states (for settings modal)
   const [settingsAliqaUrl, setSettingsAliqaUrl] = useState(
@@ -135,7 +197,6 @@ export function TopBar({
     : (googleSheetUrlAliqa || "https://docs.google.com/spreadsheets/d/1EeckOBzI5EPNTT1bHsqu6kar9asKD6Ifar2CpTkSnBg/edit");
   const webhookUrlInput = normalizedSeller === "Mitra Zaherba" ? (settingsZaherbaWebhook || settingsAliqaWebhook) : settingsAliqaWebhook;
   const [isSyncing, setIsSyncing] = useState(false);
-  const [isPushing, setIsPushing] = useState(false);
   const [sheetSyncState, setSheetSyncState] = useState<"idle" | "syncing" | "done">("idle");
 
   const handleSaveSettings = async (e: React.FormEvent) => {
@@ -176,68 +237,7 @@ export function TopBar({
     }
   };
 
-  const handlePushUpdates = async (mode: 'all' | 'recent_fu' = 'all') => {
-    if (isPushing) return;
-    setIsPushing(true);
-    const modeLabel = mode === 'recent_fu' ? 'Resi Follow-Up' : 'Semua Resi';
-    const toastId = toast.loading(`Menyiapkan pengiriman ${modeLabel} ke Google Sheets...`);
-    try {
-      const csrfToken = getCsrfToken();
-      const targetMonth = selectedSyncMonth === "current" ? activeBotMonth : (selectedSyncMonth || activeBotMonth);
-      let offset = 0;
-      const limit = 250;
-      let total = 0;
-      let totalGasUpdated = 0;
 
-      while (true) {
-        const res = await fetch("/shipments/push-updates", {
-          method: "POST",
-          headers: {
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-            "X-CSRF-TOKEN": csrfToken,
-          },
-          body: JSON.stringify({
-            month: targetMonth,
-            seller: normalizedSeller,
-            mode: mode,
-            offset: offset,
-            limit: limit,
-          }),
-        });
-
-        const data = await res.json();
-        if (!res.ok || !data.success) {
-          throw new Error(data.message || `Gagal melakukan push status ${modeLabel} ke Google Sheets.`);
-        }
-
-        total = data.total || 0;
-        if (total === 0) {
-          toast.info(data.message || `Tidak ada ${modeLabel.toLowerCase()} yang perlu di-push.`, { id: toastId });
-          break;
-        }
-
-        const processed = data.processed || 0;
-        offset += processed;
-        totalGasUpdated += (data.updated_in_gas || 0);
-        const percent = Math.min(100, Math.round((offset / total) * 100));
-
-        toast.loading(`Mendorong ${modeLabel} (${offset}/${total} resi - ${percent}%)...`, { id: toastId });
-
-        if (data.done || offset >= total || processed === 0) {
-          toast.success(`Berhasil Push ${modeLabel} ke Google Sheets!`, {
-            id: toastId,
-            description: `${offset} resi telah berhasil disinkronkan ke Google Sheets (${activeBotMonthName}).`,
-          });
-          break;
-        }
-      }
-    } catch (err: any) {
-      toast.error(`Gagal melakukan push status: ${err.message || String(err)}`, { id: toastId });
-    } finally {
-      setIsPushing(false);
-    }
-  };
   const [sheetSyncProgress, setSheetSyncProgress] = useState(0);
   const [sheetSyncInfo, setSheetSyncInfo] = useState<{
     current_sheet: string;
@@ -278,6 +278,44 @@ export function TopBar({
     const cookieInterval = setInterval(checkCookieStatus, 5 * 60 * 1000);
     return () => clearInterval(cookieInterval);
   }, []);
+
+  // State: Perangkat yang Sedang Aktif Membuka Web
+  const [activeDevices, setActiveDevices] = useState<{
+    count: number;
+    devices: Array<{
+      id: string;
+      ip: string;
+      user_name: string;
+      user_role: string;
+      device_type: string;
+      browser: string;
+      last_seen_human: string;
+      is_current: boolean;
+    }>;
+  }>({ count: 1, devices: [] });
+  const [devicesModalOpen, setDevicesModalOpen] = useState(false);
+
+  const fetchDevices = useCallback(async () => {
+    try {
+      const res = await fetch("/active-devices");
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success) {
+          setActiveDevices({ count: data.count, devices: data.devices });
+        }
+      }
+    } catch (e) {
+      // silent ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchDevices();
+    // Realtime heartbeat setiap 4 detik (background silent AJAX tanpa reload halaman / anti-lag)
+    const devInterval = setInterval(fetchDevices, 4000);
+    return () => clearInterval(devInterval);
+  }, [fetchDevices]);
+
   const [syncData, setSyncData] = useState<{
     is_syncing: boolean;
     current_sheet: string;
@@ -298,14 +336,26 @@ export function TopBar({
     message: "",
   });
 
-  // Poll background sync progress
+  const checkSyncProgressRef = useRef<() => void>(() => {});
+
+  // Poll background sync progress (Cerdas & Hemat Sumber Daya)
   useEffect(() => {
-    let interval: ReturnType<typeof setInterval> | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let isMounted = true;
+
     const checkSyncProgress = async () => {
+      // 1. Lewati jika tab browser sedang di latar belakang
+      if (typeof document !== "undefined" && document.hidden) {
+        if (isMounted) timer = setTimeout(checkSyncProgress, 15000);
+        return;
+      }
+
       try {
         const res = await fetch("/sync/progress");
         if (res.ok) {
           const data = await res.json();
+          if (!isMounted) return;
+
           setSyncData((prev) => {
             if (prev.is_syncing && !data.is_syncing && data.percentage === 100) {
               toast.success("Sinkronisasi Selesai!", {
@@ -315,16 +365,28 @@ export function TopBar({
             }
             return data;
           });
+
+          // Jika sedang sync: cek setiap 1.5 detik agar bar responsif.
+          // Jika idle: cek setiap 10 detik agar deteksi sync dari device lain cepat.
+          const delay = data.is_syncing ? 1500 : 10000;
+          if (isMounted) timer = setTimeout(checkSyncProgress, delay);
+          return;
         }
       } catch (e) {
         // ignore network hiccups
       }
+
+      if (isMounted) {
+        timer = setTimeout(checkSyncProgress, 10000);
+      }
     };
 
+    checkSyncProgressRef.current = checkSyncProgress;
     checkSyncProgress();
-    interval = setInterval(checkSyncProgress, 2500);
+
     return () => {
-      if (interval) clearInterval(interval);
+      isMounted = false;
+      if (timer) clearTimeout(timer);
     };
   }, []);
 
@@ -363,9 +425,11 @@ export function TopBar({
       let isFinishedGlobally = false;
       let totalProcessed = 0;
       let initialTotalPending = 0;
+      let batchCount = 0;
       const accumulatedUpdated: any[] = [];
 
       while (!isFinishedGlobally) {
+        batchCount++;
         try {
           const res = await fetch("/bot/start-tracking", {
             method: "POST",
@@ -398,22 +462,26 @@ export function TopBar({
 
           if (Array.isArray(data.updated_items) && data.updated_items.length > 0) {
             accumulatedUpdated.push(...data.updated_items);
-            setBotUpdatedItems(accumulatedUpdated.slice(-100));
+            setBotUpdatedItems(accumulatedUpdated.slice(-500));
           }
 
           if (initialTotalPending === 0) {
-            initialTotalPending = totalProcessed + remainingPending;
+            initialTotalPending = (data.total_pending && data.total_pending > 0)
+              ? data.total_pending
+              : (totalProcessed + remainingPending);
           }
 
-          const effectiveTotal = Math.max(initialTotalPending, totalProcessed);
+          const effectiveTotal = Math.max(initialTotalPending, 1);
+          const displayCurrent = Math.min(totalProcessed, effectiveTotal);
           const currentPct = effectiveTotal > 0
-            ? Math.min(100, Math.round((totalProcessed / effectiveTotal) * 100))
+            ? Math.min(100, Math.round((displayCurrent / effectiveTotal) * 100))
             : 100;
 
-          setBotInfo({ current: totalProcessed, total: effectiveTotal });
+          setBotInfo({ current: displayCurrent, total: effectiveTotal });
           setProgress(currentPct);
 
-          if (data.is_finished || remainingPending === 0 || processedThisBatch === 0) {
+          const maxAllowedBatches = Math.max(8, Math.ceil(effectiveTotal / 500) + 2);
+          if (data.is_finished || remainingPending === 0 || processedThisBatch === 0 || batchCount >= maxAllowedBatches) {
             isFinishedGlobally = true;
             break;
           }
@@ -425,7 +493,9 @@ export function TopBar({
       // Explicitly set 100% completion
       setProgress(100);
       setBotState("done");
-      if (totalProcessed > 0) {
+      if (initialTotalPending > 0) {
+        setBotInfo({ current: Math.min(totalProcessed, initialTotalPending), total: initialTotalPending });
+      } else if (totalProcessed > 0) {
         setBotInfo({ current: totalProcessed, total: totalProcessed });
       }
 
@@ -481,9 +551,21 @@ export function TopBar({
     try {
       const csrfToken = getCsrfToken();
       
-      // 1. Discover Sheet Names (Hanya baca tab/sheet bulan yang dipilih)
-      const targetMonthToSync = selectedSyncMonth === "current" ? activeBotMonth : selectedSyncMonth;
+      const payload: Record<string, any> = {
+        url: sheetUrlInput,
+        webhook_url: webhookUrlInput,
+        seller: normalizedSeller,
+      };
 
+      if (isSyncAllMonths) {
+        payload.month = "ALL";
+        payload.months = ["ALL"];
+      } else {
+        payload.months = selectedSyncMonths;
+        payload.month = selectedSyncMonths.length === 1 ? selectedSyncMonths[0] : selectedSyncMonths.join(",");
+      }
+
+      // 1. Discover Sheet Names
       const discoverRes = await fetch("/sync/discover", {
         method: "POST",
         headers: {
@@ -491,12 +573,7 @@ export function TopBar({
           "Content-Type": "application/json",
           "X-CSRF-TOKEN": csrfToken,
         },
-        body: JSON.stringify({
-          url: sheetUrlInput,
-          webhook_url: webhookUrlInput,
-          seller: normalizedSeller,
-          month: targetMonthToSync,
-        }),
+        body: JSON.stringify(payload),
       });
 
       if (!discoverRes.ok) {
@@ -509,7 +586,7 @@ export function TopBar({
         throw new Error(discoverData.message || "Tidak ada sheet yang ditemukan.");
       }
 
-      const sheetNames = discoverData.sheet_names;
+      const sheetNames: string[] = discoverData.sheet_names;
       const totalSheets = sheetNames.length;
       const spreadsheetId = discoverData.spreadsheet_id;
 
@@ -517,7 +594,7 @@ export function TopBar({
       let totalInserted = 0;
       let totalColors = 0;
 
-      // 2. Loop Sheet-by-sheet
+      // 2. Loop Sheet-by-sheet (Ultra-fast direct CSV export, without slow per-sheet webhook)
       for (let i = 0; i < totalSheets; i++) {
         const sheetName = sheetNames[i];
         
@@ -527,7 +604,7 @@ export function TopBar({
           total_sheets: totalSheets,
           processed_rows: totalProcessed,
           inserted_rows: totalInserted,
-          message: `Menyinkronkan data & warna FU: ${sheetName} (${i + 1}/${totalSheets})...`,
+          message: `Menyinkronkan data: ${sheetName} (${i + 1}/${totalSheets})...`,
         });
 
         const syncRes = await fetch("/sync/sheet", {
@@ -541,6 +618,7 @@ export function TopBar({
             spreadsheet_id: spreadsheetId,
             sheet_name: sheetName,
             seller: normalizedSeller,
+            with_colors: false,
           }),
         });
 
@@ -553,11 +631,51 @@ export function TopBar({
         if (syncResult.success) {
           totalProcessed += syncResult.processed ?? 0;
           totalInserted += syncResult.inserted ?? 0;
-          totalColors += syncResult.colors_updated ?? 0;
         }
 
         const currentPct = Math.round(((i + 1) / totalSheets) * 100);
         setSheetSyncProgress(currentPct);
+      }
+
+      // 3. Tarik Warna FU (Hanya 1x untuk sheet bulan aktif agar super cepat & tidak lemot)
+      if (includeFuColors) {
+        const activeMonthName = monthNames[activeBotMonth - 1]?.toUpperCase() || "";
+        const targetColorSheet = sheetNames.find(s => s.toUpperCase().includes(activeMonthName))
+          || sheetNames[sheetNames.length - 1];
+
+        setSheetSyncInfo({
+          current_sheet: "Format Warna",
+          current_sheet_index: totalSheets,
+          total_sheets: totalSheets,
+          processed_rows: totalProcessed,
+          inserted_rows: totalInserted,
+          message: `Menarik format warna status FU (${targetColorSheet})...`,
+        });
+
+        try {
+          const colorRes = await fetch("/sync/colors", {
+            method: "POST",
+            headers: {
+              "Accept": "application/json",
+              "Content-Type": "application/json",
+              "X-CSRF-TOKEN": csrfToken,
+            },
+            body: JSON.stringify({
+              url: sheetUrlInput,
+              spreadsheet_id: spreadsheetId,
+              seller: normalizedSeller,
+              sheet_name: targetColorSheet,
+            }),
+          });
+          if (colorRes.ok) {
+            const colorData = await colorRes.json();
+            if (colorData.success) {
+              totalColors += (colorData.updated_count ?? colorData.total_colors_updated ?? 0);
+            }
+          }
+        } catch (colorErr) {
+          console.warn("Gagal menarik warna FU:", colorErr);
+        }
       }
 
       setSheetSyncProgress(100);
@@ -565,7 +683,7 @@ export function TopBar({
       
       toast.success("Sinkronisasi Selesai!", {
         description: totalColors > 0
-          ? `${nf(totalProcessed)} data dan ${nf(totalColors)} status warna FU (FU POS / Sudah FU) berhasil disinkronkan.`
+          ? `${nf(totalProcessed)} data dan ${nf(totalColors)} status warna FU berhasil disinkronkan.`
           : `${nf(totalProcessed)} data pengiriman berhasil disinkronkan.`,
       });
 
@@ -581,7 +699,52 @@ export function TopBar({
       setSheetSyncState("idle");
       setSheetSyncProgress(0);
       setIsSyncing(false);
-      toast.error("Gagal sinkronisasi Google Sheets: " + String(err));
+      const msg = (err as any)?.message || String(err);
+      toast.error(msg.startsWith("Gagal") ? msg : `Gagal sinkronisasi: ${msg}`, { duration: 6000 });
+    }
+  };
+
+  const handleSyncColorsQuick = async () => {
+    if (isSyncingColors || isSyncing) return;
+    setIsSyncingColors(true);
+    const toastId = toast.loading(`Menarik data format warna dari Google Sheets ${normalizedSeller}...`);
+
+    try {
+      const csrfToken = getCsrfToken();
+      const targetMonth = activeBotMonth;
+      const res = await fetch("/sync/colors", {
+        method: "POST",
+        headers: {
+          "Accept": "application/json",
+          "Content-Type": "application/json",
+          "X-CSRF-TOKEN": csrfToken,
+        },
+        body: JSON.stringify({
+          seller: normalizedSeller,
+          month: targetMonth,
+        }),
+      });
+
+      const data = await res.json();
+      if (res.ok && data.success) {
+        toast.success(`Warna Berhasil Disinkronkan!`, {
+          id: toastId,
+          description: data.message || `${data.updated_count || 0} warna resi berhasil diperbarui dari sheet.`,
+        });
+        router.reload({ preserveScroll: true });
+      } else {
+        toast.error("Gagal menarik warna", {
+          id: toastId,
+          description: data.message || "Pastikan URL Webhook di Pengaturan sudah aktif.",
+        });
+      }
+    } catch (err: any) {
+      toast.error("Gagal menghubungi server", {
+        id: toastId,
+        description: err.message || "Terjadi kesalahan saat menarik warna.",
+      });
+    } finally {
+      setIsSyncingColors(false);
     }
   };
 
@@ -597,9 +760,9 @@ export function TopBar({
 
   return (
     <div className="border-b border-slate-200/80 bg-white">
-      <div className="flex items-center justify-between gap-4 px-5 py-2.5">
+      <div className="flex flex-wrap lg:flex-nowrap items-center justify-between gap-2.5 sm:gap-4 px-3 sm:px-5 py-2 sm:py-2.5 w-full max-w-[1920px] 2xl:max-w-[2200px] mx-auto">
         {/* Brand Logo & System Info */}
-        <div className="flex items-center gap-3 shrink-0">
+        <div className="flex items-center gap-2 sm:gap-3 flex-wrap sm:flex-nowrap shrink-0">
           <div className="relative grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-[#1E40AF] to-blue-800 text-white shadow-md shadow-blue-900/20 shrink-0">
             <Truck className="h-5 w-5" />
             <span className="absolute -bottom-0.5 -right-0.5 grid h-4 w-4 place-items-center rounded-full bg-[#F97316] text-white shadow-xs">
@@ -613,42 +776,55 @@ export function TopBar({
             <span className="rounded bg-blue-100/90 px-1.5 py-0.5 text-[9px] font-extrabold text-blue-800 border border-blue-200">SYSTEM</span>
           </div>
 
-          {/* Dropdown Seller di Navbar (Mitra Aliqa / Mitra Zaherba) */}
-          <div className="ml-2 flex items-center">
-            <Select value={normalizedSeller} onValueChange={(val) => onSeller(val)}>
-              <SelectTrigger className={`h-8.5 text-xs font-extrabold cursor-pointer shadow-2xs rounded-lg px-2.5 border transition-all ${
-                normalizedSeller === "Mitra Zaherba" 
-                  ? "bg-purple-50 text-purple-900 border-purple-300 hover:bg-purple-100" 
-                  : "bg-blue-50 text-blue-900 border-blue-300 hover:bg-blue-100"
-              }`}>
-                <SelectValue placeholder="Pilih Seller">
-                  {normalizedSeller === "Mitra Zaherba" ? "📦 Mitra Zaherba" : "📦 Mitra Aliqa"}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent className="bg-white border border-slate-200 shadow-xl rounded-xl">
-                <SelectItem value="Mitra Aliqa" className="font-bold cursor-pointer text-xs text-blue-900 py-2">
-                  📦 Mitra Aliqa
-                </SelectItem>
-                <SelectItem value="Mitra Zaherba" className="font-bold cursor-pointer text-xs text-purple-900 py-2">
-                  📦 Mitra Zaherba
-                </SelectItem>
-              </SelectContent>
-            </Select>
+          {/* Segmented Dashboard Switcher: Mitra Aliqa vs Mitra Zaherba */}
+          <div className="ml-1 sm:ml-3 flex items-center rounded-xl bg-slate-100 p-1 border border-slate-200/90 shadow-inner">
+            <button
+              type="button"
+              onClick={() => onSeller("Mitra Aliqa")}
+              className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                normalizedSeller === "Mitra Aliqa"
+                  ? "bg-emerald-600 text-white shadow-md shadow-emerald-700/20 scale-[1.02]"
+                  : "text-slate-600 hover:text-slate-900 hover:bg-white/60"
+              }`}
+              title="Buka Dashboard Pengiriman Khusus Mitra Aliqa"
+            >
+              <Package className="h-3.5 w-3.5" />
+              <span><span className="hidden sm:inline">Dashboard </span>Aliqa</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => onSeller("Mitra Zaherba")}
+              className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                normalizedSeller === "Mitra Zaherba"
+                  ? "bg-purple-700 text-white shadow-md shadow-purple-800/20 scale-[1.02]"
+                  : "text-slate-600 hover:text-slate-900 hover:bg-white/60"
+              }`}
+              title="Buka Dashboard Pengiriman Khusus Mitra Zaherba"
+            >
+              <Package className="h-3.5 w-3.5" />
+              <span><span className="hidden sm:inline">Dashboard </span>Zaherba</span>
+            </button>
           </div>
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap sm:flex-nowrap justify-end shrink-0">
           {/* Grup 1: Sinkronisasi Sheets (Khusus Admin) */}
           {isAdmin && (
             <div className="flex items-center gap-1.5 rounded-xl bg-slate-50 p-1 border border-slate-200/80 shadow-2xs">
-              {/* Sync Sheets: Langsung buka modal konfirmasi & pilihan tab/bulan */}
+              {/* Sync Sheets: Menarik data sekaligus warna otomatis dalam 1 tombol */}
               <Button
                 variant="outline"
-                className="gap-1.5 border-emerald-600/70 bg-emerald-50 text-emerald-900 hover:bg-emerald-100 hover:text-emerald-950 cursor-pointer font-semibold text-xs h-9 shadow-xs rounded-lg"
+                disabled={isSyncing}
+                className="gap-1.5 border-emerald-600/70 bg-emerald-50 text-emerald-900 hover:bg-emerald-100 hover:text-emerald-950 cursor-pointer font-semibold text-xs h-9 shadow-xs rounded-lg transition"
                 onClick={() => setSheetSyncOpen(true)}
-                title={`Sync data dari Google Sheets (${normalizedSeller})`}
+                title={`Sync Data & Warna dari Google Sheets (${normalizedSeller})`}
               >
-                <RefreshCw className="h-3.5 w-3.5 text-emerald-600" /> Sync Sheets
+                {isSyncing ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-emerald-600" />
+                ) : (
+                  <RefreshCw className="h-3.5 w-3.5 text-emerald-600" />
+                )}
+                <span>Sync Sheets</span>
               </Button>
 
               {/* Settings: Konfigurasi URL per-seller */}
@@ -666,55 +842,6 @@ export function TopBar({
               </Button>
 
 
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="outline"
-                    disabled={isPushing}
-                    className="gap-1.5 border-blue-600/70 bg-blue-50 text-blue-900 hover:bg-blue-100 hover:text-blue-950 cursor-pointer font-semibold text-xs h-9 shadow-xs rounded-lg"
-                    title="Pilih mode Push Status ke Google Sheets"
-                  >
-                    {isPushing ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-600" />
-                    ) : (
-                      <Send className="h-3.5 w-3.5 text-blue-600" />
-                    )}
-                    Push Status
-                    <ChevronDown className="h-3 w-3 opacity-60 ml-0.5" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-64 p-1.5 shadow-lg rounded-xl bg-white border border-slate-200">
-                  <DropdownMenuItem
-                    onClick={() => handlePushUpdates('all')}
-                    disabled={isPushing}
-                    className="flex flex-col items-start gap-0.5 p-2 rounded-lg cursor-pointer hover:bg-blue-50 focus:bg-blue-50 text-slate-800"
-                  >
-                    <div className="flex items-center gap-2 font-bold text-xs text-blue-900">
-                      <Send className="h-3.5 w-3.5 text-blue-600 shrink-0" />
-                      Push Semua Resi
-                    </div>
-                    <span className="text-[10px] text-slate-500 pl-5.5 leading-snug">
-                      Kirim seluruh status resi (Delivered, Retur, FU) ke Google Sheets.
-                    </span>
-                  </DropdownMenuItem>
-
-                  <DropdownMenuSeparator className="my-1 bg-slate-100" />
-
-                  <DropdownMenuItem
-                    onClick={() => handlePushUpdates('recent_fu')}
-                    disabled={isPushing}
-                    className="flex flex-col items-start gap-0.5 p-2 rounded-lg cursor-pointer hover:bg-amber-50 focus:bg-amber-50 text-slate-800"
-                  >
-                    <div className="flex items-center gap-2 font-bold text-xs text-amber-900">
-                      <Zap className="h-3.5 w-3.5 text-amber-600 shrink-0" />
-                      Push Resi Baru Di-Follow Up
-                    </div>
-                    <span className="text-[10px] text-slate-500 pl-5.5 leading-snug">
-                      Hanya kirim resi hasil Follow Up CS (Kuning, Hijau, FU Pos).
-                    </span>
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
             </div>
           )}
 
@@ -751,6 +878,23 @@ export function TopBar({
               </span>
             </Button>
           </div>
+
+          {/* Indikator Device Online (🟢) */}
+          <button
+            type="button"
+            onClick={() => {
+              fetchDevices();
+              setDevicesModalOpen(true);
+            }}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100/90 border border-emerald-200/90 text-emerald-800 text-xs font-bold transition shadow-2xs cursor-pointer select-none shrink-0"
+            title="Klik untuk melihat siapa saja perangkat yang sedang aktif"
+          >
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+            </span>
+            <span className="font-black tracking-tight">{activeDevices.count} Online</span>
+          </button>
 
           {/* Grup 4: User Profile & Actions */}
           {currentUser && (
@@ -1051,10 +1195,11 @@ export function TopBar({
                   : <span className="text-red-500 font-semibold">URL belum dikonfigurasi!</span>}
               </p>
             </div>
-            <div className="rounded-xl bg-slate-50 border border-slate-200 p-3 space-y-2">
+            {/* Multi-Month Selector */}
+            <div className="rounded-xl bg-slate-50 border border-slate-200 p-3 space-y-2.5">
               <div className="flex items-center justify-between">
                 <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">
-                  Pilih Tab / Bulan
+                  Pilih Bulan Yang Sedang Berjalan
                 </label>
                 <button
                   type="button"
@@ -1066,29 +1211,111 @@ export function TopBar({
                 </button>
               </div>
 
-              <Select value={selectedSyncMonth} onValueChange={setSelectedSyncMonth}>
-                <SelectTrigger className="w-full h-9 text-xs bg-white border border-slate-200 font-semibold cursor-pointer shadow-2xs focus:ring-1 focus:ring-emerald-500 rounded-lg">
-                  <SelectValue placeholder="Pilih Tab / Bulan" />
-                </SelectTrigger>
-                <SelectContent className="bg-white border border-slate-200 shadow-xl rounded-xl">
-                  <SelectItem value="current" className="font-semibold cursor-pointer text-xs">
-                    Bulan Berjalan ({activeBotMonthName})
-                  </SelectItem>
-                  <SelectItem value="1" className="font-semibold cursor-pointer text-xs">Januari</SelectItem>
-                  <SelectItem value="2" className="font-semibold cursor-pointer text-xs">Februari</SelectItem>
-                  <SelectItem value="3" className="font-semibold cursor-pointer text-xs">Maret</SelectItem>
-                  <SelectItem value="4" className="font-semibold cursor-pointer text-xs">April</SelectItem>
-                  <SelectItem value="5" className="font-semibold cursor-pointer text-xs">Mei</SelectItem>
-                  <SelectItem value="6" className="font-semibold cursor-pointer text-xs">Juni</SelectItem>
-                  <SelectItem value="7" className="font-semibold cursor-pointer text-xs">Juli</SelectItem>
-                  <SelectItem value="8" className="font-semibold cursor-pointer text-xs">Agustus</SelectItem>
-                  <SelectItem value="9" className="font-semibold cursor-pointer text-xs">September</SelectItem>
-                  <SelectItem value="10" className="font-semibold cursor-pointer text-xs">Oktober</SelectItem>
-                  <SelectItem value="11" className="font-semibold cursor-pointer text-xs">November</SelectItem>
-                  <SelectItem value="12" className="font-semibold cursor-pointer text-xs">Desember</SelectItem>
-                  <SelectItem value="ALL" className="font-semibold cursor-pointer text-xs">Semua Bulan (ALL)</SelectItem>
-                </SelectContent>
-              </Select>
+              {/* Tombol Pintas / Quick Presets */}
+              <div className="flex flex-wrap items-center gap-1.5 pb-0.5">
+                <button
+                  type="button"
+                  onClick={handlePresetCurrentMonth}
+                  className={`text-[11px] px-2.5 py-1 rounded-lg border font-semibold transition-all cursor-pointer ${
+                    !isSyncAllMonths && selectedSyncMonths.length === 1 && selectedSyncMonths[0] === activeBotMonth
+                      ? "bg-emerald-600 text-white border-emerald-600 shadow-2xs"
+                      : "bg-white text-slate-700 hover:bg-slate-100 border-slate-200"
+                  }`}
+                >
+                  ⚡ Bulan Berjalan
+                </button>
+                <button
+                  type="button"
+                  onClick={handlePresetLast3Months}
+                  className={`text-[11px] px-2.5 py-1 rounded-lg border font-semibold transition-all cursor-pointer ${
+                    !isSyncAllMonths && selectedSyncMonths.length === 3
+                      ? "bg-emerald-600 text-white border-emerald-600 shadow-2xs"
+                      : "bg-white text-slate-700 hover:bg-slate-100 border-slate-200"
+                  }`}
+                >
+                  ⚡ 3 Bulan Terakhir
+                </button>
+                <button
+                  type="button"
+                  onClick={handlePresetLast4Months}
+                  className={`text-[11px] px-2.5 py-1 rounded-lg border font-semibold transition-all cursor-pointer ${
+                    !isSyncAllMonths && selectedSyncMonths.length === 4
+                      ? "bg-emerald-600 text-white border-emerald-600 shadow-2xs"
+                      : "bg-white text-slate-700 hover:bg-slate-100 border-slate-200"
+                  }`}
+                >
+                  ⚡ 4 Bulan Terakhir
+                </button>
+                <button
+                  type="button"
+                  onClick={handlePresetAllMonths}
+                  className={`text-[11px] px-2.5 py-1 rounded-lg border font-semibold transition-all cursor-pointer ${
+                    isSyncAllMonths
+                      ? "bg-emerald-700 text-white border-emerald-700 shadow-2xs"
+                      : "bg-white text-slate-700 hover:bg-slate-100 border-slate-200"
+                  }`}
+                >
+                  ⚡ Semua Bulan (ALL)
+                </button>
+              </div>
+
+              {/* Grid 12 Bulan (Multi-Select Chips) */}
+              <div className="grid grid-cols-3 sm:grid-cols-4 gap-1.5 pt-1">
+                {monthNames.map((mName, idx) => {
+                  const mNum = idx + 1;
+                  const isSelected = isSyncAllMonths || selectedSyncMonths.includes(mNum);
+                  const isCurrent = mNum === activeBotMonth;
+                  return (
+                    <button
+                      key={mNum}
+                      type="button"
+                      onClick={() => toggleMonthSelection(mNum)}
+                      className={`text-xs py-1.5 px-2 rounded-lg border font-medium flex items-center justify-between transition-all cursor-pointer ${
+                        isSelected
+                          ? "bg-emerald-600 text-white border-emerald-600 font-semibold shadow-2xs"
+                          : "bg-white text-slate-600 hover:bg-slate-100 border-slate-200"
+                      }`}
+                    >
+                      <span className="truncate">{mName}</span>
+                      {isSelected ? (
+                        <Check className="h-3 w-3 shrink-0 ml-1 text-white" />
+                      ) : isCurrent ? (
+                        <span className="text-[9px] px-1 bg-amber-100 text-amber-800 rounded font-bold shrink-0">Aktif</span>
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Ringkasan Pilihan */}
+              <div className="flex items-center justify-between text-[11px] text-slate-500 pt-1.5 border-t border-slate-200/60">
+                <span>
+                  Terpilih: <strong className="text-emerald-700">
+                    {isSyncAllMonths
+                      ? "Semua Bulan (12 Tab)"
+                      : `${selectedSyncMonths.length} Bulan (${selectedSyncMonths.map((m) => monthNames[m - 1]).join(", ")})`}
+                  </strong>
+                </span>
+                <span className="text-[10px] text-slate-400">Klik tab untuk tambah / lepas</span>
+              </div>
+            </div>
+
+            {/* Opsi Tarik Warna Status FU */}
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50/70 p-3 space-y-2">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={includeFuColors}
+                  onChange={(e) => setIncludeFuColors(e.target.checked)}
+                  className="rounded border-emerald-300 text-emerald-600 focus:ring-emerald-500 h-3.5 w-3.5 cursor-pointer"
+                />
+                <span className="text-xs font-bold text-emerald-950">
+                  Tarik Tanda Warna Status FU (Google Apps Script)
+                </span>
+              </label>
+              <p className="text-[11px] text-emerald-800/80 leading-snug">
+                Data baru &amp; nomor resi disinkronkan secara aman dengan upsert tanpa menghapus riwayat tracking di database.
+              </p>
             </div>
             {!sheetUrlInput && (
               <p className="text-[11px] text-red-600 font-semibold text-center">
@@ -1341,12 +1568,12 @@ export function TopBar({
                         {item.sla !== undefined && (
                           <span
                             className={`rounded border px-1.5 py-0.5 text-[10px] font-bold ${
-                              item.sla < 0 || Math.abs(item.sla) > 4
+                              item.sla < 0
                                 ? "bg-red-100 border-red-300 text-red-700"
                                 : "bg-slate-200/90 border-slate-300 text-slate-800"
                             }`}
                           >
-                            {item.sla < 0 || Math.abs(item.sla) > 4
+                            {item.sla < 0
                               ? `Over SLA ${Math.abs(item.sla)} Hari`
                               : `SLA: ${item.sla} Hari`}
                           </span>
@@ -1416,6 +1643,97 @@ export function TopBar({
         onClose={() => setUserProfileOpen(false)}
         currentUser={currentUser}
       />
+
+      {/* Modal Daftar Perangkat Online (🟢) */}
+      <Dialog open={devicesModalOpen} onOpenChange={setDevicesModalOpen}>
+        <DialogContent className="sm:max-w-md rounded-2xl p-5 bg-white shadow-2xl border-slate-200">
+          <DialogHeader className="pb-3 border-b border-slate-100">
+            <div className="flex items-center gap-2.5">
+              <div className="h-9 w-9 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
+                <Radio className="h-4.5 w-4.5 animate-pulse" />
+              </div>
+              <div>
+                <DialogTitle className="text-base font-black text-slate-800">
+                  Perangkat Sedang Aktif
+                </DialogTitle>
+                <DialogDescription className="text-xs text-slate-500">
+                  Ada <span className="font-bold text-emerald-700">{activeDevices.count} perangkat</span> yang sedang membuka Web Tracko
+                </DialogDescription>
+              </div>
+            </div>
+          </DialogHeader>
+
+          <div className="space-y-2 py-3 max-h-[350px] overflow-y-auto">
+            {activeDevices.devices.length === 0 ? (
+              <div className="text-center py-6 text-xs text-slate-400">
+                Memuat daftar perangkat aktif...
+              </div>
+            ) : (
+              activeDevices.devices.map((dev) => {
+                const isMobile = dev.device_type.toLowerCase().includes("hp") || dev.device_type.toLowerCase().includes("phone") || dev.device_type.toLowerCase().includes("android");
+                return (
+                  <div
+                    key={dev.id}
+                    className={`flex items-center justify-between p-3 rounded-xl border transition ${
+                      dev.is_current
+                        ? "bg-emerald-50/70 border-emerald-300 ring-1 ring-emerald-200"
+                        : "bg-slate-50 border-slate-200/80 hover:bg-slate-100/60"
+                    }`}
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className={`h-9 w-9 rounded-xl flex items-center justify-center shrink-0 ${
+                        dev.is_current ? "bg-emerald-600 text-white" : "bg-slate-200 text-slate-700"
+                      }`}>
+                        {isMobile ? <Smartphone className="h-4.5 w-4.5" /> : <Laptop className="h-4.5 w-4.5" />}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-xs font-black text-slate-800">
+                            {dev.device_type}
+                          </span>
+                          {dev.is_current && (
+                            <span className="text-[9px] font-black uppercase px-1.5 py-0.2 rounded bg-emerald-200 text-emerald-900 border border-emerald-300">
+                              Perangkat Ini
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-slate-500 flex items-center gap-1 mt-0.5 truncate">
+                          <span>{dev.browser}</span>
+                          <span>•</span>
+                          <span className="font-mono text-[10px] text-slate-600">{dev.ip}</span>
+                          <span>•</span>
+                          <span className="font-semibold text-slate-700">{dev.user_name}</span>
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="text-right shrink-0 pl-2">
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-100/90 px-2 py-0.5 rounded-full border border-emerald-200">
+                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                        {dev.last_seen_human}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          <div className="flex items-center justify-between pt-3 border-t border-slate-100">
+            <span className="text-[11px] text-slate-400">
+              Otomatis diperbarui secara realtime
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setDevicesModalOpen(false)}
+              className="text-xs font-bold rounded-xl h-8 cursor-pointer"
+            >
+              Tutup
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

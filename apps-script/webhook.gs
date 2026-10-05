@@ -56,202 +56,38 @@ function doPost(e) {
 }
 
 /**
- * Handle Reverse Sync NIPos Tracking & Status (Bulk 2D Array)
+ * Handle Reverse Sync NIPos Tracking & Status
+ * ATURAN KERAS: Bot NIPOS TIDAK BOLEH merubah apa pun di Spreadsheet (warna, keterangan, SLA tetap utuh)!
+ * Update NIPOS hanya dilakukan di Web Tracko.
  */
 function handleNiposUpdate(data) {
-  var items = data.items || [];
-  if (!items.length) return { status: 'success', updated_count: 0, message: 'No items to update' };
-
-  var resiMap = {};
-  items.forEach(function(it) {
-    if (it && it.resi) {
-      resiMap[String(it.resi).trim().toUpperCase()] = it;
-    }
-  });
-
-  var ss = getSpreadsheet(data);
-  var allSheets = ss.getSheets();
-  var sheetsToScan = [];
-
-  // Prioritaskan sheet yang cocok dengan nama sheet di payload
-  var hintSheetName = String(data.sheet || data.sheet_name || (items[0] && (items[0].sheet || items[0].sheet_name)) || '').trim();
-  if (hintSheetName) {
-    var matched = findSheetByName(ss, hintSheetName);
-    if (matched) {
-      sheetsToScan.push(matched);
-    }
-  }
-
-  // Tambahkan seluruh sheet lainnya sebagai fallback jika resi belum ditemukan
-  var scannedIds = {};
-  sheetsToScan.forEach(function(sh) { scannedIds[sh.getSheetId()] = true; });
-  allSheets.forEach(function(sh) {
-    if (!scannedIds[sh.getSheetId()]) {
-      sheetsToScan.push(sh);
-    }
-  });
-
-  var totalUpdated = 0;
-
-  for (var sIdx = 0; sIdx < sheetsToScan.length; sIdx++) {
-    if (Object.keys(resiMap).length === 0) break; // Semua resi dalam payload sudah terupdate
-
-    var sheet = sheetsToScan[sIdx];
-    var hdr = findHeaderRow(sheet);
-    if (!hdr) continue;
-
-    var cResi = findCol(hdr, CONFIG.COL_RESI);
-    if (!cResi) continue;
-
-    var cPos = findCol(hdr, CONFIG.COL_STATUS_POS);
-    var cKet = findCol(hdr, CONFIG.COL_KETERANGAN);
-    var cSla = findCol(hdr, CONFIG.COL_SLA);
-    var cFu  = findCol(hdr, CONFIG.COL_STATUS_FU);
-
-    var lastRow = sheet.getLastRow();
-    var lastCol = sheet.getLastColumn();
-    var numRows = lastRow - hdr.rowIndex;
-    if (numRows <= 0) continue;
-
-    // 1. Baca HANYA 1 kolom (Kolom Resi) -> super cepat (<50ms)
-    var resiVals = sheet.getRange(hdr.rowIndex + 1, cResi, numRows, 1).getValues();
-    var matchedRows = [];
-    var rowResiMap = {};
-
-    for (var i = 0; i < numRows; i++) {
-      var rVal = String(resiVals[i][0] || '').trim().toUpperCase();
-      if (rVal && resiMap[rVal]) {
-        var actualRow = hdr.rowIndex + 1 + i;
-        matchedRows.push(actualRow);
-        rowResiMap[actualRow] = rVal;
-      }
-    }
-
-    if (matchedRows.length === 0) continue;
-
-    // 2. Kelompokkan baris ke dalam cluster (jarak antar baris <= 100)
-    var clusters = [];
-    var currCluster = [];
-    for (var m = 0; m < matchedRows.length; m++) {
-      var rNum = matchedRows[m];
-      if (currCluster.length === 0) {
-        currCluster.push(rNum);
-      } else {
-        var lastR = currCluster[currCluster.length - 1];
-        if (rNum - lastR <= 100) {
-          currCluster.push(rNum);
-        } else {
-          clusters.push(currCluster);
-          currCluster = [rNum];
-        }
-      }
-    }
-    if (currCluster.length > 0) clusters.push(currCluster);
-
-    var maxCols = Math.min(18, lastCol);
-
-    // 3. Update setiap cluster secara Bulk 2D Array
-    for (var cl = 0; cl < clusters.length; cl++) {
-      var cluster = clusters[cl];
-      var cStart = cluster[0];
-      var cEnd = cluster[cluster.length - 1];
-      var cSpan = cEnd - cStart + 1;
-
-      var range = sheet.getRange(cStart, 1, cSpan, maxCols);
-      var vals = range.getValues();
-      var bgs = range.getBackgrounds();
-      var fgs = range.getFontColors();
-
-      for (var k = 0; k < cluster.length; k++) {
-        var actualRow = cluster[k];
-        var rIdx = actualRow - cStart;
-        var resi = rowResiMap[actualRow];
-        var item = resiMap[resi];
-        if (!item) continue;
-
-        var cc = (item.color_code || 'PUTIH').toUpperCase();
-        var bg = getFuBg(cc);
-        var fg = getFuFg(cc);
-
-        // 1. Status POS
-        if (cPos && item.status_pos) {
-          vals[rIdx][cPos - 1] = item.status_pos;
-          bgs[rIdx][cPos - 1] = bg;
-          fgs[rIdx][cPos - 1] = fg;
-        }
-
-        // 2. Keterangan
-        if (cKet && item.keterangan) {
-          vals[rIdx][cKet - 1] = item.keterangan;
-        }
-
-        // 3. SLA
-        if (cSla && item.sla) {
-          vals[rIdx][cSla - 1] = item.sla;
-        }
-
-        // 4. Status FU
-        if (cFu) {
-          var label = item.status_label || (
-            cc === 'BIRU' ? 'DELIVERED (SUKSES)' :
-            (cc === 'ORANGE' ? 'RETUR (RETURN)' :
-            (cc === 'KUNING' ? 'FOLLOW UP' :
-            (cc === 'HIJAU' ? 'SUDAH DIHUBUNGI' :
-            (cc === 'BIRU_TUA' ? 'ESKALASI POS' : 'IN PROSES'))))
-          );
-          vals[rIdx][cFu - 1] = label;
-          bgs[rIdx][cFu - 1] = bg;
-          fgs[rIdx][cFu - 1] = fg;
-        }
-
-        // 5. Background Baris Data (Kolom A s/d Kolom R)
-        if (cc === 'BIRU_TUA') {
-          // KHUSUS FU POS: Hanya sel RESI yang berubah warna (biru tua + font putih)
-          if (cResi) {
-            bgs[rIdx][cResi - 1] = bg;
-            fgs[rIdx][cResi - 1] = fg;
-          }
-        } else {
-          // Status selain FU POS: Seluruh baris data diwarnai
-          for (var colIdx = 0; colIdx < maxCols; colIdx++) {
-            bgs[rIdx][colIdx] = bg;
-          }
-        }
-
-        // 6. Tanggal FU / Eskalasi jika kolom tersedia di sheet
-        var cTgl = findCol(hdr, CONFIG.COL_TANGGAL_FU);
-        var fuTime = item.fu_timestamp || item.escalation_date || '';
-        if (cTgl && fuTime) {
-          vals[rIdx][cTgl - 1] = fmtDate(fuTime);
-        }
-
-        delete resiMap[resi];
-        totalUpdated++;
-      }
-
-      // Tulis kembali sekaligus dengan Bulk Operations
-      range.setValues(vals);
-      range.setBackgrounds(bgs);
-      range.setFontColors(fgs);
-    }
-  }
-
-  return { status: 'success', updated_count: totalUpdated, message: 'Reverse sync berhasil mengupdate ' + totalUpdated + ' resi.' };
+  return {
+    status: 'success',
+    seller: 'Mitra Aliqa',
+    updated_count: 0,
+    message: 'Bot NIPOS hanya dilakukan di Web Tracko. Spreadsheet tidak disentuh sama sekali.'
+  };
 }
 
 /**
  * Handle Follow Up Status Update dari CS Activity Log / Modal (Bulk 2D Array)
+ * ATURAN KERAS: Spreadsheet CUMA BERUBAH KETIKA ADA YG PUSH WARNA FU POS (BIRU_TUA)!
  */
 function handleFuStatusUpdate(data) {
   var resiList  = data.resis || data.resi_list || [];
   var fuType    = (data.fu_type || data.color_code || 'PUTIH').toUpperCase();
-  var fuLabel   = data.status_label || (
-    fuType === 'BIRU' ? 'DELIVERED (SUKSES)' :
-    (fuType === 'ORANGE' ? 'RETUR (RETURN)' :
-    (fuType === 'KUNING' ? 'FOLLOW UP' :
-    (fuType === 'HIJAU' ? 'SUDAH DIHUBUNGI' :
-    (fuType === 'BIRU_TUA' ? 'ESKALASI POS' : 'IN PROSES'))))
-  );
+
+  // JIKA BUKAN BIRU_TUA (FU POS), JANGAN SENTUH SPREADSHEET SAMA SEKALI!
+  if (fuType !== 'BIRU_TUA') {
+    return {
+      status: 'success',
+      seller: 'Mitra Aliqa',
+      updated_count: 0,
+      message: 'Spreadsheet hanya boleh berubah saat push FU POS (Biru Tua). Aksi selain FU POS diabaikan.'
+    };
+  }
+
+  var fuLabel   = 'ESKALASI POS';
   var fuTime    = data.fu_timestamp || data.updated_at || '';
   var resiSet   = {};
   resiList.forEach(function(r){ if(r) resiSet[String(r).trim().toUpperCase()] = true; });
@@ -303,85 +139,21 @@ function handleFuStatusUpdate(data) {
     if (numRows <= 0) continue;
 
     var resiVals = sheet.getRange(hdr.rowIndex + 1, cResi, numRows, 1).getValues();
-    var matchedRows = [];
-    var rowResiMap = {};
 
     for (var i = 0; i < numRows; i++) {
       var rVal = String(resiVals[i][0] || '').trim().toUpperCase();
       if (rVal && resiSet[rVal]) {
         var actualRow = hdr.rowIndex + 1 + i;
-        matchedRows.push(actualRow);
-        rowResiMap[actualRow] = rVal;
-      }
-    }
 
-    if (matchedRows.length === 0) continue;
-
-    var clusters = [];
-    var currCluster = [];
-    for (var m = 0; m < matchedRows.length; m++) {
-      var rNum = matchedRows[m];
-      if (currCluster.length === 0) {
-        currCluster.push(rNum);
-      } else {
-        var lastR = currCluster[currCluster.length - 1];
-        if (rNum - lastR <= 100) {
-          currCluster.push(rNum);
-        } else {
-          clusters.push(currCluster);
-          currCluster = [rNum];
-        }
-      }
-    }
-    if (currCluster.length > 0) clusters.push(currCluster);
-
-    var maxCols = Math.min(18, lastCol);
-
-    for (var cl = 0; cl < clusters.length; cl++) {
-      var cluster = clusters[cl];
-      var cStart = cluster[0];
-      var cEnd = cluster[cluster.length - 1];
-      var cSpan = cEnd - cStart + 1;
-
-      var range = sheet.getRange(cStart, 1, cSpan, maxCols);
-      var vals = range.getValues();
-      var bgs = range.getBackgrounds();
-      var fgs = range.getFontColors();
-
-      for (var k = 0; k < cluster.length; k++) {
-        var actualRow = cluster[k];
-        var rIdx = actualRow - cStart;
-        var resi = rowResiMap[actualRow];
-
-        if (cFu) {
-          vals[rIdx][cFu - 1] = fuLabel;
-          bgs[rIdx][cFu - 1] = bg;
-          fgs[rIdx][cFu - 1] = fg;
-        }
-        if (cTgl && formattedDate) {
-          vals[rIdx][cTgl - 1] = formattedDate;
+        // Pewarnaan di Spreadsheet oleh Admin HANYA untuk status FU POS (BIRU_TUA)!
+        // HANYA SEL NOMOR RESI YANG DIWARNAI (1 sel tunggal, kolom lain seperti Nama, Alamat, Status, Keterangan, SLA TIDAK disentuh)
+        if (cResi && fuType === 'BIRU_TUA') {
+          sheet.getRange(actualRow, cResi).setBackground(bg).setFontColor(fg);
         }
 
-        if (fuType === 'BIRU_TUA') {
-          // KHUSUS FU POS: Hanya sel RESI yang berubah warna (biru tua + font putih)
-          if (cResi) {
-            bgs[rIdx][cResi - 1] = bg;
-            fgs[rIdx][cResi - 1] = fg;
-          }
-        } else {
-          // Status selain FU POS: Seluruh baris data diwarnai
-          for (var colIdx = 0; colIdx < maxCols; colIdx++) {
-            bgs[rIdx][colIdx] = bg;
-          }
-        }
-
-        delete resiSet[resi];
+        delete resiSet[rVal];
         totalUpdated++;
       }
-
-      range.setValues(vals);
-      range.setBackgrounds(bgs);
-      range.setFontColors(fgs);
     }
   }
 
@@ -553,7 +325,16 @@ function handlePullColors(data) {
 
   if (hintSheetName && hintSheetName.toUpperCase() !== 'ALL') {
     var matched = findSheetByName(ss, hintSheetName);
-    if (matched) sheetsToScan.push(matched);
+    if (matched) {
+      sheetsToScan.push(matched);
+    } else {
+      return {
+        status: 'success',
+        total_found: 0,
+        colors: [],
+        message: 'Sheet [' + hintSheetName + '] tidak ditemukan.'
+      };
+    }
   }
   if (sheetsToScan.length === 0) {
     sheetsToScan = ss.getSheets();
@@ -575,22 +356,21 @@ function handlePullColors(data) {
     var numRows = lastRow - hdr.rowIndex;
     if (numRows <= 0) continue;
 
-    var maxCols = Math.min(15, sheet.getLastColumn());
     var resiVals = sheet.getRange(hdr.rowIndex + 1, cResi, numRows, 1).getValues();
-    var allBgs   = sheet.getRange(hdr.rowIndex + 1, 1, numRows, maxCols).getBackgrounds();
+    var resiBgs  = sheet.getRange(hdr.rowIndex + 1, cResi, numRows, 1).getBackgrounds();
     var fuVals   = cFu ? sheet.getRange(hdr.rowIndex + 1, cFu, numRows, 1).getValues() : null;
+    var fuBgs    = cFu ? sheet.getRange(hdr.rowIndex + 1, cFu, numRows, 1).getBackgrounds() : null;
 
     for (var i = 0; i < numRows; i++) {
       var rVal = String(resiVals[i][0] || '').trim().toUpperCase();
       if (!rVal || rVal.length < 8) continue;
 
-      var resiHex = String(allBgs[i][cResi - 1] || '#ffffff').trim().toLowerCase();
-      var fuHex   = cFu ? String(allBgs[i][cFu - 1] || '#ffffff').trim().toLowerCase() : '#ffffff';
-      var rowHexes = allBgs[i];
+      var resiHex = String(resiBgs[i][0] || '#ffffff').trim().toLowerCase();
+      var fuHex   = fuBgs ? String(fuBgs[i][0] || '#ffffff').trim().toLowerCase() : '#ffffff';
       var fuText  = fuVals ? String(fuVals[i][0] || '').trim().toUpperCase() : '';
 
-      var colorCode = classifyRowColor(resiHex, fuHex, rowHexes, fuText);
-      if (colorCode && colorCode !== 'PUTIH') {
+      var colorCode = classifyRowColor(resiHex, fuHex, fuText);
+      if (colorCode !== 'PUTIH' || data.include_white) {
         colorResults.push({
           resi: rVal,
           color: colorCode
@@ -606,59 +386,39 @@ function handlePullColors(data) {
   };
 }
 
-function classifyRowColor(resiHex, fuHex, rowHexes, fuText) {
+function classifyRowColor(resiHex, fuHex, fuText) {
   // 1. Cek teks eksplisit pada kolom FU jika ada
   if (fuText) {
     if (fuText.indexOf('ESKALASI') !== -1 || fuText.indexOf('FU POS') !== -1 || fuText.indexOf('FUPOS') !== -1) return 'BIRU_TUA';
     if (fuText.indexOf('SUDAH FU') !== -1 || fuText.indexOf('SUDAH DI FU') !== -1 || fuText.indexOf('FU 1') !== -1 || fuText.indexOf('FU1') !== -1 || fuText === 'KUNING') return 'KUNING';
-    if (fuText.indexOf('FU 2') !== -1 || fuText.indexOf('FU2') !== -1 || fuText.indexOf('2 KALI') !== -1 || fuText.indexOf('2X') !== -1 || fuText === 'HIJAU') return 'HIJAU';
     if (fuText.indexOf('DELIVERED') !== -1 || fuText.indexOf('SUKSES') !== -1) return 'BIRU';
     if (fuText.indexOf('RETUR') !== -1 || fuText.indexOf('RETURN') !== -1) return 'ORANGE';
+    if (fuText.indexOf('BELUM') !== -1 || fuText === 'PUTIH') return 'PUTIH';
   }
 
-  // 2. KHUSUS FU POS: Sel Resi atau Sel FU berwarna biru
+  // 2. KHUSUS MITRA ALIQA: HANYA WARNA PADA SEL RESI
+  // - Biru Tua / Navy / Blue -> ON FU POS (Eskalasi KC/KCU)
   if (isBlue(resiHex) || isBlue(fuHex)) {
     return 'BIRU_TUA';
   }
 
-  // 3. Cek warna di sepanjang baris (dan sel resi/FU)
-  var hasYellow = isYellow(resiHex) || isYellow(fuHex);
-  var hasGreen  = isGreen(resiHex) || isGreen(fuHex);
-  var hasCyan   = isCyan(resiHex) || isCyan(fuHex);
-  var hasRed    = isRedOrOrange(resiHex) || isRedOrOrange(fuHex);
-  var hasBlue   = false;
-
-  if (rowHexes && rowHexes.length) {
-    for (var c = 0; c < rowHexes.length; c++) {
-      var h = String(rowHexes[c] || '').trim().toLowerCase();
-      if (!h || h === '#ffffff' || h === 'white') continue;
-
-      if (isCyan(h)) {
-        hasCyan = true;
-      } else if (isBlue(h)) {
-        hasBlue = true;
-      } else if (isYellow(h)) {
-        hasYellow = true;
-      } else if (isGreen(h)) {
-        hasGreen = true;
-      } else if (isRedOrOrange(h)) {
-        hasRed = true;
-      }
-    }
+  // - Kuning -> SUDAH DI FU
+  if (isYellow(resiHex) || isYellow(fuHex)) {
+    return 'KUNING';
   }
 
-  // Prioritas penentuan status FU:
-  // 1. Biru (ON FU POS / Eskalasi KC)
-  if (hasBlue) return 'BIRU_TUA';
-  // 2. Kuning (SUDAH DI FU)
-  if (hasYellow) return 'KUNING';
-  // 3. Hijau (FU 2 Kali)
-  if (hasGreen) return 'HIJAU';
-  // 4. Toska / Cyan (Delivered)
-  if (hasCyan) return 'BIRU';
-  // 5. Merah / Orange (Retur)
-  if (hasRed) return 'ORANGE';
+  // - Merah / Orange -> RETUR
+  if (isRedOrOrange(resiHex) || isRedOrOrange(fuHex)) {
+    return 'ORANGE';
+  }
 
+  // - Cyan / Toska -> PAKET SUKSES (DELIVERED)
+  if (isCyan(resiHex) || isCyan(fuHex)) {
+    return 'BIRU';
+  }
+
+  // Tidak ada warna / Putih -> BELUM DI FU (BLM DI FU)
+  // (CATATAN: Di Mitra Aliqa TIDAK ADA format FU 2 Kali / Hijau)
   return 'PUTIH';
 }
 

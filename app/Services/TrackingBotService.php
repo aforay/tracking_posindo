@@ -63,18 +63,72 @@ class TrackingBotService
                 $apiResults = $fastTracker->trackMany($cleanResis, 60);
                 if (!empty($apiResults)) {
                     foreach ($apiResults as $resi => $data) {
-                        $rawStatus = $data['status_akhir'] ?: 'ON PROCESS';
-                        $cat = $this->categorizeStatus($rawStatus, $rawStatus);
-                        $color = $this->determineColorCode($cat);
+                        if (!is_array($data) || empty($data['resi'] ?? $resi)) {
+                            continue;
+                        }
+                        $cleanResiKey = (string)($data['resi'] ?? $resi);
+                        $cleanPenerima = trim(preg_replace('/^[\s\-\,\:]+/', '', (string)($data['penerima'] ?? '')));
+                        if ($cleanPenerima === '-') {
+                            $cleanPenerima = '';
+                        }
+                        $rawStatus = !empty($data['status_akhir']) ? $data['status_akhir'] : (!empty($data['status_pos']) ? $data['status_pos'] : 'ON PROCESS');
+                        $keterangan = !empty($cleanPenerima) ? $cleanPenerima : $rawStatus;
+                        $irregularity = $data['irregularity'] ?? '';
+                        $statusCod = $data['status_cod'] ?? '';
+
+                        $isRetur = !empty($data['is_retur']) ||
+                                   str_contains(strtoupper($irregularity), 'RETUR') ||
+                                   str_contains(strtoupper($irregularity), 'IRREGULARITY') ||
+                                   str_contains(strtoupper($statusCod), 'RETUR') ||
+                                   str_contains(strtoupper($rawStatus), 'RETUR') ||
+                                   str_contains(strtoupper($rawStatus), 'RETURN') ||
+                                   str_contains(strtoupper($rawStatus), 'DITOLAK') ||
+                                   str_contains(strtoupper($rawStatus), 'IRREGULARITY') ||
+                                   str_contains(strtoupper($keterangan), 'RETUR') ||
+                                   str_contains(strtoupper($keterangan), 'DITOLAK') ||
+                                   str_contains(strtoupper($keterangan), 'IRREGULARITY');
+
+                        if ($isRetur) {
+                            $cat = 'RETUR';
+                            $color = 'ORANGE';
+                            $finalStatusPos = $rawStatus;
+                            if (!str_contains(strtoupper($finalStatusPos), 'RETUR') && !str_contains(strtoupper($finalStatusPos), 'RETURN')) {
+                                $finalStatusPos = !empty($irregularity)
+                                    ? "RETUR BARANG ({$rawStatus})"
+                                    : "RETUR ({$rawStatus})";
+                            }
+                            $ketPrefix = !empty($irregularity) ? $irregularity : 'Retur Barang';
+                            if (!empty($cleanPenerima)) {
+                                $keterangan = str_contains(strtoupper($cleanPenerima), 'RETUR')
+                                    ? $cleanPenerima
+                                    : "{$ketPrefix} - {$cleanPenerima}";
+                            } else {
+                                $keterangan = $ketPrefix;
+                            }
+                        } else {
+                            $cat = $this->categorizeStatus($rawStatus, $keterangan);
+                            $color = $this->determineColorCode($cat);
+
+                            $finalStatusPos = $rawStatus;
+                            if (
+                                str_contains(strtoupper($rawStatus), 'ARRIVEDUNPAID') || 
+                                str_contains(strtoupper($rawStatus), 'ARRIVED UNPAID') ||
+                                (str_contains(strtoupper($keterangan), 'DITERIMA') && !str_contains(strtoupper($rawStatus), 'RETURN') && !str_contains(strtoupper($rawStatus), 'RETUR'))
+                            ) {
+                                $finalStatusPos = self::STATUS_DELIVERED;
+                                $cat = 'SUKSES';
+                                $color = 'BIRU';
+                            }
+                        }
+
                         $rawSla = $data['sla'] ?? null;
                         $tglKolekting = $data['tanggal_kolekting'] ?? null;
                         $parsedSla = $this->extractSlaDays((string)$rawSla, $tglKolekting, $cat);
                         $posisiAkhir = !empty($data['kantor_tujuan']) ? $data['kantor_tujuan'] : (!empty($data['posisi_akhir']) ? $data['posisi_akhir'] : null);
-                        $keterangan = !empty($data['penerima']) ? $data['penerima'] : $rawStatus;
-                        $results[$resi] = [
-                            'resi' => $resi,
-                            'status_pos' => $rawStatus,
-                            'status' => $rawStatus,
+                        $results[$cleanResiKey] = [
+                            'resi' => $cleanResiKey,
+                            'status_pos' => $finalStatusPos,
+                            'status' => $finalStatusPos,
                             'keterangan' => $keterangan,
                             'status_kategori' => $cat,
                             'color_code' => $color,
@@ -268,7 +322,8 @@ class TrackingBotService
             str_contains($statusAkhirUpper, 'RETUR') || 
             str_contains($statusAkhirUpper, 'KEMBALI') ||
             str_contains($statusAkhirUpper, 'DITOLAK') ||
-            str_contains($statusAkhirUpper, 'PENOLAKAN')
+            str_contains($statusAkhirUpper, 'PENOLAKAN') ||
+            str_contains($statusAkhirUpper, 'IRREGULARITY')
         ) {
             return 'RETUR';
 
@@ -276,7 +331,6 @@ class TrackingBotService
         } elseif (
             str_contains($statusAkhirUpper, 'FAILED') || 
             str_contains($statusAkhirUpper, 'GAGAL') ||
-            str_contains($statusAkhirUpper, 'IRREGULARITY') ||
             str_contains($statusAkhirUpper, 'MISROUTE')
         ) {
             return 'FOLLOW_UP';
@@ -285,6 +339,9 @@ class TrackingBotService
         } elseif (
             (str_contains($statusAkhirUpper, 'DELIVERED') && !str_contains($statusAkhirUpper, 'FAILED') && !str_contains($statusAkhirUpper, 'RETURN')) || 
             (preg_match('/DITERIMA OLEH\s*[:\s]*([A-Z0-9\s]{2,})/i', $statusAkhirUpper, $m) && trim($m[1]) !== '-' && !str_starts_with($statusAkhirUpper, 'ON PROCESS')) || 
+            str_contains($statusAkhirUpper, 'DITERIMA') ||
+            str_contains($statusAkhirUpper, 'ARRIVEDUNPAID') ||
+            str_contains($statusAkhirUpper, 'ARRIVED UNPAID') ||
             str_contains($statusAkhirUpper, 'SERAH TERIMA')
         ) {
             return 'SUKSES';
@@ -304,21 +361,21 @@ class TrackingBotService
     /**
      * Helper to format running SLA string e.g. "H+2 (JALAN)" or "Telat X Hari" for IN_PROCESS resis
      */
-    public function formatRunningSla(?string $tanggalKirim, string $category = 'IN_PROCESS', ?int $defaultSla = 2, ?int $slaDays = null): string
+    public function formatRunningSla(?string $tanggalKirim, string $category = 'IN_PROCESS', ?int $defaultSla = 4, ?int $slaDays = null): string
     {
         // Support callers passing $slaDays as 3rd or 4th argument
         $effectiveSla = $slaDays !== null ? $slaDays : $defaultSla;
 
         if (in_array(strtoupper($category), ['SUKSES', 'RETUR'])) {
-            return (string)($effectiveSla !== null ? $effectiveSla : 2);
+            return (string)($effectiveSla !== null ? $effectiveSla : 4);
         }
 
         if ($effectiveSla !== null && $effectiveSla < 0) {
-            return "Telat " . abs($effectiveSla) . " Hari";
+            return (string)abs($effectiveSla);
         }
 
         if ($slaDays !== null && $slaDays > 0) {
-            return "H+{$slaDays} (JALAN)";
+            return (string)$slaDays;
         }
 
         if (!empty($tanggalKirim)) {
@@ -326,16 +383,16 @@ class TrackingBotService
                 $tgl = \Illuminate\Support\Carbon::parse($tanggalKirim)->startOfDay();
                 $today = now()->startOfDay();
                 $elapsedDays = abs((int)$today->diffInDays($tgl));
-                $target = ($effectiveSla !== null && $effectiveSla > 0) ? $effectiveSla : 2;
+                $target = ($effectiveSla !== null && $effectiveSla > 0) ? $effectiveSla : 4;
                 if ($elapsedDays > $target) {
                     $over = $elapsedDays - $target;
-                    return "Telat {$over} Hari";
+                    return (string)$over;
                 }
-                return "H+{$elapsedDays} (JALAN)";
+                return (string)$target;
             } catch (\Throwable $e) {}
         }
 
-        return "H+1 (JALAN)";
+        return (string)($effectiveSla !== null ? abs($effectiveSla) : 4);
     }
 
     /**
@@ -364,7 +421,7 @@ class TrackingBotService
             str_contains($statusAkhirUpper, 'RETUR') || 
             str_contains($statusAkhirUpper, 'KEMBALI')
         ) {
-            return 'DELIVERED (RETURN DELIVERY)';
+            return 'RETURN';
 
         // 2. GAGAL ANTAR
         } elseif (
@@ -425,8 +482,8 @@ class TrackingBotService
                     'keterangan' => $rawKet ?: $cleanStatus,
                     'status_kategori' => $category,
                     'color_code' => $this->determineColorCode($category),
-                    'sla_days' => (int)($rawSla ?: 2),
-                    'sla' => (string)($rawSla ?: '2'),
+                    'sla_days' => (int)($rawSla ?: 4),
+                    'sla' => (string)($rawSla ?: '4'),
                     'raw' => $rawText,
                 ];
             }
@@ -483,6 +540,48 @@ class TrackingBotService
                     });
                 }
 
+                // If still not found, check horizontal multi-column table (like lacak_item_banyakzaref.php)
+                if (empty($rawStatusText)) {
+                    $headerRow = $crawler->filter('table tr')->first();
+                    if ($headerRow->count() > 0) {
+                        $headers = [];
+                        $headerRow->filter('th, td')->each(function (Crawler $col, $i) use (&$headers) {
+                            $headers[$i] = strtoupper(trim($col->text()));
+                        });
+
+                        $barcodeCol = null;
+                        $statusCol = null;
+                        $slaCol = null;
+                        $tglCol = null;
+
+                        foreach ($headers as $idx => $title) {
+                            if ($barcodeCol === null && (str_contains($title, 'BARCODE') || str_contains($title, 'RESI'))) $barcodeCol = $idx;
+                            if ($statusCol === null && str_contains($title, 'STATUS AKHIR')) $statusCol = $idx;
+                            if ($slaCol === null && (str_contains($title, 'SLA') || str_contains($title, 'MASA TAHAN'))) $slaCol = $idx;
+                            if ($tglCol === null && (str_contains($title, 'KOLEKTING') || str_contains($title, 'TGL KIRIM') || str_contains($title, 'TANGGAL KIRIM'))) $tglCol = $idx;
+                        }
+
+                        if ($statusCol !== null) {
+                            $crawler->filter('table tr')->each(function (Crawler $tr) use ($barcodeCol, $statusCol, $slaCol, $tglCol, $resi, &$rawStatusText, &$rawTanggalKirimText, &$rawSlaText) {
+                                if (!empty($rawStatusText)) return;
+                                $tds = $tr->filter('td');
+                                if ($tds->count() > $statusCol) {
+                                    $rowResi = $barcodeCol !== null && $tds->count() > $barcodeCol ? trim($tds->eq($barcodeCol)->text()) : '';
+                                    if (empty($rowResi) || empty($resi) || str_contains(strtoupper($rowResi), strtoupper($resi))) {
+                                        $rawStatusText = trim($tds->eq($statusCol)->text());
+                                        if ($slaCol !== null && $tds->count() > $slaCol) {
+                                            $rawSlaText = trim($tds->eq($slaCol)->text());
+                                        }
+                                        if ($tglCol !== null && $tds->count() > $tglCol) {
+                                            $rawTanggalKirimText = trim($tds->eq($tglCol)->text());
+                                        }
+                                    }
+                                }
+                            });
+                        }
+                    }
+                }
+
                 if (!empty($rawStatusText)) {
                     // Bersihkan non-breaking space (&nbsp;), newline, dan tanda kutip
                     $cleanStatus = trim(str_replace(["\xc2\xa0", '"', "'", '&nbsp;', "\r", "\n", "\t"], ' ', $rawStatusText));
@@ -491,14 +590,31 @@ class TrackingBotService
                     $cleanTanggalKirim = trim(str_replace(["\xc2\xa0", '"', "'", '&nbsp;', "\r", "\n", "\t"], ' ', $rawTanggalKirimText));
                     $cleanTanggalKirim = preg_replace('/\s+/', ' ', $cleanTanggalKirim);
 
+                    // Check if entire HTML contains Retur indicator (Table 0 "Pengiriman : Retur" or "COD Retur" or Table 2 "Retur Barang")
+                    $upperHtml = strtoupper($rawHtml);
+                    $isHtmlRetur = str_contains($upperHtml, 'PENGIRIMAN : RETUR') ||
+                                   str_contains($upperHtml, 'PENGIRIMAN  RETUR') ||
+                                   str_contains($upperHtml, 'PENGIRIMAN RETUR') ||
+                                   str_contains($upperHtml, 'COD RETUR') ||
+                                   str_contains($upperHtml, 'RETUR BARANG') ||
+                                   str_contains($upperHtml, 'KIRIMAN DITOLAK');
+
                     // Klasifikasi Status & Kategori langsung dari teks utuh
                     $statusNipos = $this->determineStatusNipos($cleanStatus);
-                    $statusKategori = $this->categorizeStatus($cleanStatus, '');
-                    $colorCode = $this->determineColorCode($statusKategori);
+                    if ($isHtmlRetur) {
+                        $statusKategori = 'RETUR';
+                        $colorCode = 'ORANGE';
+                        if (!str_contains($cleanStatus, 'RETUR') && !str_contains($cleanStatus, 'RETURN')) {
+                            $cleanStatus = "RETUR BARANG ({$cleanStatus})";
+                        }
+                    } else {
+                        $statusKategori = $this->categorizeStatus($cleanStatus, '');
+                        $colorCode = $this->determineColorCode($statusKategori);
+                    }
 
                     // Ekstraksi SLA dari baris SLA atau Nomor Kiriman
                     $slaTargetText = !empty($rawSlaText) ? $rawSlaText : (!empty($rawNomorKirimanText) ? $rawNomorKirimanText : '');
-                    $parsedSla = !empty($slaTargetText) ? $this->extractSlaDays($slaTargetText, $cleanTanggalKirim, $statusKategori) : 2;
+                    $parsedSla = !empty($slaTargetText) ? $this->extractSlaDays($slaTargetText, $cleanTanggalKirim, $statusKategori) : 4;
 
                     // Ekstraksi Kantor Pos / Lokasi
                     $kantorTujuan = $this->extractKantorTujuan($cleanStatus, $rawHtml);
@@ -564,7 +680,7 @@ class TrackingBotService
      */
     public function extractSlaDays(?string $text, ?string $tanggalKirim = null, string $category = 'IN_PROCESS'): int
     {
-        $isFinal = in_array(strtoupper($category), ['SUKSES', 'RETUR']);
+        $isDelivered = strtoupper($category) === 'SUKSES';
 
         // 1. Check for Overdue / Terlambat / Minus e.g. "sudah Over SLA => 240 hari" or "terlewati 2 hari" or "minus 2" or "-2 hari"
         if (!empty($text)) {
@@ -577,8 +693,9 @@ class TrackingBotService
             }
         }
 
-        // 2. Target SLA limit check (e.g. 2, 3, 14, or negative number)
-        $targetSla = 2;
+        // 2. Target SLA limit check (e.g. 4, 9, 14, or negative number)
+        // Default target SLA is at least 4 days (Paket baru Over SLA jika lebih dari 4 hari)
+        $targetSla = 4;
         if (!empty($text)) {
             $trimmed = trim($text);
             if (is_numeric($trimmed)) {
@@ -589,8 +706,6 @@ class TrackingBotService
                 if ($num > 0) {
                     $targetSla = $num;
                 }
-            } elseif (preg_match('/(?:JATUH\s*TEMPO\s*=>?\s*|\b)(\d+)\s*HARI\s*(?:LAGI)?/i', $clean ?? '', $m)) {
-                $targetSla = (int)$m[1];
             } elseif (preg_match('/(?:SLA|MASA\s*TAHAN)\s*[:=]?\s*(-?\d+)/i', $clean ?? '', $m)) {
                 $num = (int)$m[1];
                 if ($num < 0) {
@@ -599,11 +714,13 @@ class TrackingBotService
                 if ($num > 0) {
                     $targetSla = $num;
                 }
+            } elseif (preg_match('/(?:JATUH\s*TEMPO\s*=>?\s*|\b)(\d+)\s*HARI\s*(?:LAGI)?/i', $clean ?? '', $m)) {
+                $targetSla = (int)$m[1];
             }
         }
 
-        // If package is finished (DELIVERED / RETUR), SLA is the final duration
-        if ($isFinal) {
+        // If package is delivered successfully (SUKSES), SLA is the final target duration
+        if ($isDelivered) {
             return $targetSla;
         }
 
@@ -614,15 +731,218 @@ class TrackingBotService
                 $today = now()->startOfDay();
                 $elapsedDays = abs((int)$today->diffInDays($tgl));
 
+                // Paket HANYA Over SLA jika sudah berjalan LEBIH DARI target SLA (misal > 4 hari atau > 9 hari NIPOS)
                 if ($elapsedDays > $targetSla) {
                     return -1 * ($elapsedDays - $targetSla);
                 } else {
-                    return max(0, $targetSla - $elapsedDays);
+                    return $targetSla;
                 }
             } catch (\Throwable $e) {}
         }
 
         return $targetSla;
+    }
+
+    /**
+     * Resolve destination KC/KCU according to user's strict 2-rule hierarchy:
+     * Rule 1: If KCP exists in timeline, pick the KC/KCU/SPP directly above (preceding) the first KCP.
+     * Rule 2: If NO KCP exists, pick the latest (paling akhir) KC/KCU/SPP in the timeline.
+     */
+    public function resolveOfficeFromTimelineEvents(array $events, string $destinationAddress = ''): ?string
+    {
+        $cleanEvents = [];
+        foreach ($events as $e) {
+            $t = trim(preg_replace('/\s+/', ' ', strip_tags($e)));
+            if (!empty($t) && !str_starts_with($t, 'TANGGAL UPDATE') && !str_starts_with($t, 'DETAIL HISTORY') && !str_starts_with($t, 'WAKTU UPDATE')) {
+                $cleanEvents[] = $t;
+            }
+        }
+
+        if (empty($cleanEvents)) {
+            return null;
+        }
+
+        $officeRegex = '/\b(KCU|KC|SPP)\s+([A-Za-z0-9\s\.\,\-\/]+?)(?=(?:\s+(?:oleh|dan|telah|dengan|tujuan|Tanggal|Petugas|\d{2}:\d{2}|\[|<))|[\n\r]|$)/i';
+
+        // 0. Check if the shipment timeline indicates RETUR / REJECTION / IRREGULARITY
+        $isRetur = false;
+        foreach ($cleanEvents as $desc) {
+            $upper = strtoupper($desc);
+            if (
+                str_contains($upper, 'RETUR') ||
+                str_contains($upper, 'RETURN') ||
+                str_contains($upper, 'IRREGULARITY') ||
+                str_contains($upper, 'DITOLAK') ||
+                str_contains($upper, 'GAGAL ANTAR') ||
+                str_contains($upper, 'KEMBALI KE PENGIRIM')
+            ) {
+                $isRetur = true;
+                break;
+            }
+        }
+
+        // RETUR LOGIC: The parcel has terminated forward delivery and is returning towards sender.
+        // Rule 1 (scan upwards from recipient's KCP) DOES NOT APPLY.
+        // Instead, scan downwards from latest event (count - 1 down to 0) to find current active KC/KCU/SPP handling the return.
+        if ($isRetur) {
+            for ($i = count($cleanEvents) - 1; $i >= 0; $i--) {
+                $desc = $cleanEvents[$i];
+                if (preg_match_all($officeRegex, $desc, $matches, PREG_SET_ORDER)) {
+                    foreach ($matches as $m) {
+                        $cand = trim($m[1] . ' ' . $m[2]);
+                        $cand = preg_replace('/\s+/', ' ', $cand);
+                        $candUpper = strtoupper($cand);
+                        if (!str_contains($candUpper, 'KCP') &&
+                            !str_starts_with($candUpper, 'DC ') &&
+                            !str_contains($candUpper, ' DC ') &&
+                            !str_contains($candUpper, 'MPC') &&
+                            mb_strlen($cand) >= 4 && mb_strlen($cand) <= 60) {
+
+                            return $this->resolveOfficeFromCandidate($cand);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 1. Check if any event in timeline mentions KCP or sub-branch code (\d{5}B\d)
+        $firstKcpIndex = -1;
+        foreach ($cleanEvents as $idx => $desc) {
+            if (preg_match('/\bKCP\s+[A-Za-z0-9\s\.\,\-\/]+/i', $desc) || preg_match('/\b\d{5}B\d\b/i', $desc)) {
+                $firstKcpIndex = $idx;
+                break;
+            }
+        }
+
+        if ($firstKcpIndex !== -1) {
+            // Rule 1: KCP exists -> Scan upwards from firstKcpIndex to 0 for closest KC/KCU/SPP
+            for ($i = $firstKcpIndex; $i >= 0; $i--) {
+                $desc = $cleanEvents[$i];
+                if (preg_match_all($officeRegex, $desc, $matches, PREG_SET_ORDER)) {
+                    foreach ($matches as $m) {
+                        $cand = trim($m[1] . ' ' . $m[2]);
+                        $cand = preg_replace('/\s+/', ' ', $cand);
+                        $candUpper = strtoupper($cand);
+                        if (!str_contains($candUpper, 'KCP') &&
+                            !str_starts_with($candUpper, 'DC ') &&
+                            !str_contains($candUpper, ' DC ') &&
+                            !str_contains($candUpper, 'MPC') &&
+                            mb_strlen($cand) >= 4 && mb_strlen($cand) <= 60) {
+
+                            return $this->resolveOfficeFromCandidate($cand);
+                        }
+                    }
+                }
+            }
+        } else {
+            // Rule 2: NO KCP -> Scan downwards from latest event (count - 1) to 0 for latest KC/KCU/SPP
+            for ($i = count($cleanEvents) - 1; $i >= 0; $i--) {
+                $desc = $cleanEvents[$i];
+                if (preg_match_all($officeRegex, $desc, $matches, PREG_SET_ORDER)) {
+                    foreach ($matches as $m) {
+                        $cand = trim($m[1] . ' ' . $m[2]);
+                        $cand = preg_replace('/\s+/', ' ', $cand);
+                        $candUpper = strtoupper($cand);
+                        if (!str_contains($candUpper, 'KCP') &&
+                            !str_starts_with($candUpper, 'DC ') &&
+                            !str_contains($candUpper, ' DC ') &&
+                            !str_contains($candUpper, 'MPC') &&
+                            mb_strlen($cand) >= 4 && mb_strlen($cand) <= 60) {
+
+                            return $this->resolveOfficeFromCandidate($cand);
+                        }
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Resolve office extracted from delivery timeline directly against post_offices.
+     * Preserves the EXACT KC/KCU/SPP name from the physical timeline and NEVER allows
+     * generic fallback rules to replace it with an unrelated provincial capital.
+     */
+    public function resolveOfficeFromCandidate(string $cand): string
+    {
+        $cand = trim(preg_replace('/\s+/', ' ', $cand));
+        $candUpper = strtoupper($cand);
+        $clean = trim(preg_replace('/^(KCU|KC|SPP|MPC|DC|KANTOR POS)\s+/i', '', $cand));
+        $keyword = trim(preg_replace('/\b\d{5}[A-Za-z0-9]*\b/', '', $clean));
+        $postalCode = preg_match('/\b(\d{5})\b/', $cand, $cm) ? $cm[1] : null;
+
+        // If candidate is already an SPP (e.g. SPP JAKARTA TIMUR 13400), preserve exact SPP candidate name
+        if (str_starts_with($candUpper, 'SPP ')) {
+            $office = \App\Models\PostOffice::where('name', $candUpper)
+                ->orWhere('name', $cand)
+                ->first();
+            if ($office) {
+                return $office->name;
+            }
+
+            // Look for existing post office in same area to inherit WhatsApp contact
+            $similar = \App\Models\PostOffice::where(function ($q) use ($keyword, $postalCode) {
+                if (!empty($keyword)) {
+                    $q->where('city', 'like', "%{$keyword}%")
+                      ->orWhere('name', 'like', "%{$keyword}%");
+                }
+                if ($postalCode) {
+                    $q->orWhere('code', $postalCode);
+                }
+            })->whereNotNull('phone_wa')->first();
+
+            try {
+                $newOffice = \App\Models\PostOffice::create([
+                    'name' => $candUpper,
+                    'code' => $postalCode,
+                    'city' => !empty($keyword) ? ucwords(strtolower($keyword)) : null,
+                    'phone_wa' => $similar?->phone_wa,
+                    'phone_wa_2' => $similar?->phone_wa_2,
+                    'pic_name' => $similar?->pic_name,
+                ]);
+                return $newOffice->name;
+            } catch (\Throwable $e) {
+                return $candUpper;
+            }
+        }
+
+        // 1. Try finding in post_offices table by exact name, code, city, or keyword
+        if (!empty($keyword) && mb_strlen($keyword) >= 3) {
+            $office = \App\Models\PostOffice::where(function ($q) use ($cand, $keyword, $postalCode) {
+                $q->where('name', $cand)
+                  ->orWhere('name', 'like', "%{$keyword}%")
+                  ->orWhere('city', $keyword)
+                  ->orWhere('city', 'like', "%{$keyword}%");
+                if ($postalCode) {
+                    $q->orWhere('code', $postalCode);
+                }
+            })->where('name', 'not like', 'DC %')->first();
+
+            if ($office) {
+                return $office->name;
+            }
+        }
+
+        // 2. If not found in post_offices table, register it automatically without phone number
+        $standardName = strtoupper($cand);
+        if (!str_starts_with($standardName, 'KC ') && !str_starts_with($standardName, 'KCU ') && !str_starts_with($standardName, 'SPP ')) {
+            $standardName = 'KC ' . $standardName;
+        }
+
+        try {
+            $newOffice = \App\Models\PostOffice::create([
+                'name' => $standardName,
+                'code' => $postalCode,
+                'city' => !empty($keyword) ? ucwords(strtolower($keyword)) : null,
+                'phone_wa' => null,
+                'phone_wa_2' => null,
+                'pic_name' => null,
+            ]);
+            return $newOffice->name;
+        } catch (\Throwable $e) {
+            return $standardName;
+        }
     }
 
     /**
@@ -633,17 +953,57 @@ class TrackingBotService
     {
         $combined = $text . ' ' . strip_tags($rawHtml);
 
-        // 1. Specifically scan for KC or KCU in timeline / lacak events
-        // Exclude KCP, MPC, DC, SPP, SENTRAL, etc. KCP cannot handle follow-ups!
-        if (preg_match_all('/\b(KCU|KC)\s+([A-Z0-9\s\.\,\-\/]+?)(?=\s+(?:oleh|dan|telah|dengan|Tanggal|Petugas|\d{2}:\d{2}|\[|<|\n|\r|$))/i', $combined, $matches, PREG_SET_ORDER)) {
+        // 1. If HTML has DOM table (such as Table 2 History in NIPOS detail_lacak_banyak.php), parse chronological events
+        if (!empty($rawHtml) && str_contains($rawHtml, '<table')) {
+            try {
+                $dom = new \DOMDocument();
+                @$dom->loadHTML($rawHtml);
+                $xpath = new \DOMXPath($dom);
+                $tables = $xpath->query('//table');
+                // History events table in detail_lacak_banyak.php
+                for ($t = $tables->length - 1; $t >= 0; $t--) {
+                    $rows = $xpath->query('.//tr', $tables->item($t));
+                    $eventTexts = [];
+                    foreach ($rows as $r) {
+                        $txt = trim(preg_replace('/\s+/', ' ', $r->textContent));
+                        if (!empty($txt) && !str_starts_with($txt, 'TANGGAL UPDATE') && !str_starts_with($txt, 'DETAIL HISTORY') && !str_starts_with($txt, 'WAKTU UPDATE')) {
+                            $eventTexts[] = $txt;
+                        }
+                    }
+
+                    if (count($eventTexts) >= 2) {
+                        $resolved = $this->resolveOfficeFromTimelineEvents($eventTexts, $destinationAddress);
+                        if ($resolved) {
+                            return $resolved;
+                        }
+                    }
+                }
+            } catch (\Throwable $e) {
+                // Fall through to line-based parsing
+            }
+        }
+
+        // 2. Multi-line text timeline parsing
+        $lines = preg_split('/[\r\n]+/', $combined);
+        if (count($lines) >= 2) {
+            $resolved = $this->resolveOfficeFromTimelineEvents($lines, $destinationAddress);
+            if ($resolved) {
+                return $resolved;
+            }
+        }
+
+        // 3. Scan combined text for KC, KCU, or SPP in timeline / lacak events (strictly exclude KCP, DC, MPC)
+        $officeRegex = '/\b(KCU|KC|SPP)\s+([A-Za-z0-9\s\.\,\-\/]+?)(?=(?:\s+(?:oleh|dan|telah|dengan|tujuan|Tanggal|Petugas|\d{2}:\d{2}|\[|<))|[\n\r]|$)/i';
+        if (preg_match_all($officeRegex, $combined, $matches, PREG_SET_ORDER)) {
             $validCandidates = [];
             foreach ($matches as $m) {
                 $officeName = trim($m[1] . ' ' . $m[2]);
                 $officeName = preg_replace('/\s+/', ' ', $officeName);
                 $upper = strtoupper($officeName);
                 if (!str_contains($upper, 'KCP') &&
+                    !str_starts_with($upper, 'DC ') &&
+                    !str_contains($upper, ' DC ') &&
                     !str_contains($upper, 'MPC') &&
-                    !str_contains($upper, 'SPP') &&
                     !str_contains($upper, 'SENTRAL') &&
                     mb_strlen($officeName) >= 4 && mb_strlen($officeName) <= 60) {
                     $validCandidates[] = $officeName;
@@ -651,64 +1011,22 @@ class TrackingBotService
             }
 
             if (!empty($validCandidates)) {
-                // If destination address is provided, see if any candidate matches the address/city
-                if (!empty($destinationAddress)) {
-                    foreach ($validCandidates as $cand) {
-                        $matched = \App\Models\PostOffice::matchByDestinationOrAddress($cand, $destinationAddress);
-                        if ($matched) {
-                            return $matched->name;
-                        }
-                    }
-                }
-
-                // In standard Pos Indonesia timeline (chronological), the delivery/destination KC is the last KC in the sequence.
-                // Check if the order is reverse-chronological by inspecting timestamps
+                // Pick latest KC/KCU/SPP
                 $chosenCandidate = end($validCandidates);
-                if (preg_match_all('/\b(\d{4}-\d{2}-\d{2}|\d{2}\/\d{2}\/\d{4})\b/', $combined, $dateMatches)) {
-                    $dates = $dateMatches[0];
-                    if (count($dates) >= 2) {
-                        $d1 = strtotime(str_replace('/', '-', $dates[0]));
-                        $d2 = strtotime(str_replace('/', '-', end($dates)));
-                        if ($d1 !== false && $d2 !== false && $d1 > $d2) {
-                            // Reverse chronological: newest event is first, so destination KC is first KC candidate
-                            $chosenCandidate = reset($validCandidates);
-                        }
-                    }
-                }
-
-                $matchedOffice = \App\Models\PostOffice::matchByDestinationOrAddress($chosenCandidate, $destinationAddress);
-                if ($matchedOffice) {
+                $matchedOffice = \App\Models\PostOffice::matchByDestinationOrAddress($chosenCandidate);
+                if ($matchedOffice && !str_starts_with(strtoupper($matchedOffice->name), 'DC ')) {
                     return $matchedOffice->name;
                 }
 
-                if (!str_contains(strtoupper($chosenCandidate), 'KCP')) {
-                    $cleanChosen = preg_replace('/\s+\d{5}[A-Za-z0-9]*$/', '', $chosenCandidate);
-                    return strtoupper(trim($cleanChosen));
-                }
+                $cleanChosen = preg_replace('/\s+\d{5}[A-Za-z0-9]*$/', '', $chosenCandidate);
+                return strtoupper(trim($cleanChosen));
             }
         }
 
-        // 2. If no explicit KC/KCU found in timeline, look for office patterns and redirect to KC/KCU
-        if (preg_match('/(?:KANTOR\s*TUJUAN|TUJUAN|KCU|KC|KCP|MPC|DC|KANTOR\s*POS)\s*[:=]?\s*([A-Z0-9\s\.\,\-\(\)]+)/i', $combined, $m)) {
-            $extracted = trim($m[1]);
-            $extracted = preg_split('/[\r\n\|\<\>\;]/', $extracted)[0];
-            $extracted = trim($extracted);
-            if (mb_strlen($extracted) >= 3 && mb_strlen($extracted) <= 60) {
-                $matchedOffice = \App\Models\PostOffice::matchByDestinationOrAddress($extracted, $destinationAddress);
-                if ($matchedOffice) {
-                    return $matchedOffice->name;
-                }
-                if (!str_contains(strtoupper($extracted), 'KCP')) {
-                    $clean = preg_replace('/\s+\d{5}[A-Za-z0-9]*$/', '', $extracted);
-                    return strtoupper(trim($clean));
-                }
-            }
-        }
-
-        // 3. Fallback: match by destination address alone if available
+        // 4. Fallback: match by destination address directly against post_offices table
         if (!empty($destinationAddress)) {
             $matchedByAddr = \App\Models\PostOffice::matchByDestinationOrAddress(null, $destinationAddress);
-            if ($matchedByAddr) {
+            if ($matchedByAddr && !str_starts_with(strtoupper($matchedByAddr->name), 'DC ')) {
                 return $matchedByAddr->name;
             }
         }
@@ -845,7 +1163,7 @@ class TrackingBotService
         if (str_contains($statusUpper, 'ON PROCESS') || str_contains($statusUpper, 'PROSES') || str_contains($statusUpper, 'PROCESSING') || str_contains($statusUpper, 'MANIFEST') || str_contains($statusUpper, 'RECEIVED')) {
             return self::STATUS_ON_PROCESS;
         }
-        if ((str_contains($statusUpper, 'DELIVERED') || str_contains($statusUpper, 'SELESAI') || str_contains($statusUpper, 'DITERIMA')) && !str_contains($statusUpper, 'RETURN')) {
+        if ((str_contains($statusUpper, 'DELIVERED') || str_contains($statusUpper, 'SELESAI') || str_contains($statusUpper, 'DITERIMA') || str_contains($statusUpper, 'ARRIVEDUNPAID') || str_contains($statusUpper, 'ARRIVED UNPAID')) && !str_contains($statusUpper, 'RETURN') && !str_contains($statusUpper, 'RETUR')) {
             return self::STATUS_DELIVERED;
         }
 

@@ -11,6 +11,7 @@ export interface Shipment {
   id: string;
   resi: string;
   seller: string;
+  namaCs?: string;
   tanggalKirim: string; // ISO
   tujuan: string;
   penerima: string;
@@ -26,6 +27,8 @@ export interface Shipment {
   statusKategori?: string;
   kantorTujuan?: string;
   kantorPosPhone?: string;
+  kantorPosPhone2?: string;
+  kantorPosTelegram?: string;
   kantorPosPic?: string;
   lastLocation?: string;
 }
@@ -37,6 +40,8 @@ export interface PostOffice {
   city?: string;
   province?: string;
   phone_wa: string;
+  phone_wa_2?: string;
+  telegram_handle?: string;
   pic_name?: string;
   notes?: string;
 }
@@ -85,28 +90,175 @@ export const DISTRICT_TO_KC: Record<string, string> = {
   '20857': 'KC BINJAI',
   '20859': 'KC BINJAI',
   '20811': 'KC BINJAI',
-  '20814': 'KC BINJAI',
+  'MANDAU': 'KC DUMAI',
+  'DURI': 'KC DUMAI',
+  'BENGKALIS': 'KC DUMAI',
+  'PINGGIR': 'KC DUMAI',
+  'BATHIN SOLAPAN': 'KC DUMAI',
+  'ROKAN HILIR': 'KC DUMAI',
+  'BAGANSIAPIAPI': 'KC DUMAI',
+  'BAGAN SIAPIAPI': 'KC DUMAI',
+  'ROHIL': 'KC DUMAI',
+  '28784': 'KC DUMAI',
+  '28782': 'KC DUMAI',
+  '28783': 'KC DUMAI',
+  '28785': 'KC DUMAI',
+  '28786': 'KC DUMAI',
+  '28800': 'KC DUMAI',
+  'ROKAN HULU': 'KC BANGKINANG',
+  'ROHUL': 'KC BANGKINANG',
+  'PASIRPENGARAIAN': 'KC BANGKINANG',
+  'PASIR PENGARAIAN': 'KC BANGKINANG',
+  'DALUDALU': 'KC BANGKINANG',
+  'DALU DALU': 'KC BANGKINANG',
+  'TAMBUSAI': 'KC BANGKINANG',
+  'TAMBUSAI UTARA': 'KC BANGKINANG',
+  'BANGKINANG': 'KC BANGKINANG',
+  'KAMPAR': 'KC BANGKINANG',
+  '28558': 'KC BANGKINANG',
+  '28511': 'KC BANGKINANG',
+  '28500': 'KC BANGKINANG',
+  'BAHODOPI': 'KCU PALU',
+  'FATUFIA': 'KCU PALU',
+  'MOROWALI': 'KCU PALU',
+  'POSO': 'KCU PALU',
+  'BUNGKU': 'KCU PALU',
+  '94951': 'KCU PALU',
+  '94600': 'KCU PALU',
   'KALIORANG': 'KC BONTANG',
+  'RANTAUPULUNG': 'KC BONTANG',
+  'RANTAU PULUNG': 'KC BONTANG',
+  'TEPIAN INDAH': 'KC BONTANG',
+  'SANGATTA': 'KC BONTANG',
+  'KUTAI TIMUR': 'KC BONTANG',
+  'KUTIM': 'KC BONTANG',
+  'BENGALON': 'KC BONTANG',
+  'KONGBENG': 'KC BONTANG',
+  'WAHAU': 'KC BONTANG',
+  '75652': 'KC BONTANG',
+  '75600': 'KC BONTANG',
+  'MUARAANCALONG': 'KC SAMARINDA',
+  'MUARA ANCALONG': 'KC SAMARINDA',
+  'MUARABENGKAL': 'KC SAMARINDA',
+  'MUARA BENGKAL': 'KC SAMARINDA',
+  '75556': 'KC SAMARINDA',
+  '75554': 'KC SAMARINDA',
+  'MANOKWARI': 'KC MANOKWARI',
+  'BINTUNI': 'KC MANOKWARI',
+  'BABO': 'KC MANOKWARI',
+  'TOFOI': 'KC MANOKWARI',
+  '98300': 'KC MANOKWARI',
+  '98364': 'KC MANOKWARI',
+  '98572': 'KC MANOKWARI',
   'MUARASABAK': 'KCU JAMBI',
   'MUARA SABAK': 'KCU JAMBI',
   'BENUAKAYONG': 'KC KETAPANG',
   'BENUA KAYONG': 'KC KETAPANG',
   'ALOR BARAT': 'KCU KUPANG',
+  'SERDANG': 'KCU SERANG 42100',
+  'KRAKATAU': 'KCU SERANG 42100',
+  '42161': 'KCU SERANG 42100',
+  'LABUAN': 'KCU SERANG 42100',
+  'PANDEGLANG': 'KCU SERANG 42100',
+  'DAYEUHKOLOT': 'KCU BANDUNG 40000',
+  'SEKEJATI': 'KCU BANDUNG 40000',
+  'SITUSAEUR': 'KCU BANDUNG 40000',
+  'TELLOBARU': 'KCU MAKASSAR 90000',
+  'SUNGGUMINASA': 'KCU MAKASSAR 90000',
+  'JONGAYA': 'KCU MAKASSAR 90000',
+  'DAYA': 'KCU MAKASSAR 90000',
+  'MAROS': 'KCU MAKASSAR 90000',
+  'PRAMBANAN': 'KCU YOGYAKARTA 55000',
+  'DEMAK': 'KCU SEMARANG 50000',
+  'MRANGGEN': 'KCU SEMARANG 50000',
+  'JUANDA': 'KCU SURABAYA 60000',
+  'SURABAYA UTARA': 'KCU SURABAYA 60000',
+  'SAWAHANNGANJUK': 'KC KEDIRI 64100',
+  'KRAS': 'KC KEDIRI 64100',
+  'GUCIALIT': 'KC PROBOLINGGO',
+  'PARON': 'KCU Madiun 63100',
+  'MANTINGAN': 'KCU Madiun 63100',
+  'KEDUNGGALAR': 'KCU Madiun 63100',
+  'GEMARANG': 'KCU Madiun 63100',
+  'NGAWI': 'KCU Madiun 63100',
+  'BARAT': 'KCU Madiun 63100',
+  'GENENG': 'KCU Madiun 63100',
+  'JOGOROGO': 'KCU Madiun 63100',
+  'SINE': 'KCU Madiun 63100',
+  'NGRAMBE': 'KCU Madiun 63100',
+  'WIDODAREN': 'KCU Madiun 63100',
+  'WALIKUKUN': 'KCU Madiun 63100',
+  'GENTENG': 'KC JEMBER 68100',
+  'SAMBENG': 'KC GRESIK 61100',
+  'TIKUNG': 'KC GRESIK 61100',
+  'SUMBER': 'KCU CIREBON 45100',
+  'SEMBALUN': 'KCU MATARAM 83000',
+  'LUBUKBASUNG': 'KC BUKITTINGGI 26100',
+  'PEDAN': 'KCU SOLO 57100',
+  'WAWONDULA': 'KC PALOPO',
+  'PAJUKUKANG': 'KC BULUKUMBA',
+  'PESANGGARAN': 'KC JEMBER 68100',
+  'SAMBEREJO': 'KC BENGKULU 38000',
+  'PADANG BULAN': 'KCU JAYAPURA 99000',
+  'PADANGBULAN': 'KCU JAYAPURA 99000',
+  'HEDAM': 'KCU JAYAPURA 99000',
+  'PADANG BATUNG': 'KC BANJARMASIN 70000',
+  'KOLONEDALE': 'KC LUWUK 94700',
+  'KOLONODALE': 'KC LUWUK 94700',
+  'BELITANG': 'KCU PALEMBANG 30000',
+  'MUARADUA': 'KCU PALEMBANG 30000',
+  'BOJONGGEDE': 'KC CIBINONG',
+  'RANAU': 'KCU PALEMBANG 30000',
+  'KEMBAYAN': 'KC SANGGAU 78500',
+  'SANGGAU': 'KC SANGGAU 78500',
+  'SEKADAU': 'KC SANGGAU 78500',
+  'ENTIKONG': 'KC SANGGAU 78500',
+  'TAYAN': 'KC SANGGAU 78500',
+  'BEDUAI': 'KC SANGGAU 78500',
+  'KASIPUTE': 'KCU KENDARI 93000',
+  'BOMBANA': 'KCU KENDARI 93000',
+  'HUKAEA': 'KCU KENDARI 93000',
+  'RUMBIA': 'KCU KENDARI 93000',
+  'POLEANG': 'KCU KENDARI 93000',
+  'RAROWATU': 'KCU KENDARI 93000',
+  'NABIRE': 'KC NABIRE 98800',
+  'PANIAI': 'KC NABIRE 98800',
+  'ENAROTALI': 'KC NABIRE 98800',
+  'DEIYAI': 'KC NABIRE 98800',
+  'DOGIYAI': 'KC NABIRE 98800',
+  'WANGGAR': 'KC NABIRE 98800',
+  'ORO ORO DOWO': 'KCU MALANG 65100',
+  'ORO-ORO DOWO': 'KCU MALANG 65100',
+  'PASTINA': 'KC TOBELO 97762',
+  'SITUJUH': 'KC PAYAKUMBUH 26200',
+  'SITUJUAH': 'KC PAYAKUMBUH 26200',
 };
 
-export function resolveDestinationOffice(shipment: Shipment, postOfficeName?: string): string {
-  const rawOffice = (postOfficeName || shipment.kantorTujuan || "").trim();
-  const generic = [
-    'KC TUJUAN', 'KANTOR POS TUJUAN', 'KC POS PENGANTARAN', 'KC PENGANTARAN',
-    'POS PENGANTARAN', 'KC POS INDONESIA', 'POS INDONESIA', 'KANTOR POS TERKAIT'
-  ];
-  const isGeneric = !rawOffice || generic.includes(rawOffice.toUpperCase());
-  const isTransitHub = /^(SPP|MPC|DC|SENTRAL|TRANSIT)\b/i.test(rawOffice);
-  const isKcp = /\bKCP\b/i.test(rawOffice) || /\b\d{5}B\d\b/i.test(rawOffice);
-  const isFakeKc = /^KC\s+(?:HINAI|SECANGGANG|KALIORANG|MUARASABAK)/i.test(rawOffice);
+export function isAddressText(str?: string): boolean {
+  if (!str) return false;
+  const s = str.trim().toUpperCase();
+  if (s.length > 35) return true;
+  if (/\b(JL|JLN|JALAN|GG|GANG|RT|RW|BLOK|NO\b|NOMOR|DESA|DUSUN|KEL\b|KELURAHAN|KAMPUNG|KP\b|PERUM|PERUMAHAN|KOMPLEK|PATOKAN|CUSTOMER|DISHERLOCK|SEBELAH|DEPAN|BELAKANG|DEKAT)\b/i.test(s)) return true;
+  if (/\d+\s*[\/\-]\s*\d+/.test(s)) return true;
+  return false;
+}
 
-  // If explicit postOfficeName was selected and it's not generic/transit/kcp/fakeKc, use it
-  if (postOfficeName && !isGeneric && !isTransitHub && !isKcp && !isFakeKc) {
+export function resolveDestinationOffice(shipment: Shipment, postOfficeName?: string): string {
+  const rawOffice = (postOfficeName || shipment.kantorTujuan || "").replace(/\bMPS\b/gi, "SPP").trim();
+  const generic = [
+    'KC TUJUAN', 'KC POS TUJUAN', 'KANTOR POS TUJUAN', 'KC POS PENGANTARAN', 'KC PENGANTARAN',
+    'POS PENGANTARAN', 'KC POS INDONESIA', 'POS INDONESIA', 'KANTOR POS TERKAIT',
+    'SEDANG MEMBACA NIPOS...', 'SEDANG MEMBACA NIPOS'
+  ];
+  const isGeneric = !rawOffice || generic.includes(rawOffice.toUpperCase()) || isAddressText(rawOffice);
+  // SPP IS VALID FOR FOLLOW UP (KC, KCU, and SPP are the only 3 allowed). Only MPC, DC, SENTRAL, TRANSIT are invalid transit hubs.
+  const isTransitHub = /^(MPC|DC\b|SENTRAL|TRANSIT)\b/i.test(rawOffice);
+  const isKcp = /\bKCP\b/i.test(rawOffice) || /\b\d{5}B\d\b/i.test(rawOffice);
+  const isDc = /\bDC\b/i.test(rawOffice);
+  const isFakeKc = /^KC\s+(?:KEC\b|KECAMATAN\b|HINAI|SECANGGANG|KALIORANG|MUARASABAK)/i.test(rawOffice) || isAddressText(rawOffice);
+
+  // If explicit postOfficeName was selected and it's not generic/transit/kcp/isDc/fakeKc, use it
+  if (postOfficeName && !isGeneric && !isTransitHub && !isKcp && !isDc && !isFakeKc) {
     return postOfficeName;
   }
 
@@ -118,30 +270,25 @@ export function resolveDestinationOffice(shipment: Shipment, postOfficeName?: st
     }
   }
 
-  const city = extractCityRegency(shipment.alamat || "", (isGeneric || isTransitHub || isKcp || isFakeKc) ? "" : rawOffice);
+  const city = extractCityRegency(shipment.alamat || "", (isGeneric || isTransitHub || isKcp || isDc || isFakeKc) ? "" : rawOffice);
 
-  // KCP tidak bisa untuk follow up -> selalu arahkan ke KC / KCU
-  if (isKcp || isFakeKc) {
-    if (city && city !== "-") {
-      return `KC ${city.replace(/^(Kota|Kab\.?|Kec\.?)\s+/i, "").trim().toUpperCase()}`;
+  // KCP and DC cannot handle follow-ups -> redirect to KC / KCU
+  if (isKcp || isDc || isFakeKc) {
+    if (city && city !== "-" && !city.startsWith("Kec.")) {
+      return `KC ${city.replace(/^(Kota|Kab\.?)\s+/i, "").trim().toUpperCase()}`;
     }
-    return "KC Pos Tujuan";
+    return "";
   }
 
-  // If rawOffice is a transit hub (like SPP JAKARTA TIMUR 13400) or generic, and we have destination city (e.g. Mimika), use destination KC!
-  if ((isGeneric || isTransitHub) && city && city !== "-") {
-    return `KC ${city.replace(/^(Kota|Kab\.?|Kec\.?)\s+/i, "").trim().toUpperCase()}`;
-  }
-
-  if (!isGeneric && !isTransitHub) {
+  if (!isGeneric && !isTransitHub && !isKcp && !isDc && !isFakeKc && !isAddressText(rawOffice)) {
     return rawOffice;
   }
 
-  if (city && city !== "-") {
-    return `KC ${city.replace(/^(Kota|Kab\.?|Kec\.?)\s+/i, "").trim().toUpperCase()}`;
+  if (city && city !== "-" && !city.startsWith("Kec.")) {
+    return `KC ${city.replace(/^(Kota|Kab\.?)\s+/i, "").trim().toUpperCase()}`;
   }
 
-  return rawOffice || "Kantor Pos Terkait";
+  return "";
 }
 
 export function generatePostOfficeWaMessage(
@@ -410,7 +557,7 @@ export const FU_META_ALIQA: Record<
   BIRU: { label: "PAKET SUKSES", bg: "#40e4b4", fg: "#000000", short: "HIJAU TOSKA" },
   ORANGE: { label: "PAKET RETUR", bg: "#ff0000", fg: "#FFFFFF", short: "MERAH" },
   KUNING: { label: "SUDAH DI FU", bg: "#ffff00", fg: "#000000", short: "KUNING" },
-  HIJAU: { label: "FU 2 KALI", bg: "#93C47D", fg: "#14532D", short: "HIJAU" },
+  HIJAU: { label: "BLM DI FU", bg: "#FFFFFF", fg: "#1E293B", short: "PUTIH" },
   BIRU_TUA: { label: "ON FU POS", bg: "#1C4587", fg: "#FFFFFF", short: "BIRU TUA" },
 };
 

@@ -25,7 +25,7 @@ import {
   User,
   Phone,
 } from "lucide-react";
-import { type Shipment, formatDate } from "@/lib/posindo";
+import { type Shipment, formatDate, resolveDestinationOffice } from "@/lib/posindo";
 import { router } from "@inertiajs/react";
 
 interface Props {
@@ -46,8 +46,14 @@ export function ShipmentTimelineModal({
   if (!shipment) return null;
 
   const niposUpper = (shipment.nipos || "").toUpperCase();
-  const isRetur = shipment.fu === "ORANGE" || niposUpper.includes("RETURN") || niposUpper.includes("RETUR");
-  const isDelivered = !isRetur && (shipment.fu === "BIRU" || niposUpper === "DELIVERED");
+  const isRetur = shipment.fu === "ORANGE" || niposUpper.includes("RETURN") || niposUpper.includes("RETUR") || shipment.statusKategori === "RETUR";
+  const isDelivered = !isRetur && (
+    shipment.fu === "BIRU" ||
+    shipment.statusKategori === "SUKSES" ||
+    (niposUpper.includes("DELIVERED") && !niposUpper.includes("FAILED")) ||
+    niposUpper.includes("DITERIMA") ||
+    niposUpper.includes("ARRIVEDUNPAID")
+  );
   const isFailed = niposUpper.includes("FAILED") || niposUpper.includes("GAGAL") || niposUpper.includes("KENDALA");
 
   const handleTrackLive = async () => {
@@ -183,9 +189,16 @@ export function ShipmentTimelineModal({
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
               Pengirim &amp; Kantor Pos Tujuan
             </span>
-            <div className="flex items-center gap-2">
-              <Building2 className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-              <span className="font-semibold text-slate-800">{shipment.seller}</span>
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Building2 className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                <span className="font-semibold text-slate-800">{shipment.seller}</span>
+              </div>
+              {shipment.namaCs && (
+                <span className="inline-flex items-center gap-1 rounded bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 text-[10.5px] font-bold text-indigo-700">
+                  <User className="w-3 h-3 text-indigo-600" /> CS: {shipment.namaCs}
+                </span>
+              )}
             </div>
             <div className="flex items-center gap-2">
               <MapPin className="w-3.5 h-3.5 text-rose-500 shrink-0" />
@@ -272,7 +285,7 @@ export function ShipmentTimelineModal({
                     3. Tiba di Kantor Pos Tujuan &amp; Antaran Kurir
                   </span>
                   <span className="text-[11px] font-semibold text-blue-700">
-                    {shipment.kantorTujuan || "KC Pos Tujuan"}
+                    {resolveDestinationOffice(shipment)}
                   </span>
                 </div>
                 <p className="text-xs text-slate-600 mt-0.5">

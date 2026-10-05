@@ -13,6 +13,7 @@ class OutgoingShipment extends Model
 
     protected $fillable = [
         'nama_seller',
+        'nama_cs',
         'no_resi',
         'nama_penerima',
         'no_hp',
@@ -63,6 +64,27 @@ class OutgoingShipment extends Model
                 }
             }
         });
+    }
+
+    /**
+     * Ultra-fast chunked purge for seller data without table lock / transaction bloat
+     */
+    public static function fastPurgeSellers(array|string $sellerNames): int
+    {
+        $names = is_array($sellerNames) ? $sellerNames : [$sellerNames];
+        $total = 0;
+        $placeholders = implode(',', array_fill(0, count($names), '?'));
+        
+        do {
+            $deleted = \Illuminate\Support\Facades\DB::delete(
+                "DELETE FROM outgoing_shipments WHERE nama_seller IN ({$placeholders}) LIMIT 10000",
+                $names
+            );
+            $total += $deleted;
+        } while ($deleted > 0);
+        
+        \Illuminate\Support\Facades\Cache::flush();
+        return $total;
     }
 
     /**

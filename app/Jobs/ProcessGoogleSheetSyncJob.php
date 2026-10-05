@@ -17,14 +17,25 @@ class ProcessGoogleSheetSyncJob implements ShouldQueue
 
     protected ?string $spreadsheetIdOrUrl;
     protected string $defaultSeller;
+    protected ?string $targetSheet;
+    protected mixed $targetMonth;
+    protected bool $withColors;
 
     /**
      * Create a new job instance.
      */
-    public function __construct(?string $spreadsheetIdOrUrl = null, string $defaultSeller = 'Aliqa')
-    {
+    public function __construct(
+        ?string $spreadsheetIdOrUrl = null,
+        string $defaultSeller = 'Aliqa',
+        ?string $targetSheet = null,
+        mixed $targetMonth = null,
+        bool $withColors = true
+    ) {
         $this->spreadsheetIdOrUrl = $spreadsheetIdOrUrl;
         $this->defaultSeller = $defaultSeller;
+        $this->targetSheet = $targetSheet;
+        $this->targetMonth = $targetMonth;
+        $this->withColors = $withColors;
     }
 
     /**
@@ -35,17 +46,34 @@ class ProcessGoogleSheetSyncJob implements ShouldQueue
         @ini_set('memory_limit', '2048M');
         @set_time_limit(0);
 
-        $startMsg = "ProcessGoogleSheetSyncJob started for Spreadsheet ID/URL: " . ($this->spreadsheetIdOrUrl ?: 'DEFAULT_SETTING');
+        $startMsg = "ProcessGoogleSheetSyncJob started for Spreadsheet ID/URL: " . ($this->spreadsheetIdOrUrl ?: 'DEFAULT_SETTING') . " (Seller: {$this->defaultSeller})";
         Log::info($startMsg);
 
         try {
-            $summary = $syncService->sync($this->spreadsheetIdOrUrl, $this->defaultSeller);
+            $summary = $syncService->sync(
+                $this->spreadsheetIdOrUrl,
+                $this->defaultSeller,
+                $this->targetSheet,
+                $this->targetMonth,
+                $this->withColors
+            );
             $doneMsg = "ProcessGoogleSheetSyncJob completed successfully: Processed {$summary['total_rows_processed']} rows across {$summary['total_sheets']} sheets, saved {$summary['total_rows_inserted']} rows.";
             Log::info($doneMsg);
         } catch (Throwable $e) {
             Log::error("ProcessGoogleSheetSyncJob error: " . $e->getMessage(), [
                 'trace' => $e->getTraceAsString(),
             ]);
+            \Illuminate\Support\Facades\Cache::put('sync_progress', [
+                'is_syncing' => false,
+                'current_sheet' => 'Gagal',
+                'current_sheet_index' => 0,
+                'total_sheets' => 0,
+                'processed_rows' => 0,
+                'inserted_rows' => 0,
+                'percentage' => 0,
+                'message' => 'Gagal sinkronisasi: ' . $e->getMessage(),
+                'updated_at' => now()->toDateTimeString(),
+            ], 3600);
         }
     }
 }

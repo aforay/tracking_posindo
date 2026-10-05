@@ -1,53 +1,47 @@
-# 🌐 Panduan Membuka Akses Website (Domain Publik & Jaringan Lokal)
+# 🌐 Panduan Akses Online Domain Resmi & Jaringan Lokal (TRACKO)
 
-Fitur ini memungkinkan aplikasi **Tracking Posindo** dibuka dan dioperasikan oleh admin atau rekan tim lain secara bersamaan, baik melalui **Domain Publik Internet (HTTPS Aman)** maupun melalui **Jaringan Lokal (Wi-Fi Kantor)**.
-
----
-
-## 🚀 Cara 1: Membuka Lewat Domain Publik Internet (Bisa Dibuka dari Mana Saja)
-
-Gunakan cara ini jika rekan/admin lain ingin mengakses dari luar kantor, rumah, handphone (HP), atau beda koneksi internet.
-
-### Langkah-langkah:
-1. Double-click file **`run-online.bat`** (atau **`buka-akses-online.bat`**).
-2. Tunggu 5 - 10 detik hingga sistem membuatkan tunnel resmi Cloudflare.
-3. Terminal akan menampilkan tautan domain resmi dengan protokol HTTPS, contohnya:
-   ```text
-   ========================================================================
-      *** TRACKING POSINDO - WEBSITE BERHASIL GO-ONLINE & GO LIVE! ***   
-   ========================================================================
-
-    [1] DOMAIN PUBLIK (Untuk admin lain dari rumah / HP / luar kantor):
-        --> https://contoh-domain-anda.trycloudflare.com
-        * Menggunakan HTTPS aman & resmi (Cloudflare SSL 256-bit)
-   ```
-4. Link domain publik tersebut **otomatis disalin ke clipboard**, Anda tinggal `Paste / Ctrl+V` dan bagikan ke WhatsApp admin lain!
-5. **Penting:** Biarkan jendela terminal tetap terbuka selama admin lain sedang bekerja di web. Jika selesai, tekan sembarang tombol di jendela terminal untuk mematikan tunnel dan server dengan aman.
+Aplikasi **Tracko - Tracking Posindo** telah resmi terhubung dengan domain internet permanen **`https://tracko.my.id`**. Siapapun (baik menggunakan Wi-Fi kantor, LAN, maupun kuota internet HP di luar kantor) dapat langsung mengakses website ini secara online, aman (HTTPS), dan tanpa batas waktu.
 
 ---
 
-## 🏢 Cara 2: Membuka Lewat Jaringan Lokal (Satu Wi-Fi Kantor)
+## 🚀 Cara Menyalakan Server Setiap Pagi
 
-Gunakan cara ini jika rekan/admin berada dalam satu kantor dan tersambung ke jaringan Wi-Fi / LAN yang sama.
+Cukup lakukan **1 langkah mudah**:
+1. Double-click file **`run-online.bat`**.
+2. Jendela hitam/biru akan otomatis terbuka dan menyiapkan semuanya:
+   - Menyalakan Database MySQL secara otomatis jika belum menyala.
+   - Menjalankan server Laravel Multi-Worker (Port 8000).
+   - Menjalankan Queue Worker otomatis di latar belakang.
+   - Menghubungkan tunnel ke Cloudflare Edge Network untuk domain resmi `tracko.my.id`.
+3. Setelah beberapa detik, browser akan otomatis terbuka mengarah ke **`https://tracko.my.id`**.
+4. Link `https://tracko.my.id` juga otomatis tersalin ke Clipboard laptop Anda, sehingga bisa langsung di-*paste* (Ctrl+V) ke grup WhatsApp tim.
 
-### Langkah-langkah:
-1. Double-click file **`run.bat`** seperti biasa.
-2. Terminal akan menampilkan IP Wi-Fi komputer Anda, contohnya:
-   ```text
-   - Komputer Ini         : http://localhost:8000
-   - Teman Satu Wi-Fi/LAN : http://192.168.0.156:8000
-   ```
-3. Berikan link `http://192.168.0.156:8000` kepada admin lain di kantor. Mereka langsung bisa membuka web di browser tanpa perlu koneksi ke internet luar.
+> ⚠️ **PENTING**: Biarkan jendela `run-online.bat` tetap terbuka selama jam kerja. Jangan ditutup (close) karena jendela inilah yang bertindak sebagai mesin server online Anda.
 
 ---
 
-## 🛡️ Keamanan & Akses Login
+## 🔗 Pilihan Jalur Akses
 
-Semua admin atau pengguna yang membuka link tersebut akan diarahkan ke halaman login yang aman:
+### 1. 🌍 Jalur Utama: Domain Resmi Internet (Rekomendasi Utama)
+- **Link**: **`https://tracko.my.id`** atau **`https://www.tracko.my.id`**
+- **Kelebihan**:
+  - Resmi, permanen selamanya, aman dengan enkripsi SSL/HTTPS.
+  - Bisa diakses dari mana saja (HP, laptop lain, di dalam atau di luar kantor).
+  - Tidak perlu setting router atau IP manual.
 
-| Role | Email Login | Kata Sandi Awal |
+### 2. 🏢 Jalur Cadangan: Jaringan Lokal (Wi-Fi Kantor)
+- Jika suatu saat internet kantor mengalami gangguan, rekan satu Wi-Fi tetap bisa mengakses langsung lewat IP lokal yang tertera di layar terminal (contoh: `http://192.168.x.x:8000`).
+
+### 3. 💻 Laptop Server Ini:
+- Bisa membuka **`https://tracko.my.id`** maupun **`http://localhost:8000`**.
+
+---
+
+## 🛡️ Akun Login Aplikasi
+
+| Role | Email Login | Kata Sandi Bawaan |
 |---|---|---|
 | **Administrator** | `admin@posindo.com` | `password` |
 | **Customer Service** | `cs@posindo.com` | `password` |
 
-> *Admin dapat menambahkan akun baru khusus untuk masing-masing rekan melalui menu **Manajemen Pengguna**.*
+> *Admin dapat mengelola, menambah akun, atau mengubah password pengguna melalui menu Manajemen Pengguna di aplikasi.*

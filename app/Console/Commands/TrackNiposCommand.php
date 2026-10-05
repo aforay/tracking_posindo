@@ -116,7 +116,7 @@ class TrackNiposCommand extends Command
                         }
 
                         // Ekstraksi SLA asli dari hasil NIPOS & tanggal kirim NIPOS
-                        $rawSla = $res['sla'] ?? null;
+                        $rawSla = !empty($res['sla_days']) ? $res['sla_days'] : (!empty($res['sla']) ? $res['sla'] : (!empty($shipment->sla_days) ? $shipment->sla_days : 4));
                         $niposRawDate = $res['tanggal_kirim'] ?? ($res['tanggal_kolekting'] ?? null);
                         $niposParsedDate = !empty($niposRawDate) ? TrackingBotService::parseDateOnly($niposRawDate) : null;
                         
@@ -169,7 +169,7 @@ class TrackNiposCommand extends Command
                             'TIDAK DITEMUKAN / TIMEOUT',
                             $shipment->status_kategori,
                             $shipment->color_code ?: 'PUTIH',
-                            $shipment->sla_days ?: 2,
+                            $shipment->sla_days ?: 4,
                             '-',
                         ];
                     }

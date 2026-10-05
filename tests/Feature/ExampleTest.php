@@ -19,6 +19,6 @@ class ExampleTest extends TestCase
         $response->assertStatus(200);
 
         $user = \App\Models\User::factory()->create(['role' => 'cs']);
-        $this->actingAs($user)->get('/')->assertStatus(200);
+        $this->actingAs($user)->get('/aliqa')->assertStatus(200);
     }
 }

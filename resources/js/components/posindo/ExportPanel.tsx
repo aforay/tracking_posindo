@@ -59,6 +59,7 @@ export function ExportPanel({
       [
         "No",
         "Seller",
+        "CS",
         "No. Resi",
         "Tgl Kirim",
         "Tujuan",
@@ -72,6 +73,7 @@ export function ExportPanel({
       ...data.map((r, i) => [
         i + 1,
         r.seller,
+        r.namaCs || "-",
         r.resi,
         formatDate(r.tanggalKirim),
         r.tujuan,
@@ -80,7 +82,7 @@ export function ExportPanel({
         r.nipos,
         (() => {
           const sNum = typeof r.sla === "number" ? r.sla : parseInt(String(r.sla || "0"), 10);
-          return !isNaN(sNum) && (sNum < 0 || Math.abs(sNum) > 4)
+          return !isNaN(sNum) && sNum < 0
             ? `Over SLA ${Math.abs(sNum)} Hari`
             : `${Math.abs(sNum)} Hari`;
         })(),
@@ -91,6 +93,7 @@ export function ExportPanel({
     const ws = XLSX.utils.aoa_to_sheet(aoa);
     ws["!cols"] = [
       { wch: 5 },
+      { wch: 16 },
       { wch: 16 },
       { wch: 22 },
       { wch: 12 },
@@ -105,7 +108,7 @@ export function ExportPanel({
     data.forEach((r, i) => {
       const bg = (fuMeta[r.fu]?.bg || "#FFFFFF").replace("#", "");
       const fg = (fuMeta[r.fu]?.fg || "#000000").replace("#", "");
-      for (let c = 0; c < 11; c++) {
+      for (let c = 0; c < 12; c++) {
         const ref = XLSX.utils.encode_cell({ r: i + 4, c });
         const cell = ws[ref];
         if (cell) cell.s = { fill: { fgColor: { rgb: bg } }, font: { color: { rgb: fg } } };
@@ -228,7 +231,7 @@ export function ExportPanel({
                     <td>
                       {(() => {
                         const sNum = typeof r.sla === "number" ? r.sla : parseInt(String(r.sla || "0"), 10);
-                        return !isNaN(sNum) && (sNum < 0 || Math.abs(sNum) > 4)
+                        return !isNaN(sNum) && sNum < 0
                           ? `Over SLA ${Math.abs(sNum)} Hari`
                           : `${Math.abs(sNum)} Hari`;
                       })()}
